@@ -1,0 +1,27 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+coverage.html
+/dist/
+bin/
+vendor/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Node / Astro (site/)
+node_modules/
+site/dist/
+site/.astro/
+.env
+.env.*
+!.env.example
