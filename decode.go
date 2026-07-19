@@ -16,15 +16,15 @@ import (
 // fieldSpec describes one configurable leaf field discovered by walking a config
 // struct: where its value comes from and how to decode it.
 type fieldSpec struct {
-	Path      string       // dotted path, e.g. "Redis.Addr"
-	Ref       Ref          // parsed source ref
-	Default   string       // value used on ErrNotFound
+	Path       string // dotted path, e.g. "Redis.Addr"
+	Ref        Ref    // parsed source ref
+	Default    string // value used on ErrNotFound
 	HasDefault bool
-	Flatten   string       // "", "json", "yaml", or "env"
-	Optional  bool         // not-found tolerated without a default
-	Index     []int        // reflect field index path from the root struct
-	Type      reflect.Type // field type
-	Sensitive bool         // field is secret.String / secret.Bytes
+	Flatten    string       // "", "json", "yaml", or "env"
+	Optional   bool         // not-found tolerated without a default
+	Index      []int        // reflect field index path from the root struct
+	Type       reflect.Type // field type
+	Sensitive  bool         // field is secret.String / secret.Bytes
 }
 
 var (
@@ -108,15 +108,16 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 }
 
 // setField decodes raw bytes into the struct field at spec.Index of the struct
-// value root (which must be a settable struct reflect.Value).
-func setField(root reflect.Value, spec fieldSpec, raw []byte) error {
+// value root (which must be a settable struct reflect.Value). hooks are extra
+// user mapstructure decode hooks applied on the flatten path.
+func setField(root reflect.Value, spec fieldSpec, raw []byte, hooks []mapstructure.DecodeHookFunc) error {
 	fv := root.FieldByIndex(spec.Index)
 	if !fv.CanSet() {
 		return fmt.Errorf("mamori: field %s is not settable", spec.Path)
 	}
 
 	if spec.Flatten != "" {
-		return decodeFlatten(fv, spec, raw)
+		return decodeFlatten(fv, spec, raw, hooks)
 	}
 	return decodeScalar(fv, spec, raw)
 }
@@ -179,7 +180,7 @@ func decodeScalar(fv reflect.Value, spec fieldSpec, raw []byte) error {
 // struct field, per the flatten tag. It supports json, yaml, and env (KEY=VALUE
 // lines). Secret and duration fields inside the flattened struct are handled via
 // mapstructure decode hooks.
-func decodeFlatten(fv reflect.Value, spec fieldSpec, raw []byte) error {
+func decodeFlatten(fv reflect.Value, spec fieldSpec, raw []byte, hooks []mapstructure.DecodeHookFunc) error {
 	var m map[string]any
 	switch spec.Flatten {
 	case "json":
@@ -196,11 +197,13 @@ func decodeFlatten(fv reflect.Value, spec fieldSpec, raw []byte) error {
 		return fmt.Errorf("mamori: field %s: unknown flatten %q", spec.Path, spec.Flatten)
 	}
 
+	// The built-in secret/duration hook runs first, then any user hooks.
+	decodeHooks := append([]mapstructure.DecodeHookFunc{flattenHook()}, hooks...)
 	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:           fv.Addr().Interface(),
 		WeaklyTypedInput: true,
 		TagName:          "mapstructure",
-		DecodeHook:       flattenHook(),
+		DecodeHook:       mapstructure.ComposeDecodeHookFunc(decodeHooks...),
 	})
 	if err != nil {
 		return fmt.Errorf("mamori: field %s: decoder: %w", spec.Path, err)

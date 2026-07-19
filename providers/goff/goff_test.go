@@ -133,9 +133,9 @@ func TestResolveTypeMapping(t *testing.T) {
 func TestResolveJSONKey(t *testing.T) {
 	fake := newFake()
 	fake.set("ui-config", map[string]any{
-		"theme":   "dark",
+		"theme":    "dark",
 		"maxItems": float64(20),
-		"beta":    true,
+		"beta":     true,
 	})
 	p := New(withEvaluator(fake))
 

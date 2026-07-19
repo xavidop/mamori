@@ -1,7 +1,7 @@
 import { defineConfig } from "astro/config";
 import sitemap from "@astrojs/sitemap";
 
-// GitHub Pages project site: https://xavidop.github.io/mamori/
+// GitHub Pages project site: https://mamorigo.dev/
 // The Pages workflow passes BASE_PATH (usually "/mamori"); locally it's "/".
 const base = process.env.BASE_PATH || "/";
 

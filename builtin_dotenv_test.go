@@ -29,9 +29,9 @@ func TestDotenvResolveKey(t *testing.T) {
 
 	cases := map[string]string{
 		"DB_PASSWORD": "s3cr3t",
-		"API_KEY":     "ab\ncd",   // double-quote escapes
+		"API_KEY":     "ab\ncd",     // double-quote escapes
 		"QUOTED":      "raw $value", // single-quote literal
-		"PLAIN":       "hello",    // trailing comment stripped
+		"PLAIN":       "hello",      // trailing comment stripped
 		"EMPTY":       "",
 	}
 	for key, want := range cases {

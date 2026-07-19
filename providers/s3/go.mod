@@ -1,12 +1,12 @@
 module github.com/xavidop/mamori/providers/s3
 
-go 1.26
+go 1.26.5
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.30
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
-	github.com/aws/smithy-go v1.27.3
+	github.com/aws/smithy-go v1.27.4
 	github.com/xavidop/mamori v0.1.0
 )
 

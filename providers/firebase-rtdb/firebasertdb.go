@@ -332,7 +332,7 @@ func (p *Provider) consume(ctx context.Context, s changeStream, ref mamori.Ref, 
 // valueFor converts a raw JSON value at a path into a mamori.Value, applying
 // #json-key selection or scalar-string unwrapping as appropriate.
 func valueFor(raw []byte, etag string, ref mamori.Ref) (mamori.Value, error) {
-	b := raw
+	var b []byte
 	if ref.Key != "" {
 		sel, err := mamori.SelectKey(raw, ref.Key)
 		if err != nil {

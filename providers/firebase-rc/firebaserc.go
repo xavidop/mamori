@@ -179,7 +179,11 @@ func (p *Provider) buildFetcher(ctx context.Context) (templateFetcher, error) {
 			err   error
 		)
 		if len(p.credsJSON) > 0 {
-			creds, err = google.CredentialsFromJSON(ctx, p.credsJSON, remoteConfigScope)
+			// The credential JSON is supplied by the operator via WithCredentialsJSON
+			// (their own service account), not an untrusted source, so the security
+			// rationale behind this deprecation does not apply here.
+			params := google.CredentialsParams{Scopes: []string{remoteConfigScope}}
+			creds, err = google.CredentialsFromJSONWithParams(ctx, p.credsJSON, params) //nolint:staticcheck // operator-supplied credentials, not untrusted input
 		} else {
 			creds, err = google.FindDefaultCredentials(ctx, remoteConfigScope)
 		}

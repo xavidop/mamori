@@ -67,9 +67,11 @@ Read [docs/PROVIDER_SPI.md](docs/PROVIDER_SPI.md) - it is the complete contract.
 
 ## Releases
 
-Library modules are released with semver git tags:
+Core releases are automated from [Conventional Commits](https://www.conventionalcommits.org/), so your commit messages matter:
 
-- Core: `v0.1.0`
-- Submodules: `providers/aws/v0.1.0`, `x/otel/v0.1.0`, etc.
+- `fix:` -> patch release, `feat:` -> minor, `feat!:` / `BREAKING CHANGE:` -> major.
+- `docs:`, `chore:`, `test:`, `refactor:` do not trigger a release on their own.
 
-GoReleaser builds the `reconcilevet` binary and generates the changelog and provenance on tag. Maintainers handle releases.
+When such commits land on `main`, [`semantic-release`](https://semantic-release.gitbook.io/) determines the next version, updates `CHANGELOG.md`, and creates + pushes the `vX.Y.Z` tag. [GoReleaser](https://goreleaser.com/) then builds the `reconcilevet` binary and publishes the GitHub Release (artifacts, checksums, SBOM), and SLSA provenance is generated. See [`.releaserc.json`](.releaserc.json), [`.goreleaser.yaml`](.goreleaser.yaml), and [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+Provider submodules keep their own tags (`providers/aws/v0.1.0`, `x/otel/v0.1.0`, ...) and are released separately, so a breaking change in one SDK never forces a core release.

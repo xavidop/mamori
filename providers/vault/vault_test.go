@@ -270,10 +270,10 @@ func TestResolveKeyAndRenewCombined(t *testing.T) {
 
 func TestSplitMountPath(t *testing.T) {
 	cases := []struct {
-		in         string
-		mount      string
-		path       string
-		wantErr    bool
+		in      string
+		mount   string
+		path    string
+		wantErr bool
 	}{
 		{in: "secret/myapp", mount: "secret", path: "myapp"},
 		{in: "secret/a/b/c", mount: "secret", path: "a/b/c"},

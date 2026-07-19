@@ -32,7 +32,7 @@ func TestWatchCoalescing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Three field changes within one debounce window.
 	wp.push("a", "2", "a2")
@@ -81,7 +81,7 @@ func TestWatchSerializedDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for i := 0; i < 5; i++ {
 		ver := "v" + string(rune('a'+i))
@@ -122,7 +122,7 @@ func TestWatchDropOldest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for i := 2; i <= 5; i++ {
 		ver := "v" + string(rune('0'+i))
@@ -195,7 +195,7 @@ func TestWatchBackoffRetainsLastGood(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if w.Get().V != "good" {
 		t.Fatalf("initial V = %q, want good", w.Get().V)

@@ -136,7 +136,7 @@ mamori.WithProvider(
 
 ## Documentation
 
-- 📖 **Docs site:** https://xavidop.github.io/mamori
+- 📖 **Docs site:** https://mamorigo.dev
 - 📦 **API reference:** https://pkg.go.dev/github.com/xavidop/mamori
 - 🧩 **Write a provider:** [docs/PROVIDER_SPI.md](docs/PROVIDER_SPI.md)
 - 🏃 **Runnable example:** [examples/basic](examples/basic)

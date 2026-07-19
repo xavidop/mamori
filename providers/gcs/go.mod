@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/gcs
 
-go 1.26
+go 1.26.5
 
 require (
 	cloud.google.com/go/storage v1.63.1

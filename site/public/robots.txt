@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://xavidop.github.io/mamori/sitemap-index.xml
+Sitemap: https://mamorigo.dev/sitemap-index.xml

@@ -26,7 +26,9 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 
 ## Releases and versioning
 
-Library modules are released with semantic-version git tags. The core module tags as `v0.1.0`; each submodule tags with its path prefix:
+Core releases are automated from [Conventional Commits](https://www.conventionalcommits.org/). When commits land on `main`, **semantic-release** decides the next version (`fix:` -> patch, `feat:` -> minor, breaking -> major), updates the changelog, and creates the `vX.Y.Z` tag; **GoReleaser** then builds the `reconcilevet` binary and publishes the GitHub Release with checksums, an SBOM, and SLSA provenance.
+
+Modules are versioned with semantic-version git tags. The core module tags as `v0.1.0`; each submodule tags with its path prefix:
 
 ```text
 v0.1.0                      # core
@@ -41,4 +43,4 @@ go get github.com/xavidop/mamori@v0.1.0
 go get github.com/xavidop/mamori/providers/aws@v0.1.0
 ```
 
-GoReleaser builds the `reconcilevet` binary and generates the changelog and provenance on each tag. Each provider module keeps its own release cadence, so a breaking change in one SDK never forces a core release.
+Each provider module keeps its own release cadence, so a breaking change in one SDK never forces a core release.

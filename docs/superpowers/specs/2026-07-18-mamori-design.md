@@ -1,10 +1,10 @@
-# mamori — Typed, Watchable Config & Secrets for Go
+# mamori - Typed, Watchable Config & Secrets for Go
 
 **Status:** Approved design (build) · **Author:** Xavier (xavidop) · **Date:** 2026-07-18
 **Module root:** `github.com/xavidop/mamori`
 
 This document is the concrete, build-ready design derived from the v0.1 draft
-(`reconcile` RFC). The project has been renamed **`mamori`** (守り — "protection /
+(`reconcile` RFC). The project has been renamed **`mamori`** (守り - "protection /
 safeguard"). The word *reconcile* survives as domain vocabulary: the engine
 *reconciles* config, and change events are `Change[T]`.
 
@@ -12,15 +12,15 @@ safeguard"). The word *reconcile* survives as domain vocabulary: the engine
 
 ## 1. Goals (unchanged from RFC)
 
-1. **Typed loading** — one struct, tag-driven, multiple sources, generics API.
-2. **Runtime reconciliation** — native watch where possible, poll where not;
+1. **Typed loading** - one struct, tag-driven, multiple sources, generics API.
+2. **Runtime reconciliation** - native watch where possible, poll where not;
    validated, diff-aware updates.
-3. **Secret hygiene by default** — redaction in `String()`/`fmt`/`MarshalJSON`/logs;
+3. **Secret hygiene by default** - redaction in `String()`/`fmt`/`MarshalJSON`/logs;
    optional best-effort memory zeroization on rotation.
 4. **Pluggable providers** via the `database/sql` registration pattern; core has
    **zero cloud SDK dependencies**.
 5. **Conformance test kit** so third-party providers behave identically.
-6. **Runs anywhere** — Lambda, systemd, Pod.
+6. **Runs anywhere** - Lambda, systemd, Pod.
 
 ## 2. Key decisions locked for this build
 
@@ -29,7 +29,7 @@ safeguard"). The word *reconcile* survives as domain vocabulary: the engine
 | Name / module | `mamori` / `github.com/xavidop/mamori` |
 | Repo layout | Multi-module monorepo + `go.work` |
 | Build scope | Full breadth (core + all providers + middleware + kit + vet + docs + release) |
-| Flagship providers | AWS (SM+PS), Vault, K8s, GCP, Azure — production-grade first |
+| Flagship providers | AWS (SM+PS), Vault, K8s, GCP, Azure - production-grade first |
 | Docs aesthetic | Guardian / Japanese-modern (Astro, GH Pages via Actions) |
 | Release | GoReleaser (binaries + changelog + SLSA provenance); libraries via git tags |
 | Clock | Internal `mamori.Clock` interface (no `clockwork` dep in core) |
@@ -203,17 +203,17 @@ cfg := w.Get()   // lock-free atomic snapshot, always last *valid* config
 ```
 
 ### Watch semantics (must be nailed; each has a test)
-1. **Atomicity** — `OnChange` fires with a fully re-validated snapshot. A value
+1. **Atomicity** - `OnChange` fires with a fully re-validated snapshot. A value
    that fails validation is **rejected**: `Get()` keeps the last good config,
    `OnError(ValidationError)` fires. No broken mid-flight state.
-2. **Coalescing** — changes within the debounce window (default 500 ms;
+2. **Coalescing** - changes within the debounce window (default 500 ms;
    `?debounce=` per field) produce one `Change`.
-3. **Ordering** — `OnChange` serialized on one goroutine; slow callback delays but
+3. **Ordering** - `OnChange` serialized on one goroutine; slow callback delays but
    never drops the next; bounded queue with drop-oldest guards pathological consumers
    (`WithQueueDepth`).
-4. **First event** — `Watch` resolves initial config before returning (fail-fast);
+4. **First event** - `Watch` resolves initial config before returning (fail-fast);
    `OnChange` fires only on *subsequent* changes.
-5. **Shutdown** — `Close()` cancels provider watches, drains the queue, returns.
+5. **Shutdown** - `Close()` cancels provider watches, drains the queue, returns.
 
 ---
 
@@ -314,24 +314,24 @@ Actions. Built with the `frontend-design` skill for the "wow".
 
 ## 15. CI / release
 
-- `ci.yml`: matrix over all modules — `go test ./...`, `go vet`, race detector,
+- `ci.yml`: matrix over all modules - `go test ./...`, `go vet`, race detector,
   `golangci-lint`; runs `reconcilevet` on the examples.
 - `pages.yml`: build Astro site, deploy to GitHub Pages.
 - `release.yml` + `.goreleaser.yaml`: build `reconcilevet` binary for
   linux/darwin/windows × amd64/arm64, changelog, checksums, SLSA provenance,
   GitHub Release. Library modules release via semver git tags (`v0.1.0` core,
-  `providers/aws/v0.1.0` for submodules) — tagging scheme documented.
+  `providers/aws/v0.1.0` for submodules) - tagging scheme documented.
 
 ---
 
 ## 16. Testing strategy
 
 - **Core**: exhaustive unit tests using a controllable `Clock` and in-memory fake
-  providers — every §7 semantic rule has a dedicated test. Race detector on.
+  providers - every §7 semantic rule has a dedicated test. Race detector on.
 - **Providers**: unit tests against mocked SDK client interfaces; each runs the
   `providertest` kit against an in-memory fake backend. Live-backend integration
   tests written behind `//go:build integration` (localstack / vault dev / envtest)
-  but **not executed in this build** — READMEs state clearly what is verified vs
+  but **not executed in this build** - READMEs state clearly what is verified vs
   needs a live run.
 
 ## 17. Out of scope (unchanged non-goals)
@@ -344,7 +344,7 @@ support. `runtimevar` bridge deferred (avoid muddying the provider story at laun
 ## 18. Build order
 
 1. **Core** (engine, secret, ref/registry, decode, env/file/exec, providertest,
-   middleware) — locks the SPI. Sequential, test-first.
+   middleware) - locks the SPI. Sequential, test-first.
 2. **Provider modules** (fan out in parallel once SPI is frozen) + `x/otel` +
    `reconcilevet`.
 3. **CI / GoReleaser / Pages** wiring + `go.work`.

@@ -9,17 +9,20 @@
 // query.
 //
 //   - <collection> - the MongoDB collection to look in.
+//
 //   - <docid>      - identifies the document. By default the document whose _id
 //     equals <docid> is selected. When _id is a valid 24-character hex ObjectID
 //     the value is matched as an ObjectID, otherwise it is matched as-is.
+//
 //   - #field       - optional. Selects a single field from the matched document.
 //     Scalars are stringified; objects and arrays are returned as their JSON
 //     encoding, identically to every other mamori provider (mamori.SelectKey).
+//
 //   - ?key=<field> - optional. Selects the document by an arbitrary field instead
 //     of _id, i.e. the document where <field> == <docid>.
 //
-//	DBPassword string `source:"mongodb://secrets/app-db#password"`
-//	APIKey     string `source:"mongodb://secrets/prod#apiKey?key=name"`
+//     DBPassword string `source:"mongodb://secrets/app-db#password"`
+//     APIKey     string `source:"mongodb://secrets/prod#apiKey?key=name"`
 //
 // The whole document (relaxed MongoDB Extended JSON, re-encoded to deterministic
 // plain JSON) becomes Value.Bytes when no #field is given. Value.Version is the

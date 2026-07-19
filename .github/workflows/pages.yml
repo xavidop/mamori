@@ -23,7 +23,7 @@ jobs:
     name: Build Astro site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -31,14 +31,14 @@ jobs:
           cache-dependency-path: site/package-lock.json
       - name: Configure Pages
         id: pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Install dependencies
         working-directory: site
         run: npm ci || npm install
       - name: Build
         working-directory: site
         # BASE_PATH lets Astro emit correct asset URLs for the project site
-        # https://xavidop.github.io/mamori/
+        # https://mamorigo.dev/
         # PUBLIC_GA_ID (optional) enables Google Analytics, loaded only after the
         # visitor accepts the cookie banner. Set it as a repository variable named
         # GA_ID (Settings -> Secrets and variables -> Actions -> Variables).
@@ -47,7 +47,7 @@ jobs:
           PUBLIC_GA_ID: ${{ vars.GA_ID }}
         run: npm run build
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/dist
 

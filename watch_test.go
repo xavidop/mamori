@@ -106,7 +106,7 @@ func TestWatchInitialAndNoStartupEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if got := w.Get().Password.Reveal(); got != "old" {
 		t.Fatalf("initial password = %q, want old", got)
@@ -133,7 +133,7 @@ func TestWatchAppliesValidUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	wp.push("prod/db#password", "new", "v2")
 	// Let the update reach the reconciler, then advance past the debounce window.
@@ -178,7 +178,7 @@ func TestWatchRejectsInvalidUpdateAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	wp.push("cfg/level", "BOGUS", "l2") // fails oneof validation
 	waitPending(clk)

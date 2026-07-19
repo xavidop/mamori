@@ -1,29 +1,67 @@
 name: Release
 
+# Releases are driven by Conventional Commits:
+#   1. semantic-release analyzes commits on main, decides the next version,
+#      updates CHANGELOG.md, and creates + pushes the git tag (vX.Y.Z).
+#   2. GoReleaser builds the reconcilevet binary and creates the GitHub Release
+#      with the artifacts, checksums, and SBOM for that tag.
+#   3. SLSA provenance is generated for the released artifacts.
+#
+# Library modules are consumed via `go get` at the tag; provider submodules keep
+# their own tags (providers/<name>/vX.Y.Z), released separately.
+
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write # create releases and upload assets
+  contents: write # create tags, releases, and commit the changelog
+  issues: write # semantic-release success comments
+  pull-requests: write
   id-token: write # SLSA / keyless signing
-  packages: write
 
 jobs:
-  goreleaser:
-    name: GoReleaser
+  release:
+    name: Version & build
     runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.semantic.outputs.new_release_published }}
+      version: ${{ steps.semantic.outputs.new_release_version }}
+      tag: ${{ steps.semantic.outputs.new_release_git_tag }}
+      hashes: ${{ steps.hashes.outputs.hashes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # full history for the changelog
-      - uses: actions/setup-go@v5
+          fetch-depth: 0 # full history so semantic-release can analyze commits
+          persist-credentials: true
+
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install Syft (SBOM)
         uses: anchore/sbom-action/download-syft@v0
+
+      # 1. Determine the next version, update CHANGELOG.md, create and push the tag.
+      - name: Semantic Release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+          extra_plugins: |
+            @semantic-release/changelog@6
+            @semantic-release/git@10
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Build and publish the GitHub Release for the tag semantic-release created.
       - name: Run GoReleaser
+        if: steps.semantic.outputs.new_release_published == 'true'
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -32,15 +70,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 3. Export the artifact hashes for the provenance job.
+      - name: Export artifact hashes
+        id: hashes
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: echo "hashes=$(base64 -w0 < dist/checksums.txt)" >> "$GITHUB_OUTPUT"
+
   provenance:
     name: SLSA provenance
-    needs: goreleaser
+    needs: release
+    if: needs.release.outputs.published == 'true'
     permissions:
       actions: read
       id-token: write
       contents: write
-    # Generates SLSA3 build provenance for the released binaries.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
-      base64-subjects: "${{ needs.goreleaser.outputs.hashes }}"
+      base64-subjects: ${{ needs.release.outputs.hashes }}
       upload-assets: true
+      upload-tag-name: ${{ needs.release.outputs.tag }}
+      provenance-name: mamori.intoto.jsonl

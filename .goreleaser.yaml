@@ -10,7 +10,9 @@ project_name: mamori
 
 before:
   hooks:
-    - go -C tools/reconcilevet mod tidy
+    # Non-mutating (won't dirty the tree and trip the clean-git check); the
+    # workspace is disabled so this resolves the module's own go.mod.
+    - GOWORK=off go -C tools/reconcilevet mod download
 
 builds:
   - id: reconcilevet
@@ -76,7 +78,7 @@ release:
   name_template: "mamori {{ .Tag }}"
   footer: |
     ---
-    **Full module docs:** https://xavidop.github.io/mamori
+    **Full module docs:** https://mamorigo.dev
 
     Library modules are consumed via `go get github.com/xavidop/mamori@{{ .Tag }}`.
     This release also ships the `reconcilevet` analyzer binary above.
