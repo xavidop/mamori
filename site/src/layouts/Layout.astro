@@ -48,7 +48,10 @@ const nav = [
           <span class="brand__word">mamori</span>
           <span class="brand__kana">守り</span>
         </a>
-        <nav class="site-nav" aria-label="Primary">
+        <button class="nav-toggle" data-nav-toggle aria-label="Menu" aria-controls="site-nav" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+        <nav class="site-nav" id="site-nav" aria-label="Primary">
           {nav.map((n) => <a href={n.href}>{n.label}</a>)}
           <a class="site-nav__gh" href={repo} target="_blank" rel="noopener" aria-label="mamori on GitHub">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
@@ -65,6 +68,23 @@ const nav = [
     </main>
 
     <CookieConsent />
+
+    <script>
+      const navToggle = document.querySelector("[data-nav-toggle]");
+      const header = document.querySelector(".site-header");
+      if (navToggle && header) {
+        navToggle.addEventListener("click", () => {
+          const open = header.toggleAttribute("data-open");
+          navToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+        header.querySelectorAll(".site-nav a").forEach((a) => {
+          a.addEventListener("click", () => {
+            header.removeAttribute("data-open");
+            navToggle.setAttribute("aria-expanded", "false");
+          });
+        });
+      }
+    </script>
 
     <footer class="site-footer">
       <div class="wrap site-footer__inner">
@@ -155,9 +175,70 @@ const nav = [
         background: rgba(47, 158, 104, 0.18);
         color: var(--green-deep) !important;
       }
+      .nav-toggle {
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        gap: 5px;
+        width: 42px;
+        height: 42px;
+        background: none;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .nav-toggle span {
+        display: block;
+        width: 18px;
+        height: 2px;
+        margin: 0 auto;
+        background: var(--ink);
+        border-radius: 2px;
+        transition:
+          transform 0.22s var(--ease),
+          opacity 0.22s var(--ease);
+      }
+      .site-header[data-open] .nav-toggle span:nth-child(1) {
+        transform: translateY(7px) rotate(45deg);
+      }
+      .site-header[data-open] .nav-toggle span:nth-child(2) {
+        opacity: 0;
+      }
+      .site-header[data-open] .nav-toggle span:nth-child(3) {
+        transform: translateY(-7px) rotate(-45deg);
+      }
+
       @media (max-width: 720px) {
-        .site-nav a:not(.site-nav__gh) {
+        .nav-toggle {
+          display: flex;
+        }
+        .site-nav {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
           display: none;
+          flex-direction: column;
+          align-items: stretch;
+          gap: 0;
+          padding: 0.6rem 1.25rem 1rem;
+          background: rgba(247, 248, 243, 0.98);
+          backdrop-filter: blur(12px);
+          border-bottom: 1px solid var(--line);
+          box-shadow: 0 22px 44px -26px rgba(27, 32, 25, 0.4);
+        }
+        .site-header[data-open] .site-nav {
+          display: flex;
+        }
+        .site-nav a {
+          padding: 0.7rem 0.3rem;
+          font-size: 1rem;
+          border-bottom: 1px solid var(--line);
+        }
+        .site-nav__gh {
+          margin-top: 0.7rem;
+          justify-content: center;
+          border-bottom: 1px solid rgba(47, 158, 104, 0.35) !important;
         }
       }
 

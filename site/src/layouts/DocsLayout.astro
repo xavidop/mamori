@@ -103,9 +103,15 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
 
 <Layout title={title}>
   <div class="docs wrap">
-    <aside class="toc" aria-label="Docs navigation">
+    <aside class="toc" data-toc aria-label="Docs navigation">
       <Search />
-      <div class="toc__inner">
+      <button class="toc__toggle" data-toc-toggle aria-controls="toc-nav" aria-expanded="false">
+        <span>Documentation menu</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </button>
+      <div class="toc__inner" id="toc-nav">
         {
           groups.map((g) => (
             <div class="toc__group">
@@ -394,24 +400,73 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     color: var(--green-deep);
   }
 
+  .toc__toggle {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    background: var(--bg-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    font-family: var(--font-body);
+    font-size: 0.92rem;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .toc__toggle svg {
+    color: var(--muted-2);
+    transition: transform 0.22s var(--ease);
+  }
+  .toc[data-open] .toc__toggle svg {
+    transform: rotate(180deg);
+  }
+
   @media (max-width: 900px) {
     .docs {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+      padding-block: 1.5rem 3rem;
     }
     .toc {
       position: static;
       max-height: none;
       border-bottom: 1px solid var(--line);
-      padding-bottom: 1rem;
-      margin-bottom: 1rem;
+      padding-bottom: 1.2rem;
+      margin-bottom: 1.5rem;
+    }
+    .toc__toggle {
+      display: flex;
+      margin-top: 0.25rem;
     }
     .toc__inner {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.4rem 1.4rem;
+      display: none;
+      margin-top: 0.5rem;
+      max-height: 65vh;
+      overflow-y: auto;
+    }
+    .toc[data-open] .toc__inner {
+      display: block;
     }
     .toc__group {
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.9rem;
     }
   }
 </style>
+
+<script>
+  const tocToggle = document.querySelector("[data-toc-toggle]");
+  const toc = document.querySelector("[data-toc]");
+  if (tocToggle && toc) {
+    tocToggle.addEventListener("click", () => {
+      const open = toc.toggleAttribute("data-open");
+      tocToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    toc.querySelectorAll(".toc__inner a").forEach((a) => {
+      a.addEventListener("click", () => {
+        toc.removeAttribute("data-open");
+        tocToggle.setAttribute("aria-expanded", "false");
+      });
+    });
+  }
+</script>

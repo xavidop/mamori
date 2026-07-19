@@ -316,8 +316,11 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     .hero__grid {
       grid-template-columns: 1fr;
     }
+    /* On mobile the demo follows the copy: eyebrow, title, lede, CTAs, go get,
+       then the animation. */
     .hero__demo {
-      order: -1;
+      order: 0;
+      margin-top: 0.5rem;
     }
   }
 
