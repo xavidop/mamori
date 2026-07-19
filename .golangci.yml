@@ -1,0 +1,11 @@
+# golangci-lint v2 configuration (shared by every module in the monorepo; each
+# module dir walks up to this file). Keep this in sync with the version pinned in
+# .github/workflows/ci.yml.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
