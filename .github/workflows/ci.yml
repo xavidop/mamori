@@ -39,7 +39,7 @@ jobs:
         dir: ${{ fromJSON(needs.discover.outputs.dirs) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache-dependency-path: ${{ matrix.dir }}/go.sum
@@ -63,7 +63,7 @@ jobs:
         dir: ${{ fromJSON(needs.discover.outputs.dirs) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache-dependency-path: ${{ matrix.dir }}/go.sum
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
       - name: Check formatting
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
       - name: Build and run the analyzer on core + examples
