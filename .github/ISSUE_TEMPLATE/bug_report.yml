@@ -1,0 +1,68 @@
+name: 🐛 Bug report
+description: Report a defect in mamori core, a provider, or middleware
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug! Please do NOT paste real secret values.
+  - type: input
+    id: version
+    attributes:
+      label: mamori version
+      description: Core module version, and provider module version if relevant.
+      placeholder: "core v0.1.0, providers/aws v0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      placeholder: "go version go1.26.0 darwin/arm64"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core (Load / Watch / reconciler)
+        - secret types / redaction
+        - a provider module
+        - middleware
+        - providertest / reconcilevet
+        - docs / examples
+    validations:
+      required: true
+  - type: input
+    id: scheme
+    attributes:
+      label: Provider scheme (if applicable)
+      placeholder: "aws-sm, vault, k8s-secret, ..."
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A struct + `source` tags + the calls you made. Redact secrets.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / errors
+      description: Relevant output. Confirm no secret values are included.
+      render: shell
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have removed all real secret values from this report.
+          required: true

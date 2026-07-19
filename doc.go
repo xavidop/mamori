@@ -3,7 +3,7 @@
 // into typed, validated Go structs, and keeps them reconciled at runtime.
 //
 // When a source value changes, mamori detects it, re-validates the whole
-// configuration, and — only if the new snapshot is valid — atomically swaps it
+// configuration, and - only if the new snapshot is valid - atomically swaps it
 // in and notifies the application with a diff-aware callback so it can react
 // (rotate a database pool, rebuild a client, ...) without restarting.
 //

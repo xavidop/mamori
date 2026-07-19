@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Each module is tested independently against its own go.mod (no workspace).
+  GOWORK: off
+
+jobs:
+  discover:
+    name: Discover modules
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.set.outputs.dirs }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set
+        name: Find all Go modules
+        run: |
+          dirs=$(find . -name go.mod -not -path './site/*' -not -path './**/testdata/*' \
+            -exec dirname {} \; | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+          echo "Modules: $dirs"
+
+  test:
+    name: test ${{ matrix.dir }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.discover.outputs.dirs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: ${{ matrix.dir }}/go.sum
+      - name: go build
+        working-directory: ${{ matrix.dir }}
+        run: go build ./...
+      - name: go vet
+        working-directory: ${{ matrix.dir }}
+        run: go vet ./...
+      - name: go test (race)
+        working-directory: ${{ matrix.dir }}
+        run: go test -race -count=1 ./...
+
+  lint:
+    name: lint ${{ matrix.dir }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.discover.outputs.dirs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: ${{ matrix.dir }}/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: ${{ matrix.dir }}
+          args: --timeout=5m
+
+  gofmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l $(find . -name '*.go' -not -path './**/testdata/*'))
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-ed:"; echo "$unformatted"; exit 1
+          fi
+
+  reconcilevet:
+    name: reconcilevet self-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Build and run the analyzer on core + examples
+        run: |
+          cd tools/reconcilevet
+          go build -o "$RUNNER_TEMP/reconcilevet" ./cmd/reconcilevet
+          cd "$GITHUB_WORKSPACE"
+          go vet -vettool="$RUNNER_TEMP/reconcilevet" ./... ./examples/...

@@ -1,0 +1,160 @@
+---
+// Cookie consent banner that gates Google Analytics. GA (gtag.js) is loaded ONLY
+// after the visitor accepts, and never if they decline. The measurement id comes
+// from the PUBLIC_GA_ID build env var; if it is unset, analytics stays inert and
+// the banner still works (recording the choice) but loads nothing.
+const gaId = import.meta.env.PUBLIC_GA_ID ?? "";
+---
+
+<div class="cc" data-cookie-consent hidden>
+  <div class="cc__inner">
+    <div class="cc__body">
+      <strong class="cc__title">Cookies</strong>
+      <p class="cc__text">
+        mamori uses cookies only for anonymous analytics, to see which docs are useful. No ads, no
+        cross-site tracking. You can change this any time from the footer.
+      </p>
+    </div>
+    <div class="cc__actions">
+      <button type="button" class="cc__btn cc__btn--ghost" data-cc-decline>Decline</button>
+      <button type="button" class="cc__btn cc__btn--accept" data-cc-accept>Accept</button>
+    </div>
+  </div>
+</div>
+
+<script define:vars={{ gaId }}>
+  const KEY = "mamori-consent";
+  const banner = document.querySelector("[data-cookie-consent]");
+  if (banner) {
+    const loadGA = () => {
+      if (!gaId || window.__mamoriGA) return;
+      window.__mamoriGA = true;
+      const s = document.createElement("script");
+      s.async = true;
+      s.src = "https://www.googletagmanager.com/gtag/js?id=" + gaId;
+      document.head.appendChild(s);
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = function () {
+        window.dataLayer.push(arguments);
+      };
+      window.gtag("js", new Date());
+      window.gtag("config", gaId, { anonymize_ip: true });
+    };
+
+    const choice = localStorage.getItem(KEY);
+    if (choice === "accepted") {
+      loadGA();
+    } else if (choice !== "declined") {
+      banner.hidden = false;
+    }
+
+    banner.querySelector("[data-cc-accept]").addEventListener("click", () => {
+      localStorage.setItem(KEY, "accepted");
+      banner.hidden = true;
+      loadGA();
+    });
+    banner.querySelector("[data-cc-decline]").addEventListener("click", () => {
+      localStorage.setItem(KEY, "declined");
+      banner.hidden = true;
+    });
+
+    // Let the footer "Cookie preferences" link reopen the banner.
+    window.mamoriCookiePrefs = () => {
+      banner.hidden = false;
+    };
+    document.querySelectorAll("[data-cookie-prefs]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        banner.hidden = false;
+      });
+    });
+  }
+</script>
+
+<style>
+  .cc {
+    position: fixed;
+    left: 50%;
+    bottom: 1.1rem;
+    transform: translateX(-50%);
+    z-index: 200;
+    width: min(560px, calc(100% - 2rem));
+    animation: cc-up 0.35s var(--ease);
+  }
+  .cc[hidden] {
+    display: none;
+  }
+  @keyframes cc-up {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 12px);
+    }
+  }
+  .cc__inner {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    padding: 1rem 1.2rem;
+    background: var(--bg-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    box-shadow: 0 20px 50px -18px rgba(27, 32, 25, 0.4);
+  }
+  .cc__title {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    margin-bottom: 0.15rem;
+    color: var(--ink);
+  }
+  .cc__text {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  .cc__actions {
+    display: flex;
+    gap: 0.5rem;
+    flex: none;
+  }
+  .cc__btn {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition:
+      transform 0.2s var(--ease),
+      background 0.2s var(--ease),
+      border-color 0.2s var(--ease);
+  }
+  .cc__btn--accept {
+    background: var(--green);
+    color: #fff;
+  }
+  .cc__btn--accept:hover {
+    background: var(--green-hi);
+    transform: translateY(-1px);
+  }
+  .cc__btn--ghost {
+    background: var(--bg);
+    border-color: var(--line-strong);
+    color: var(--ink);
+  }
+  .cc__btn--ghost:hover {
+    border-color: var(--green);
+    color: var(--green-deep);
+  }
+  @media (max-width: 620px) {
+    .cc__inner {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.8rem;
+    }
+    .cc__actions {
+      justify-content: flex-end;
+    }
+  }
+</style>

@@ -1,0 +1,49 @@
+---
+// Seigaiha (青海波) - the traditional "blue ocean wave" pattern, drawn as a
+// tiling SVG. Used as an ambient, slowly-drifting texture. Decorative only.
+---
+
+<div class="seigaiha" aria-hidden="true">
+  <svg width="100%" height="100%" preserveAspectRatio="xMidYMax slice">
+    <defs>
+      <pattern id="seigaiha" width="60" height="30" patternUnits="userSpaceOnUse">
+        <g fill="none" stroke="var(--ai)" stroke-width="1">
+          <path d="M0 30 A30 30 0 0 1 60 30" opacity="0.55" />
+          <path d="M0 30 A22 22 0 0 1 44 30" opacity="0.4" transform="translate(8 0)" />
+          <path d="M0 30 A14 14 0 0 1 28 30" opacity="0.3" transform="translate(16 0)" />
+          <path d="M0 30 A6 6 0 0 1 12 30" opacity="0.25" transform="translate(24 0)" />
+          <path d="M-30 30 A30 30 0 0 1 30 30" opacity="0.55" />
+          <path d="M30 30 A30 30 0 0 1 90 30" opacity="0.55" />
+        </g>
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#seigaiha)"></rect>
+  </svg>
+</div>
+
+<style>
+  .seigaiha {
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 46%;
+    pointer-events: none;
+    z-index: 0;
+    -webkit-mask-image: linear-gradient(to top, #000 0%, transparent 100%);
+    mask-image: linear-gradient(to top, #000 0%, transparent 100%);
+    opacity: 0.35;
+  }
+  .seigaiha svg {
+    position: absolute;
+    inset: 0;
+    width: 130%;
+    animation: drift 26s linear infinite;
+  }
+  @keyframes drift {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-60px);
+    }
+  }
+</style>

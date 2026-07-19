@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 53" width="40" height="53">
+  <path d="M14 7 Q20 -1 26 7" stroke="#e7b45a" stroke-width="1.8" fill="none" />
+  <circle cx="20" cy="4.6" r="1.6" fill="#e7b45a" />
+  <path d="M9 13 Q9 9 13 9 H27 Q31 9 31 13 V47 Q31 51 27 51 H13 Q9 51 9 47 Z"
+    fill="#0d1230" stroke="#e7b45a" stroke-width="1.6" />
+  <rect x="12.5" y="12.5" width="15" height="3.4" rx="1.2" fill="#ef4a34" />
+  <text x="20" y="37" text-anchor="middle" font-family="serif" font-size="19" fill="#ece4d3">守</text>
+</svg>

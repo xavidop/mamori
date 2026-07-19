@@ -1,0 +1,39 @@
+name: 🧩 New provider request
+description: Request (or volunteer to build) a provider for a new backend
+labels: [provider, triage]
+body:
+  - type: input
+    id: backend
+    attributes:
+      label: Backend
+      placeholder: "Azure App Configuration, Infisical, etcd, ..."
+    validations:
+      required: true
+  - type: input
+    id: scheme
+    attributes:
+      label: Proposed scheme
+      placeholder: "appconfig://, infisical://, etcd://"
+    validations:
+      required: true
+  - type: input
+    id: sdk
+    attributes:
+      label: Official Go SDK / API
+      description: Link to the SDK or REST API docs.
+  - type: dropdown
+    id: watch
+    attributes:
+      label: Native change notification?
+      options:
+        - "Yes - the backend can push/long-poll (implement Watch)"
+        - "No - poll only"
+        - "Not sure"
+    validations:
+      required: true
+  - type: checkboxes
+    id: volunteer
+    attributes:
+      label: Are you volunteering to build it?
+      options:
+        - label: I'd like to implement this provider (I'll follow docs/PROVIDER_SPI.md and pass providertest).

@@ -25,3 +25,8 @@ site/.astro/
 .env
 .env.*
 !.env.example
+
+# Playwright / screenshots
+.playwright-mcp/
+*.screenshot.png
+

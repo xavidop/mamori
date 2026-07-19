@@ -1,0 +1,82 @@
+# GoReleaser configuration for mamori.
+#
+# Library modules (core and providers/*) are released via semver git tags and
+# consumed by `go get`; there is nothing to "build" for them. GoReleaser here
+# builds and releases the one shipped binary - the reconcilevet analyzer - with
+# checksums, a changelog, and (in CI) SLSA provenance.
+version: 2
+
+project_name: mamori
+
+before:
+  hooks:
+    - go -C tools/reconcilevet mod tidy
+
+builds:
+  - id: reconcilevet
+    dir: tools/reconcilevet
+    main: ./cmd/reconcilevet
+    binary: reconcilevet
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: reconcilevet
+    ids: [reconcilevet]
+    name_template: "reconcilevet_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Providers
+      regexp: '^.*?feat\((aws|gcp|azure|vault|k8s|consul|doppler|onepassword|sops)\).+$'
+      order: 2
+    - title: Documentation
+      regexp: '^.*?docs(\(.+\))??!?:.+$'
+      order: 3
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+      - "merge conflict"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: xavidop
+    name: mamori
+  draft: false
+  prerelease: auto
+  name_template: "mamori {{ .Tag }}"
+  footer: |
+    ---
+    **Full module docs:** https://xavidop.github.io/mamori
+
+    Library modules are consumed via `go get github.com/xavidop/mamori@{{ .Tag }}`.
+    This release also ships the `reconcilevet` analyzer binary above.

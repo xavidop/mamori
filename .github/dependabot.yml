@@ -1,0 +1,157 @@
+version: 2
+updates:
+  # Core module
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+    labels: [dependencies, go]
+
+  # Provider modules (each is its own module)
+  - package-ecosystem: gomod
+    directory: "/providers/aws"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:aws]
+  - package-ecosystem: gomod
+    directory: "/providers/gcp"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:gcp]
+  - package-ecosystem: gomod
+    directory: "/providers/azure"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:azure]
+  - package-ecosystem: gomod
+    directory: "/providers/vault"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:vault]
+  - package-ecosystem: gomod
+    directory: "/providers/k8s"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:k8s]
+  - package-ecosystem: gomod
+    directory: "/providers/consul"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:consul]
+  - package-ecosystem: gomod
+    directory: "/providers/doppler"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:doppler]
+  - package-ecosystem: gomod
+    directory: "/providers/onepassword"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:onepassword]
+  - package-ecosystem: gomod
+    directory: "/providers/sops"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:sops]
+  - package-ecosystem: gomod
+    directory: "/providers/etcd"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:etcd]
+  - package-ecosystem: gomod
+    directory: "/providers/redis"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:redis]
+  - package-ecosystem: gomod
+    directory: "/providers/postgres"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:postgres]
+  - package-ecosystem: gomod
+    directory: "/providers/mysql"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:mysql]
+  - package-ecosystem: gomod
+    directory: "/providers/sqlite"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:sqlite]
+  - package-ecosystem: gomod
+    directory: "/providers/mongodb"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:mongodb]
+  - package-ecosystem: gomod
+    directory: "/providers/dynamodb"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:dynamodb]
+  - package-ecosystem: gomod
+    directory: "/providers/firestore"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:firestore]
+  - package-ecosystem: gomod
+    directory: "/providers/firebase-rc"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:firebase-rc]
+  - package-ecosystem: gomod
+    directory: "/providers/firebase-rtdb"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:firebase-rtdb]
+  - package-ecosystem: gomod
+    directory: "/providers/s3"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:s3]
+  - package-ecosystem: gomod
+    directory: "/providers/gcs"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:gcs]
+  - package-ecosystem: gomod
+    directory: "/providers/azblob"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:azblob]
+  - package-ecosystem: gomod
+    directory: "/providers/cosmos"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:cosmos]
+  - package-ecosystem: gomod
+    directory: "/providers/launchdarkly"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:launchdarkly]
+  - package-ecosystem: gomod
+    directory: "/providers/unleash"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:unleash]
+  - package-ecosystem: gomod
+    directory: "/providers/flagsmith"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:flagsmith]
+  - package-ecosystem: gomod
+    directory: "/providers/configcat"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:configcat]
+  - package-ecosystem: gomod
+    directory: "/providers/split"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:split]
+  - package-ecosystem: gomod
+    directory: "/providers/growthbook"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:growthbook]
+  - package-ecosystem: gomod
+    directory: "/providers/flipt"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:flipt]
+  - package-ecosystem: gomod
+    directory: "/providers/goff"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:goff]
+  - package-ecosystem: gomod
+    directory: "/x/otel"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, otel]
+  - package-ecosystem: gomod
+    directory: "/tools/reconcilevet"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, tooling]
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+    labels: [dependencies, ci]
+
+  # Docs site (npm)
+  - package-ecosystem: npm
+    directory: "/site"
+    schedule: { interval: weekly }
+    labels: [dependencies, docs]

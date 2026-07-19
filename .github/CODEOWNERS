@@ -1,0 +1,22 @@
+# Default owner for everything in the repo.
+* @xavidop
+
+# Core engine and public API
+/*.go @xavidop
+/secret/ @xavidop
+/middleware/ @xavidop
+/providertest/ @xavidop
+
+# Provider modules
+/providers/ @xavidop
+
+# Tooling
+/tools/ @xavidop
+/x/ @xavidop
+
+# Docs site
+/site/ @xavidop
+
+# CI / release
+/.github/ @xavidop
+/.goreleaser.yaml @xavidop

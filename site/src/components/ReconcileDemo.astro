@@ -1,0 +1,274 @@
+---
+// The signature hero animation: a secret rotates at its source, the typed struct
+// re-validates, and the OnChange callback fires - looping, "without restart."
+// Pure CSS timeline (respects prefers-reduced-motion).
+---
+
+<div class="demo" role="img" aria-label="A secret rotates at its source; mamori re-validates the config and fires an OnChange callback, without a restart.">
+  <div class="demo__rail" aria-hidden="true"><span class="spark"></span></div>
+
+  <!-- 1 · Source -->
+  <div class="node node--src" style="--i: 0">
+    <span class="node__tag">source</span>
+    <div class="node__body">
+      <code class="ref">aws-sm://prod/db<span class="hash">#password</span></code>
+      <span class="ver">
+        <b class="ver__old">v1</b>
+        <b class="ver__new">v2</b>
+      </span>
+    </div>
+    <span class="node__cap">secret rotated</span>
+  </div>
+
+  <!-- 2 · Typed struct re-validated -->
+  <div class="node node--struct" style="--i: 1">
+    <span class="node__tag">reconcile</span>
+    <div class="node__body node__body--struct">
+      <span class="scan"></span>
+      <code
+        ><span class="c">type</span> <span class="t">Config</span> {'{'}<br />
+        &nbsp;&nbsp;DBPassword <span class="ty">secret.String</span>
+        <span class="check">✓</span><br />
+        {'}'}</code
+      >
+    </div>
+    <span class="node__cap">validated · atomic swap</span>
+  </div>
+
+  <!-- 3 · Callback fires -->
+  <div class="node node--cb" style="--i: 2">
+    <span class="node__tag">OnChange</span>
+    <div class="node__body">
+      <code><span class="f">pool</span>.Rotate(<span class="s">cfg.DBPassword.Reveal()</span>)</code>
+    </div>
+    <span class="node__cap">no restart</span>
+  </div>
+</div>
+
+<style>
+  .demo {
+    --cycle: 6.5s;
+    position: relative;
+    display: grid;
+    gap: 1.1rem;
+    padding: 1.4rem 1.4rem 1.4rem 2.4rem;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: 0 30px 60px -30px rgba(47, 158, 104, 0.28);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+  }
+
+  .demo__rail {
+    position: absolute;
+    left: 1.15rem;
+    top: 2.2rem;
+    bottom: 2.2rem;
+    width: 2px;
+    background: linear-gradient(var(--line-strong), var(--line));
+    border-radius: 2px;
+  }
+  .spark {
+    position: absolute;
+    left: -3px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--shu);
+    box-shadow: 0 0 12px 3px var(--shu);
+    animation: spark-travel var(--cycle) var(--ease) infinite;
+  }
+  @keyframes spark-travel {
+    0% {
+      top: 0;
+      opacity: 0;
+    }
+    8% {
+      opacity: 1;
+    }
+    40% {
+      top: 50%;
+    }
+    72% {
+      top: 100%;
+      opacity: 1;
+    }
+    85%,
+    100% {
+      top: 100%;
+      opacity: 0;
+    }
+  }
+
+  .node {
+    position: relative;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bg);
+    transition: border-color 0.3s var(--ease);
+    animation: node-live var(--cycle) ease-in-out infinite;
+    animation-delay: calc(var(--i) * (var(--cycle) / 3.4));
+  }
+  @keyframes node-live {
+    0%,
+    12% {
+      border-color: var(--line);
+      box-shadow: none;
+    }
+    22% {
+      border-color: var(--shu);
+      box-shadow: 0 0 0 1px var(--shu-soft), 0 10px 30px -12px var(--shu);
+    }
+    46%,
+    100% {
+      border-color: var(--line);
+      box-shadow: none;
+    }
+  }
+
+  .node__tag {
+    position: absolute;
+    top: -0.6rem;
+    left: 0.9rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--shu);
+    background: var(--kon);
+    padding: 0 0.5rem;
+  }
+  .node__body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    color: var(--kinari);
+  }
+  .node__cap {
+    display: block;
+    margin-top: 0.5rem;
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    color: var(--mist-dim);
+  }
+
+  .ref {
+    color: var(--kinari);
+  }
+  .hash {
+    color: var(--kin);
+  }
+
+  /* Version chip flip v1 -> v2 */
+  .ver {
+    position: relative;
+    display: inline-grid;
+    min-width: 2.2rem;
+    justify-items: center;
+  }
+  .ver b {
+    grid-area: 1 / 1;
+    padding: 0.1rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    background: var(--shu-soft);
+    color: var(--shu-hi);
+  }
+  .ver__old {
+    animation: ver-out var(--cycle) steps(1) infinite;
+  }
+  .ver__new {
+    opacity: 0;
+    animation: ver-in var(--cycle) steps(1) infinite;
+  }
+  @keyframes ver-out {
+    0%,
+    16% {
+      opacity: 1;
+    }
+    17%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes ver-in {
+    0%,
+    16% {
+      opacity: 0;
+    }
+    17%,
+    100% {
+      opacity: 1;
+    }
+  }
+
+  /* Struct scan + check */
+  .node__body--struct {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    line-height: 1.7;
+  }
+  .node__body--struct .c {
+    color: #c1502b;
+  }
+  .node__body--struct .t {
+    color: #2b6fa8;
+  }
+  .node__body--struct .ty {
+    color: var(--clay);
+  }
+  .scan {
+    position: absolute;
+    inset: 0 100% 0 0;
+    background: linear-gradient(90deg, transparent, var(--shu-soft) 60%, transparent);
+    animation: scan var(--cycle) var(--ease) infinite;
+    animation-delay: calc(var(--cycle) / 3.4);
+  }
+  @keyframes scan {
+    0%,
+    18% {
+      inset: 0 100% 0 -20%;
+    }
+    38% {
+      inset: 0 -20% 0 100%;
+    }
+    100% {
+      inset: 0 -20% 0 100%;
+    }
+  }
+  .check {
+    color: var(--matcha);
+    opacity: 0;
+    transform: scale(0.5);
+    display: inline-block;
+    animation: pop var(--cycle) var(--ease) infinite;
+    animation-delay: calc(var(--cycle) / 3.4);
+  }
+  @keyframes pop {
+    0%,
+    30% {
+      opacity: 0;
+      transform: scale(0.5);
+    }
+    40% {
+      opacity: 1;
+      transform: scale(1.25);
+    }
+    48%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Callback ignite */
+  .node--cb .f {
+    color: var(--matcha);
+  }
+  .node--cb .s {
+    color: var(--kin);
+  }
+</style>

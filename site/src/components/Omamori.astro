@@ -1,0 +1,60 @@
+---
+// The omamori charm - mamori's signature mark. A warded amulet with a gold cord
+// holding the 守 (mamori / "protect") kanji. Scales via the `size` prop.
+interface Props {
+  size?: number;
+  glow?: boolean;
+}
+const { size = 40, glow = false } = Astro.props;
+const h = Math.round(size * 1.32);
+---
+
+<svg
+  class:list={["omamori", { "omamori--glow": glow }]}
+  width={size}
+  height={h}
+  viewBox="0 0 40 53"
+  fill="none"
+  role="img"
+  aria-label="mamori omamori charm"
+>
+  <!-- cord loop -->
+  <path d="M14 7 Q20 -1 26 7" stroke="var(--kin)" stroke-width="1.6" fill="none" />
+  <circle cx="20" cy="4.6" r="1.5" fill="var(--kin)" />
+  <!-- pouch body -->
+  <path
+    d="M9 13 Q9 9 13 9 H27 Q31 9 31 13 V47 Q31 51 27 51 H13 Q9 51 9 47 Z"
+    fill="var(--bg-3)"
+    stroke="var(--clay)"
+    stroke-width="1.5"
+  />
+  <!-- cinch -->
+  <rect x="12.5" y="12.5" width="15" height="3.4" rx="1.2" fill="var(--shu)" />
+  <!-- kanji 守 -->
+  <text
+    x="20"
+    y="37"
+    text-anchor="middle"
+    font-family="var(--font-display)"
+    font-size="19"
+    fill="var(--kinari)">守</text>
+</svg>
+
+<style>
+  .omamori {
+    display: block;
+    filter: drop-shadow(0 4px 12px rgba(27, 32, 25, 0.12));
+  }
+  .omamori--glow {
+    animation: charm-glow 4.5s ease-in-out infinite;
+  }
+  @keyframes charm-glow {
+    0%,
+    100% {
+      filter: drop-shadow(0 4px 12px rgba(27, 32, 25, 0.12));
+    }
+    50% {
+      filter: drop-shadow(0 6px 22px rgba(47, 158, 104, 0.4));
+    }
+  }
+</style>

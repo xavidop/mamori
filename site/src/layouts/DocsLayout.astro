@@ -1,0 +1,417 @@
+---
+import Layout from "./Layout.astro";
+import Search from "../components/Search.astro";
+
+const { frontmatter } = Astro.props;
+const title = frontmatter?.title
+  ? `${frontmatter.title} - mamori docs`
+  : "mamori docs";
+
+const base = import.meta.env.BASE_URL;
+
+// Ordered, grouped multi-page navigation. slug "" is the docs index.
+const groups = [
+  {
+    label: "Start",
+    items: [
+      { slug: "", title: "Introduction" },
+      { slug: "comparison", title: "Why mamori" },
+      { slug: "concepts", title: "Concepts" },
+      { slug: "usage", title: "Loading & watching" },
+      { slug: "validation", title: "Validation" },
+    ],
+  },
+  {
+    label: "Providers",
+    items: [
+      { slug: "providers", title: "Overview" },
+      { slug: "writing-a-provider", title: "Write a provider" },
+      { subhead: "Built-in" },
+      { slug: "providers/env", title: "env", indent: true },
+      { slug: "providers/dotenv", title: "dotenv", indent: true },
+      { slug: "providers/file", title: "file", indent: true },
+      { slug: "providers/exec", title: "exec", indent: true },
+      { subhead: "Secret managers" },
+      { slug: "providers/aws", title: "AWS", indent: true },
+      { slug: "providers/vault", title: "Vault", indent: true },
+      { slug: "providers/gcp", title: "GCP", indent: true },
+      { slug: "providers/azure", title: "Azure", indent: true },
+      { slug: "providers/doppler", title: "Doppler", indent: true },
+      { slug: "providers/onepassword", title: "1Password", indent: true },
+      { slug: "providers/sops", title: "SOPS", indent: true },
+      { subhead: "Databases" },
+      { slug: "providers/postgres", title: "PostgreSQL", indent: true },
+      { slug: "providers/mysql", title: "MySQL", indent: true },
+      { slug: "providers/sqlite", title: "SQLite", indent: true },
+      { slug: "providers/mongodb", title: "MongoDB", indent: true },
+      { slug: "providers/dynamodb", title: "DynamoDB", indent: true },
+      { slug: "providers/cosmos", title: "Cosmos DB", indent: true },
+      { slug: "providers/redis", title: "Redis", indent: true },
+      { subhead: "KV & config" },
+      { slug: "providers/consul", title: "Consul", indent: true },
+      { slug: "providers/etcd", title: "etcd", indent: true },
+      { subhead: "Kubernetes" },
+      { slug: "providers/kubernetes", title: "Kubernetes", indent: true },
+      { subhead: "Firebase & Google" },
+      { slug: "providers/firestore", title: "Firestore", indent: true },
+      { slug: "providers/firebase-rc", title: "Remote Config", indent: true },
+      { slug: "providers/firebase-rtdb", title: "Realtime DB", indent: true },
+      { subhead: "Object storage" },
+      { slug: "providers/s3", title: "Amazon S3", indent: true },
+      { slug: "providers/gcs", title: "Google GCS", indent: true },
+      { slug: "providers/azblob", title: "Azure Blob", indent: true },
+      { subhead: "Feature flags" },
+      { slug: "providers/launchdarkly", title: "LaunchDarkly", indent: true },
+      { slug: "providers/unleash", title: "Unleash", indent: true },
+      { slug: "providers/flagsmith", title: "Flagsmith", indent: true },
+      { slug: "providers/configcat", title: "ConfigCat", indent: true },
+      { slug: "providers/split", title: "Split", indent: true },
+      { slug: "providers/growthbook", title: "GrowthBook", indent: true },
+      { slug: "providers/flipt", title: "Flipt", indent: true },
+      { slug: "providers/goff", title: "GO Feature Flag", indent: true },
+    ],
+  },
+  {
+    label: "Extend",
+    items: [
+      { slug: "middleware", title: "Middleware" },
+      { slug: "opentelemetry", title: "OpenTelemetry" },
+      { slug: "reconcilevet", title: "reconcilevet" },
+    ],
+  },
+  {
+    label: "More",
+    items: [
+      { slug: "samples", title: "Samples" },
+      { slug: "security", title: "Security & releases" },
+      { slug: "getting-help", title: "Getting help" },
+    ],
+  },
+];
+
+const hrefFor = (slug?: string) => {
+  const p = (base + "docs/" + (slug ?? "")).replace(/\/+$/, "");
+  return p === "" ? "/" : p;
+};
+const here = Astro.url.pathname.replace(/\/+$/, "") || "/";
+
+const flat = groups.flatMap((g) => g.items).filter((i) => typeof i.slug === "string");
+const idx = flat.findIndex((i) => hrefFor(i.slug) === here);
+const prev = idx > 0 ? flat[idx - 1] : null;
+const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
+---
+
+<Layout title={title}>
+  <div class="docs wrap">
+    <aside class="toc" aria-label="Docs navigation">
+      <Search />
+      <div class="toc__inner">
+        {
+          groups.map((g) => (
+            <div class="toc__group">
+              <p class="toc__title">{g.label}</p>
+              <ul>
+                {g.items.map((i) =>
+                  i.subhead ? (
+                    <li class="toc__subhead">{i.subhead}</li>
+                  ) : (
+                    <li>
+                      <a
+                        href={hrefFor(i.slug)}
+                        aria-current={hrefFor(i.slug) === here ? "page" : undefined}
+                        class:list={[
+                          "toc__link",
+                          { "toc__link--active": hrefFor(i.slug) === here },
+                          { "toc__link--indent": i.indent },
+                        ]}
+                      >
+                        {i.title}
+                      </a>
+                    </li>
+                  ),
+                )}
+              </ul>
+            </div>
+          ))
+        }
+      </div>
+    </aside>
+
+    <article class="doc">
+      <slot />
+
+      <nav class="doc-nav" aria-label="Page navigation">
+        {
+          prev ? (
+            <a class="doc-nav__link doc-nav__link--prev" href={hrefFor(prev.slug)}>
+              <span>← Previous</span>
+              <strong>{prev.title}</strong>
+            </a>
+          ) : (
+            <span />
+          )
+        }
+        {
+          next && (
+            <a class="doc-nav__link doc-nav__link--next" href={hrefFor(next.slug)}>
+              <span>Next →</span>
+              <strong>{next.title}</strong>
+            </a>
+          )
+        }
+      </nav>
+    </article>
+  </div>
+</Layout>
+
+<style is:global>
+  .docs {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 3rem;
+    padding-block: 3rem 4rem;
+    align-items: start;
+  }
+  .toc {
+    position: sticky;
+    top: 84px;
+    max-height: calc(100vh - 100px);
+    display: flex;
+    flex-direction: column;
+  }
+  .toc__inner {
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .toc__group {
+    margin-bottom: 1.4rem;
+  }
+  .toc__title {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+    margin: 0 0 0.5rem;
+  }
+  .toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.15rem;
+  }
+  .toc__link {
+    display: block;
+    font-size: 0.92rem;
+    color: var(--muted);
+    padding: 0.3rem 0.7rem;
+    border-radius: 8px;
+    border-left: 2px solid transparent;
+    transition:
+      color 0.2s var(--ease),
+      background 0.2s var(--ease),
+      border-color 0.2s var(--ease);
+  }
+  .toc__link:hover {
+    color: var(--green-deep);
+    background: var(--bg-3);
+  }
+  .toc__link--active {
+    color: var(--green-deep);
+    background: var(--green-soft);
+    border-left-color: var(--green);
+    font-weight: 500;
+  }
+  .toc__link--indent {
+    margin-left: 0.6rem;
+    padding-left: 0.9rem;
+    border-left: 1px solid var(--line);
+    font-size: 0.88rem;
+  }
+  .toc__link--indent.toc__link--active {
+    border-left-color: var(--green);
+  }
+  .toc__subhead {
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+    margin: 0.7rem 0 0.25rem 0.6rem;
+  }
+
+  .doc {
+    max-width: 74ch;
+    font-size: 1.02rem;
+  }
+  .doc > :first-child {
+    margin-top: 0;
+  }
+  .doc h1 {
+    font-size: var(--step-4);
+    margin-bottom: 0.4rem;
+  }
+  .doc h2 {
+    font-size: var(--step-2);
+    margin-top: 2.6rem;
+    padding-top: 1.3rem;
+    border-top: 1px solid var(--line);
+    scroll-margin-top: 84px;
+  }
+  .doc h3 {
+    font-size: var(--step-1);
+    margin-top: 1.8rem;
+    scroll-margin-top: 84px;
+  }
+  .doc p {
+    color: var(--muted);
+  }
+  .doc strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .doc a:not(.badge):not(.doc-nav__link) {
+    color: var(--green-deep);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: rgba(47, 158, 104, 0.4);
+  }
+  .doc a:not(.doc-nav__link):hover {
+    text-decoration-color: var(--green);
+  }
+  .doc ul,
+  .doc ol {
+    color: var(--muted);
+    padding-left: 1.2rem;
+  }
+  .doc li {
+    margin: 0.35rem 0;
+  }
+  .doc li::marker {
+    color: var(--green);
+  }
+  .doc :not(pre) > code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--bg-3);
+    border: 1px solid var(--line);
+    padding: 0.1rem 0.4rem;
+    border-radius: 6px;
+    color: var(--green-deep);
+  }
+  .doc pre.astro-code,
+  .doc pre {
+    background: var(--code-bg) !important;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.15rem 1.3rem;
+    overflow-x: auto;
+    margin: 1.2rem 0;
+    font-size: 0.95rem;
+    line-height: 1.7;
+  }
+  .doc pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+  }
+  .doc blockquote {
+    margin: 1.4rem 0;
+    padding: 0.6rem 1.1rem;
+    border-left: 3px solid var(--green);
+    background: var(--green-soft);
+    border-radius: 0 10px 10px 0;
+  }
+  .doc blockquote p {
+    color: var(--ink);
+    margin: 0;
+  }
+  .doc table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.2rem 0;
+    font-size: 0.9rem;
+    display: block;
+    overflow-x: auto;
+  }
+  .doc th,
+  .doc td {
+    text-align: left;
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .doc th {
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.03em;
+  }
+  .doc td code {
+    white-space: nowrap;
+  }
+  .doc hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 2.5rem 0;
+  }
+
+  .doc-nav {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 3.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--line);
+  }
+  .doc-nav__link {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.9rem 1.2rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bg-2);
+    min-width: 44%;
+    transition:
+      border-color 0.2s var(--ease),
+      transform 0.2s var(--ease);
+  }
+  .doc-nav__link:hover {
+    border-color: var(--green);
+    transform: translateY(-2px);
+  }
+  .doc-nav__link--next {
+    text-align: right;
+  }
+  .doc-nav__link span {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--muted-2);
+  }
+  .doc-nav__link strong {
+    color: var(--green-deep);
+  }
+
+  @media (max-width: 900px) {
+    .docs {
+      grid-template-columns: 1fr;
+    }
+    .toc {
+      position: static;
+      max-height: none;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 1rem;
+      margin-bottom: 1rem;
+    }
+    .toc__inner {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem 1.4rem;
+    }
+    .toc__group {
+      margin-bottom: 0.5rem;
+    }
+  }
+</style>

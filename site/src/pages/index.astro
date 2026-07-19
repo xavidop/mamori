@@ -1,0 +1,479 @@
+---
+import Layout from "../layouts/Layout.astro";
+import ReconcileDemo from "../components/ReconcileDemo.astro";
+import Seigaiha from "../components/Seigaiha.astro";
+import Omamori from "../components/Omamori.astro";
+
+const repo = "https://github.com/xavidop/mamori";
+const base = import.meta.env.BASE_URL;
+const docs = `${base}docs`;
+
+const features = [
+  {
+    k: "01",
+    t: "Typed loading",
+    d: "One struct, tag-driven, many sources. A generics API - Load[T] and Watch[T] - decodes and validates into your own types. No stringly-typed lookups.",
+  },
+  {
+    k: "02",
+    t: "Runtime reconciliation",
+    d: "Native watch where the backend supports it - Kubernetes informers, Consul blocking queries, fsnotify - polling with jitter everywhere else, and lease-aware refresh for Vault.",
+  },
+  {
+    k: "03",
+    t: "Atomic & validated",
+    d: "An update that fails validation is rejected. Get() keeps returning the last good config. Your process never observes a half-applied or invalid state.",
+  },
+  {
+    k: "04",
+    t: "Secret hygiene",
+    d: "secret.String redacts itself in logs, fmt, and JSON. Only Reveal() exposes the value - and a shipped go vet analyzer flags sensitive refs stored in plain strings.",
+  },
+];
+
+const providers = [
+  { scheme: "env:", name: "Environment", watch: "poll", built: true },
+  { scheme: "dotenv://", name: "Dotenv files", watch: "fsnotify", built: true },
+  { scheme: "file://", name: "Files", watch: "fsnotify", built: true },
+  { scheme: "aws-sm://", name: "AWS Secrets Manager", watch: "poll" },
+  { scheme: "aws-ps://", name: "AWS Parameter Store", watch: "poll" },
+  { scheme: "vault://", name: "HashiCorp Vault", watch: "lease-aware" },
+  { scheme: "k8s-secret://", name: "Kubernetes Secret", watch: "native" },
+  { scheme: "k8s-cm://", name: "Kubernetes ConfigMap", watch: "native" },
+  { scheme: "consul://", name: "Consul KV", watch: "native" },
+  { scheme: "gcp-sm://", name: "GCP Secret Manager", watch: "poll" },
+  { scheme: "azure-kv://", name: "Azure Key Vault", watch: "poll" },
+  { scheme: "doppler://", name: "Doppler", watch: "poll" },
+  { scheme: "op://", name: "1Password", watch: "poll" },
+  { scheme: "sops://", name: "SOPS (age/KMS)", watch: "fsnotify" },
+  { scheme: "postgres://", name: "PostgreSQL", watch: "native" },
+  { scheme: "mysql://", name: "MySQL", watch: "poll" },
+  { scheme: "sqlite://", name: "SQLite", watch: "fsnotify" },
+  { scheme: "mongodb://", name: "MongoDB", watch: "native" },
+  { scheme: "redis://", name: "Redis", watch: "native" },
+  { scheme: "dynamodb://", name: "DynamoDB", watch: "poll" },
+  { scheme: "etcd://", name: "etcd", watch: "native" },
+  { scheme: "firestore://", name: "Firestore", watch: "native" },
+  { scheme: "firebase-rtdb://", name: "Firebase RTDB", watch: "native" },
+  { scheme: "firebase-rc://", name: "Firebase Remote Config", watch: "poll" },
+  { scheme: "s3://", name: "Amazon S3", watch: "poll" },
+  { scheme: "gcs://", name: "Google GCS", watch: "poll" },
+  { scheme: "azblob://", name: "Azure Blob", watch: "poll" },
+  { scheme: "cosmos://", name: "Azure Cosmos DB", watch: "poll" },
+  { scheme: "launchdarkly://", name: "LaunchDarkly", watch: "native" },
+  { scheme: "unleash://", name: "Unleash", watch: "poll" },
+  { scheme: "flagsmith://", name: "Flagsmith", watch: "poll" },
+  { scheme: "configcat://", name: "ConfigCat", watch: "poll" },
+  { scheme: "split://", name: "Split", watch: "poll" },
+  { scheme: "growthbook://", name: "GrowthBook", watch: "poll" },
+  { scheme: "flipt://", name: "Flipt", watch: "poll" },
+  { scheme: "goff://", name: "GO Feature Flag", watch: "poll" },
+];
+---
+
+<Layout>
+  <!-- ░░ HERO ░░ -->
+  <section class="hero">
+    <Seigaiha />
+    <div class="wrap hero__grid">
+      <div class="hero__copy">
+        <span class="eyebrow">守り · config &amp; secrets for go</span>
+        <h1 class="hero__title">Secrets that<br /><em>reconcile</em> themselves.</h1>
+        <p class="hero__lede">
+          <strong>mamori</strong> loads configuration and secrets from anywhere into typed,
+          validated Go structs - then watches every source and reconciles changes at runtime.
+          Rotate a database password upstream; your pool rotates too. <em>No restart.</em>
+        </p>
+        <div class="hero__cta">
+          <a class="btn btn--primary" href={docs}>Read the docs →</a>
+          <a class="btn btn--ghost" href={repo} target="_blank" rel="noopener">GitHub ↗</a>
+        </div>
+        <div class="hero__install">
+          <code>go get github.com/xavidop/mamori</code>
+        </div>
+      </div>
+      <div class="hero__demo">
+        <ReconcileDemo />
+      </div>
+    </div>
+  </section>
+
+  <!-- ░░ CONCEPTS ░░ -->
+  <section class="section" id="concepts">
+    <div class="wrap">
+      <div class="section__head">
+        <span class="eyebrow">principles</span>
+        <h2>Four ideas, composed.</h2>
+        <p>Each does one thing, through a well-defined interface, testable on its own.</p>
+      </div>
+      <div class="features">
+        {
+          features.map((f) => (
+            <article class="card feature">
+              <span class="feature__k">{f.k}</span>
+              <h3>{f.t}</h3>
+              <p>{f.d}</p>
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- ░░ QUICKSTART ░░ -->
+  <section class="section" id="quickstart">
+    <div class="wrap qs">
+      <div class="section__head">
+        <span class="eyebrow">quickstart</span>
+        <h2>Declare it. Watch it.</h2>
+        <p>
+          Tag a struct with where each value lives. mamori resolves, validates, and - with
+          <code>Watch</code> - keeps it reconciled, handing you a diff-aware callback.
+        </p>
+      </div>
+      <div class="qs__grid">
+        <pre class="code"><code><span class="c">// One struct, many sources.</span>
+<span class="k">type</span> <span class="t">Config</span> <span class="k">struct</span> {'{'}
+  DBPassword <span class="t">secret.String</span> <span class="s">`source:"aws-sm://prod/db#password"`</span>
+  LogLevel   <span class="t">string</span>        <span class="s">`source:"env:LOG_LEVEL" default:"info"`</span>
+  Workers    <span class="t">int</span>           <span class="s">`source:"env:WORKERS" validate:"gte=1,lte=256"`</span>
+  TLSCert    []<span class="t">byte</span>        <span class="s">`source:"file:///etc/tls/tls.crt"`</span>
+{'}'}</code></pre>
+        <pre class="code"><code><span class="c">// Watch: reconcile at runtime, react without restarting.</span>
+w, _ := <span class="f">mamori.Watch</span>[<span class="t">Config</span>](ctx,
+  <span class="f">mamori.OnChange</span>(<span class="k">func</span>(ev <span class="t">mamori.Change</span>[<span class="t">Config</span>]) {'{'}
+    <span class="k">if</span> ev.<span class="f">Changed</span>(<span class="s">"DBPassword"</span>) {'{'}
+      pool.<span class="f">Rotate</span>(ev.New.DBPassword.<span class="f">Reveal</span>())
+    {'}'}
+  {'}'}),
+)
+<span class="k">defer</span> w.<span class="f">Close</span>()
+
+cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the last valid config</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ░░ PROVIDERS ░░ -->
+  <section class="section" id="providers">
+    <div class="wrap">
+      <div class="section__head">
+        <span class="eyebrow">provider ecosystem</span>
+        <h2>Read from where your secrets already live.</h2>
+        <p>
+          Providers register with the <code>database/sql</code> pattern. Core has zero
+          cloud-SDK dependencies - each provider is its own module. All pass the
+          <code>providertest</code> conformance kit.
+        </p>
+      </div>
+      <div class="providers">
+        {
+          providers.map((p) => (
+            <article class="card provider">
+              <div class="provider__top">
+                <code class="provider__scheme">{p.scheme}</code>
+                {p.built && <span class="badge">built-in</span>}
+              </div>
+              <h3 class="provider__name">{p.name}</h3>
+              <span class:list={["badge", p.watch === "native" ? "badge--native" : "badge--ok"]}>
+                {p.watch === "native" ? "native watch" : p.watch}
+              </span>
+            </article>
+          ))
+        }
+        <a class="card provider provider--cta" href={`${base}docs/writing-a-provider`}>
+          <div class="provider__top"><code class="provider__scheme">yours://</code></div>
+          <h3 class="provider__name">Write your own</h3>
+          <span class="badge">Provider SPI →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ░░ MIDDLEWARE ░░ -->
+  <section class="section" id="middleware">
+    <div class="wrap mw">
+      <div class="mw__copy">
+        <span class="eyebrow">middleware</span>
+        <h2>One interface, so it all composes.</h2>
+        <p>
+          Because every provider is a <code>Provider</code>, decorators nest freely. Cache to
+          cut API cost, fail over to a replica, rate-limit a twitchy backend, audit every
+          resolve, or rewrite refs per tenant.
+        </p>
+        <ul class="mw__list">
+          <li><b>Cache</b> - memoize resolves for a TTL</li>
+          <li><b>Failover</b> - primary, then replicas</li>
+          <li><b>RateLimit</b> - protect rate-limited backends</li>
+          <li><b>Audit</b> - log every access, never the payload</li>
+          <li><b>Prefix</b> - multi-tenant namespace rewriting</li>
+        </ul>
+      </div>
+      <pre class="code mw__code"><code><span class="f">mamori.WithProvider</span>(
+  <span class="f">middleware.Cache</span>(5*time.Minute,
+    <span class="f">middleware.Audit</span>(logger,
+      <span class="f">middleware.Failover</span>(
+        primarySM,
+        replicaSM,
+      ),
+    ),
+  ),
+)</code></pre>
+    </div>
+  </section>
+
+  <!-- ░░ SECURITY ░░ -->
+  <section class="section" id="security">
+    <div class="wrap">
+      <div class="section__head">
+        <span class="eyebrow">security</span>
+        <h2>Secret-safe by construction.</h2>
+      </div>
+      <div class="sec">
+        <article class="card"><h3>Redacted everywhere</h3><p><code>secret.String</code> and <code>secret.Bytes</code> render as <code>[REDACTED]</code> in <code>String()</code>, <code>fmt</code>, JSON, and <code>slog</code>. Only <code>Reveal()</code> exposes the value - and it's greppable in review.</p></article>
+        <article class="card"><h3>A vet analyzer</h3><p><code>reconcilevet</code> flags any secret-bearing ref assigned to a plain <code>string</code> or <code>[]byte</code>, so a leak can't slip past code review.</p></article>
+        <article class="card"><h3>No injection chains</h3><p>The <code>exec:</code> provider is off by default. Refs are never interpolated from other resolved values - one secret can't build another's command.</p></article>
+        <article class="card"><h3>Honest about limits</h3><p><code>Zero()</code> is best-effort and documented as such - no false promises about Go's GC. No payloads are ever logged; the conformance kit asserts it.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ░░ CLOSING ░░ -->
+  <section class="section closing">
+    <div class="wrap closing__inner">
+      <Omamori size={64} glow={true} />
+      <h2>Give your config a guardian.</h2>
+      <p>Typed. Watched. Reconciled. Runs in a Lambda, a systemd unit, or a Pod.</p>
+      <div class="hero__cta">
+        <a class="btn btn--primary" href={docs}>Read the docs →</a>
+        <a class="btn btn--ghost" href={repo} target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  /* HERO */
+  .hero {
+    position: relative;
+    padding-block: clamp(3rem, 2rem + 6vw, 7rem) clamp(4rem, 3rem + 6vw, 8rem);
+    overflow: hidden;
+    border-bottom: 1px solid var(--line);
+  }
+  .hero__grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 3rem;
+    align-items: center;
+  }
+  .hero__title {
+    font-size: var(--step-5);
+    margin: 1.1rem 0 0;
+  }
+  .hero__title em {
+    font-style: italic;
+    color: var(--shu);
+  }
+  .hero__lede {
+    color: var(--mist);
+    font-size: var(--step-1);
+    max-width: 42ch;
+    margin-top: 1.4rem;
+  }
+  .hero__lede strong {
+    color: var(--kinari);
+  }
+  .hero__lede em {
+    font-style: normal;
+    color: var(--kin);
+  }
+  .hero__cta {
+    display: flex;
+    gap: 0.8rem;
+    margin-top: 1.8rem;
+    flex-wrap: wrap;
+  }
+  .hero__install {
+    margin-top: 1.6rem;
+    font-family: var(--font-mono);
+    font-size: 1.05rem;
+    color: var(--mist);
+  }
+  .hero__install code {
+    background: var(--sumi);
+    border: 1px solid var(--line);
+    padding: 0.85rem 1.2rem;
+    border-radius: 12px;
+    display: inline-block;
+  }
+  .hero__install code::before {
+    content: "$ ";
+    color: var(--shu);
+  }
+  @media (max-width: 880px) {
+    .hero__grid {
+      grid-template-columns: 1fr;
+    }
+    .hero__demo {
+      order: -1;
+    }
+  }
+
+  /* FEATURES */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1.1rem;
+  }
+  .feature__k {
+    font-family: var(--font-mono);
+    color: var(--shu);
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+  }
+  .feature h3 {
+    font-size: var(--step-1);
+    margin: 0.6rem 0 0.5rem;
+  }
+  .feature p {
+    color: var(--mist);
+    font-size: 0.95rem;
+    margin: 0;
+  }
+
+  /* QUICKSTART */
+  .qs__grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.1rem;
+  }
+  .qs__grid pre {
+    font-size: 0.95rem;
+  }
+
+  /* PROVIDERS */
+  .providers {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+  }
+  .provider {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 1.2rem;
+  }
+  .provider__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .provider__scheme {
+    font-family: var(--font-mono);
+    color: var(--shu-hi);
+    font-size: 0.92rem;
+  }
+  .provider__name {
+    font-family: var(--font-body);
+    font-weight: 500;
+    font-size: 0.98rem;
+    color: var(--kinari);
+    margin: 0;
+    flex: 1;
+  }
+  .provider--cta {
+    border-style: dashed;
+    border-color: var(--line-strong);
+  }
+  .provider--cta:hover {
+    border-color: var(--shu);
+  }
+  .provider--cta .provider__scheme {
+    color: var(--mist);
+  }
+
+  /* MIDDLEWARE */
+  .mw {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2.5rem;
+    align-items: center;
+  }
+  .mw__copy p {
+    color: var(--mist);
+  }
+  .mw__list {
+    list-style: none;
+    padding: 0;
+    margin: 1.2rem 0 0;
+    display: grid;
+    gap: 0.6rem;
+    font-size: 0.95rem;
+    color: var(--mist);
+  }
+  .mw__list li {
+    padding-left: 1.2rem;
+    position: relative;
+  }
+  .mw__list li::before {
+    content: "▸";
+    color: var(--shu);
+    position: absolute;
+    left: 0;
+  }
+  .mw__list b {
+    color: var(--kinari);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+  .mw__code {
+    font-size: 0.92rem;
+  }
+  @media (max-width: 860px) {
+    .mw {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* SECURITY */
+  .sec {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.1rem;
+  }
+  .sec h3 {
+    font-size: var(--step-1);
+    margin-bottom: 0.5rem;
+    color: var(--kin);
+  }
+  .sec p {
+    color: var(--mist);
+    font-size: 0.92rem;
+    margin: 0;
+  }
+
+  /* CLOSING */
+  .closing {
+    text-align: center;
+  }
+  .closing__inner {
+    display: grid;
+    justify-items: center;
+    gap: 1rem;
+  }
+  .closing h2 {
+    font-size: var(--step-3);
+    margin-top: 0.5rem;
+  }
+  .closing p {
+    color: var(--mist);
+    max-width: 40ch;
+    margin: 0;
+  }
+  .closing .hero__cta {
+    justify-content: center;
+  }
+</style>

@@ -1,0 +1,218 @@
+---
+import "@fontsource-variable/bricolage-grotesque";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
+import "../styles/global.css";
+import Omamori from "../components/Omamori.astro";
+import CookieConsent from "../components/CookieConsent.astro";
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+const {
+  title = "mamori - typed, watchable config & secrets for Go",
+  description = "mamori loads config and secrets from anywhere into typed, validated Go structs and keeps them reconciled at runtime - without a restart.",
+} = Astro.props;
+
+const base = import.meta.env.BASE_URL;
+const repo = "https://github.com/xavidop/mamori";
+// Landing-page section anchors are absolute so they work from any page
+// (including /docs/*), not just the home page.
+const nav = [
+  { href: `${base}#concepts`, label: "Concepts" },
+  { href: `${base}#providers`, label: "Providers" },
+  { href: `${base}#security`, label: "Security" },
+  { href: `${base}docs`, label: "Docs" },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#0d1230" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap site-header__inner">
+        <a class="brand" href={base} aria-label="mamori home">
+          <Omamori size={26} />
+          <span class="brand__word">mamori</span>
+          <span class="brand__kana">守り</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          {nav.map((n) => <a href={n.href}>{n.label}</a>)}
+          <a class="site-nav__gh" href={repo} target="_blank" rel="noopener" aria-label="mamori on GitHub">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+            </svg>
+            <span>GitHub</span>
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <slot />
+    </main>
+
+    <CookieConsent />
+
+    <footer class="site-footer">
+      <div class="wrap site-footer__inner">
+        <div class="site-footer__brand">
+          <Omamori size={30} />
+          <div>
+            <strong>mamori</strong>
+            <p>Typed, watchable config &amp; secrets for Go.</p>
+          </div>
+        </div>
+        <div class="site-footer__links">
+          <a href="https://pkg.go.dev/github.com/xavidop/mamori" target="_blank" rel="noopener">API reference</a>
+          <a href={`${repo}/blob/main/docs/PROVIDER_SPI.md`} target="_blank" rel="noopener">Write a provider</a>
+          <a href={repo} target="_blank" rel="noopener">GitHub</a>
+          <a href={`${repo}/blob/main/LICENSE`} target="_blank" rel="noopener">MIT License</a>
+          <a href="#" data-cookie-prefs>Cookie preferences</a>
+        </div>
+      </div>
+      <div class="wrap site-footer__base">
+        <span>守り · mamori · protection</span>
+        <span>© 2026 Xavier Portilla Edo</span>
+      </div>
+    </footer>
+
+    <style>
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        backdrop-filter: blur(12px);
+        background: rgba(247, 248, 243, 0.8);
+        border-bottom: 1px solid var(--line);
+      }
+      .site-header__inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 66px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+      }
+      .brand__word {
+        font-family: var(--font-display);
+        font-size: 1.3rem;
+        font-weight: 600;
+      }
+      .brand__kana {
+        font-family: var(--font-display);
+        color: var(--kin);
+        font-size: 0.95rem;
+        opacity: 0.8;
+      }
+      .site-nav {
+        display: flex;
+        align-items: center;
+        gap: 1.6rem;
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+      }
+      .site-nav a {
+        color: var(--mist);
+        transition: color 0.2s var(--ease);
+      }
+      .site-nav a:hover {
+        color: var(--kinari);
+      }
+      .site-nav__gh {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: var(--green-deep) !important;
+        border: 1px solid rgba(47, 158, 104, 0.35);
+        background: var(--green-soft);
+        padding: 0.4rem 0.8rem;
+        border-radius: 999px;
+        transition:
+          border-color 0.2s var(--ease),
+          background 0.2s var(--ease);
+      }
+      .site-nav__gh svg {
+        color: var(--green);
+      }
+      .site-nav__gh:hover {
+        border-color: var(--green);
+        background: rgba(47, 158, 104, 0.18);
+        color: var(--green-deep) !important;
+      }
+      @media (max-width: 720px) {
+        .site-nav a:not(.site-nav__gh) {
+          display: none;
+        }
+      }
+
+      .site-footer {
+        border-top: 1px solid var(--line);
+        padding-block: 3rem 2rem;
+        margin-top: 4rem;
+        background: linear-gradient(180deg, transparent, var(--bg-3));
+      }
+      .site-footer__inner {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2rem;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+      .site-footer__brand {
+        display: flex;
+        gap: 0.9rem;
+        align-items: center;
+        max-width: 320px;
+      }
+      .site-footer__brand strong {
+        font-family: var(--font-display);
+        font-size: 1.2rem;
+      }
+      .site-footer__brand p {
+        color: var(--mist);
+        margin: 0.2rem 0 0;
+        font-size: 0.9rem;
+      }
+      .site-footer__links {
+        display: grid;
+        gap: 0.7rem;
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+      }
+      .site-footer__links a {
+        color: var(--mist);
+      }
+      .site-footer__links a:hover {
+        color: var(--shu);
+      }
+      .site-footer__base {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 2.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--line);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: var(--mist-dim);
+      }
+    </style>
+  </body>
+</html>

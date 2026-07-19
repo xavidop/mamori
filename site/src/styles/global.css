@@ -1,0 +1,279 @@
+/* mamori - light, soft, green. Calm and airy; the green is the only loud thing,
+   used with restraint. Token names are kept stable across the codebase; values
+   below define the light theme. */
+
+:root {
+  /* Surfaces */
+  --bg: #f7f8f3; /* soft warm off-white */
+  --bg-2: #ffffff; /* cards / raised */
+  --bg-3: #eef5ee; /* mint tint (hover / highlight) */
+  --code-bg: #f3f5ec; /* code panel */
+
+  /* Accents */
+  --green: #2f9e68; /* primary */
+  --green-hi: #38b579;
+  --green-deep: #227a4f;
+  --green-soft: rgba(47, 158, 104, 0.12);
+  --clay: #c0894f; /* warm secondary, used sparingly (omamori cord) */
+  --clay-soft: rgba(192, 137, 79, 0.14);
+  --ok: #3f9d6a; /* success / validated */
+
+  /* Text & lines */
+  --ink: #1b2019; /* primary text (near-black green) */
+  --muted: #5c6357; /* secondary text */
+  --muted-2: #949a8b; /* tertiary / captions */
+  --line: rgba(27, 32, 25, 0.1);
+  --line-strong: rgba(27, 32, 25, 0.17);
+
+  /* Aliases kept for components authored against the earlier palette */
+  --kon: var(--bg);
+  --kon-2: var(--bg-2);
+  --kon-3: var(--bg-3);
+  --sumi: var(--code-bg);
+  --shu: var(--green);
+  --shu-hi: var(--green-hi);
+  --shu-soft: var(--green-soft);
+  --kin: var(--clay);
+  --kin-soft: var(--clay-soft);
+  --kinari: var(--ink);
+  --mist: var(--muted);
+  --mist-dim: var(--muted-2);
+  --matcha: var(--ok);
+  --ai: #9ccdb0;
+
+  --font-display: "Bricolage Grotesque Variable", "Inter Variable", system-ui, sans-serif;
+  --font-body: "Inter Variable", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", monospace;
+
+  --step--1: clamp(0.8rem, 0.76rem + 0.2vw, 0.9rem);
+  --step-0: clamp(1rem, 0.96rem + 0.22vw, 1.1rem);
+  --step-1: clamp(1.18rem, 1.08rem + 0.5vw, 1.45rem);
+  --step-2: clamp(1.45rem, 1.25rem + 1vw, 2rem);
+  --step-3: clamp(1.9rem, 1.55rem + 1.8vw, 3rem);
+  --step-4: clamp(2.4rem, 1.8rem + 3.2vw, 4.4rem);
+  --step-5: clamp(3rem, 2.1rem + 5vw, 6rem);
+
+  --maxw: 1120px;
+  --radius: 16px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 84px;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(900px 520px at 85% -8%, rgba(47, 158, 104, 0.1), transparent 60%),
+    radial-gradient(720px 480px at 2% 4%, rgba(192, 137, 79, 0.08), transparent 55%),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+  margin: 0;
+  color: var(--ink);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.wrap {
+  width: min(100% - 2.5rem, var(--maxw));
+  margin-inline: auto;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--green-deep);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.eyebrow::before {
+  content: "";
+  width: 24px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--green);
+}
+
+.section {
+  padding-block: clamp(3.5rem, 2.5rem + 5vw, 7rem);
+  position: relative;
+}
+.section__head {
+  max-width: 48ch;
+  margin-bottom: 2.6rem;
+}
+.section__head h2 {
+  font-size: var(--step-3);
+  margin-top: 0.7rem;
+}
+.section__head p {
+  color: var(--muted);
+  margin-top: 0.8rem;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 0.78rem 1.35rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition:
+    transform 0.22s var(--ease),
+    background 0.22s var(--ease),
+    border-color 0.22s var(--ease),
+    box-shadow 0.22s var(--ease);
+  cursor: pointer;
+}
+.btn--primary {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 10px 26px -12px rgba(47, 158, 104, 0.7);
+}
+.btn--primary:hover {
+  transform: translateY(-2px);
+  background: var(--green-hi);
+  box-shadow: 0 14px 32px -12px rgba(47, 158, 104, 0.8);
+}
+.btn--ghost {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--bg-2);
+}
+.btn--ghost:hover {
+  border-color: var(--green);
+  color: var(--green-deep);
+  transform: translateY(-2px);
+}
+
+/* Cards */
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  box-shadow: 0 1px 2px rgba(27, 32, 25, 0.04);
+  transition:
+    border-color 0.3s var(--ease),
+    transform 0.3s var(--ease),
+    box-shadow 0.3s var(--ease);
+}
+.card:hover {
+  border-color: var(--green);
+  transform: translateY(-3px);
+  box-shadow: 0 16px 40px -20px rgba(47, 158, 104, 0.35);
+}
+
+/* Code blocks (light theme) */
+pre.code {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.35rem;
+  overflow-x: auto;
+  line-height: 1.7;
+  margin: 0;
+  color: #33382e;
+}
+pre.code .k {
+  color: #c1502b;
+} /* keyword */
+pre.code .s {
+  color: var(--green-deep);
+} /* string */
+pre.code .c {
+  color: var(--muted-2);
+  font-style: italic;
+} /* comment */
+pre.code .t {
+  color: #2b6fa8;
+} /* type */
+pre.code .f {
+  color: #7a5cc0;
+} /* function */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  background: var(--bg-2);
+}
+.badge--ok {
+  color: var(--green-deep);
+  border-color: rgba(47, 158, 104, 0.35);
+  background: var(--green-soft);
+}
+.badge--native {
+  color: var(--clay);
+  border-color: rgba(192, 137, 79, 0.4);
+  background: var(--clay-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
