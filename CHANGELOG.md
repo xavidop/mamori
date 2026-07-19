@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.1.3](https://github.com/xavidop/mamori/compare/v1.1.2...v1.1.3) (2026-07-19)
+
+
+### Bug Fixes
+
+* go mod ([4c6e0a6](https://github.com/xavidop/mamori/commit/4c6e0a617ec151da322198f14206000990e72cec))
+
 ## [1.1.2](https://github.com/xavidop/mamori/compare/v1.1.1...v1.1.2) (2026-07-19)
 
 
