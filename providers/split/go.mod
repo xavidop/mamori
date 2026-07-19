@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/split
 
-go 1.26
+go 1.26.5
 
 require (
 	github.com/splitio/go-toolkit/v5 v5.4.1
@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )

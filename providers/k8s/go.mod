@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/k8s
 
-go 1.26.0
+go 1.26.5
 
 require (
 	github.com/xavidop/mamori v0.1.0

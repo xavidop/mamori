@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/vault
 
-go 1.26
+go 1.26.5
 
 require (
 	github.com/hashicorp/vault/api v1.23.0

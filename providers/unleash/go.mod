@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/unleash
 
-go 1.26
+go 1.26.5
 
 require (
 	github.com/Unleash/unleash-client-go/v4 v4.5.0
