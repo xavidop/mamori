@@ -5,7 +5,37 @@ title: Write a provider
 
 # Write a provider
 
-A provider is a small, self-contained module. The full contract lives in [`docs/PROVIDER_SPI.md`](https://github.com/xavidop/mamori/blob/main/docs/PROVIDER_SPI.md); here are the essentials.
+A provider is a small, self-contained Go module that resolves one URL scheme. This page is the complete contract: implement the interface, follow the rules, and pass the conformance kit.
+
+## Module layout
+
+Each provider is its **own module** so a backend SDK never leaks into the core or into other providers. Create it under `providers/<name>`:
+
+```text
+providers/<name>/
+  go.mod          module github.com/xavidop/mamori/providers/<name>
+  <name>.go       the provider
+  <name>_test.go  unit tests + providertest.Run against a fake
+  README.md       scheme, ref grammar, auth, what is verified
+```
+
+The `go.mod` requires the core module and, during local development in the monorepo, points at it with a replace directive:
+
+```text
+module github.com/xavidop/mamori/providers/<name>
+
+go 1.26
+
+require github.com/xavidop/mamori v0.1.0
+
+replace github.com/xavidop/mamori => ../..
+```
+
+Consumers install it on its own, so your SDK dependency is opt-in:
+
+```bash
+go get github.com/xavidop/mamori/providers/<name>
+```
 
 ## The interface
 
@@ -89,3 +119,26 @@ func TestConformance(t *testing.T) {
 ```
 
 Inject a client interface so the kit (and your unit tests) run against an in-memory fake, with live-backend tests behind a `//go:build integration` tag. A provider that passes the kit earns a badge in the registry.
+
+## Build and test
+
+Each module is built and tested independently, with the workspace disabled (this is exactly what CI does per module):
+
+```bash
+cd providers/<name>
+GOWORK=off go mod tidy
+GOWORK=off go build ./...
+GOWORK=off go vet ./...
+GOWORK=off go test ./...
+```
+
+Or, from the repo root, `make test` / `make lint` run every module for you.
+
+## Acceptance checklist
+
+- [ ] `Scheme()` returns your scheme; `Resolve` returns `mamori.ErrNotFound` (via `errors.Is`) for missing values.
+- [ ] `Value.Version` is set and changes when the value changes; secret-bearing values set `Sensitive: true`.
+- [ ] `#key` uses `mamori.SelectKey`; the payload is never logged.
+- [ ] `Watch` is implemented only for native-push backends, closes on `ctx` cancel, and leaks no goroutines.
+- [ ] A client interface is injected so `providertest.Run` passes against an in-memory fake; live tests are behind `//go:build integration`.
+- [ ] `go build`, `go vet`, and `go test` are clean with `GOWORK=off`; the README documents scheme, ref grammar, and auth.

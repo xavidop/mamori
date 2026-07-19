@@ -38,7 +38,7 @@ Requires **Go 1.26+**.
 
 ## Writing a provider
 
-Read [docs/PROVIDER_SPI.md](docs/PROVIDER_SPI.md) - it is the complete contract. In short:
+Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) - it is the complete contract. In short:
 
 1. Create `providers/<name>/` as its own module with `replace github.com/xavidop/mamori => ../..`.
 2. Implement `mamori.Provider` (`Scheme()` + `Resolve`). Add `WatchableProvider` **only** if the backend has native change notification; otherwise mamori polls. Add `BatchProvider` if the backend can resolve many refs in one call.

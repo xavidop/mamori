@@ -138,7 +138,7 @@ mamori.WithProvider(
 
 - 📖 **Docs site:** https://mamorigo.dev
 - 📦 **API reference:** https://pkg.go.dev/github.com/xavidop/mamori
-- 🧩 **Write a provider:** [docs/PROVIDER_SPI.md](docs/PROVIDER_SPI.md)
+- 🧩 **Write a provider:** [mamorigo.dev/docs/writing-a-provider](https://mamorigo.dev/docs/writing-a-provider)
 - 🏃 **Runnable example:** [examples/basic](examples/basic)
 
 ## Project layout
@@ -147,7 +147,7 @@ This is a multi-module monorepo. The core (`github.com/xavidop/mamori`) depends 
 
 ## Contributing
 
-Contributions welcome - new providers especially. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [provider author brief](docs/PROVIDER_SPI.md). A provider that passes `providertest` and the conformance kit gets listed here.
+Contributions welcome - new providers especially. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider). A provider that passes `providertest` and the conformance kit gets listed here.
 
 ## License
 

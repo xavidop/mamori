@@ -36,4 +36,4 @@ body:
     attributes:
       label: Are you volunteering to build it?
       options:
-        - label: I'd like to implement this provider (I'll follow docs/PROVIDER_SPI.md and pass providertest).
+        - label: I'd like to implement this provider (I'll follow the Write a provider guide at mamorigo.dev/docs/writing-a-provider and pass providertest).
