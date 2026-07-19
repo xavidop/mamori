@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/sqlite
 
-go 1.26.5
+go 1.26.0
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1

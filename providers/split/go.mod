@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/split
 
-go 1.26.5
+go 1.26.0
 
 require (
 	github.com/splitio/go-toolkit/v5 v5.4.1

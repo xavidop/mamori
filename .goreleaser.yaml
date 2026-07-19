@@ -8,11 +8,10 @@ version: 2
 
 project_name: mamori
 
-before:
-  hooks:
-    # Non-mutating (won't dirty the tree and trip the clean-git check); the
-    # workspace is disabled so this resolves the module's own go.mod.
-    - GOWORK=off go -C tools/reconcilevet mod download
+# No before-hooks: GoReleaser's build step runs `go build` in tools/reconcilevet
+# with GOWORK=off (see builds[].env below), which resolves and downloads that
+# module's own deps. A `go mod download` hook is both redundant and awkward here
+# (hooks are exec'd without a shell, so an env-var prefix is not honored).
 
 builds:
   - id: reconcilevet

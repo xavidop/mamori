@@ -130,6 +130,7 @@ github.com/aws/aws-sdk-go-v2/service/kinesis v1.43.7/go.mod h1:A7b/tv2nIcdfLY6Ef
 github.com/aws/aws-sdk-go-v2/service/kinesis v1.44.4/go.mod h1:aFYRKIJ6e+fiPVotbsMreEWD10wJUF68crYlSjoGz+E=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27/go.mod h1:8S6ExnLprS0oIeA8ZlHkJUJ0BMpKqnRPws/S0jegTqQ=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.44.2/go.mod h1:JISE0m3JPVhirZEVIAUyK4C62n87tU4BZmUa9Ozc2to=
+github.com/aws/smithy-go v1.27.3/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
 github.com/awslabs/aws-lambda-go-api-proxy v0.16.2/go.mod h1:vxxjwBHe/KbgFeNlAP/Tvp4SsVRL3WQamcWRxqVh0z0=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/bgentry/speakeasy v0.1.0/go.mod h1:+zsyZBPWlz7T6j88CTgSN5bM796AkVf0kBD4zp0CCIs=

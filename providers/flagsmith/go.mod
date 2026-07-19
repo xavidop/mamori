@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/flagsmith
 
-go 1.26.5
+go 1.26.0
 
 require (
 	github.com/Flagsmith/flagsmith-go-client/v4 v4.4.0

@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/launchdarkly
 
-go 1.26.5
+go 1.26.0
 
 require (
 	github.com/launchdarkly/go-sdk-common/v3 v3.5.0
