@@ -38,7 +38,7 @@ jobs:
       - name: Build
         working-directory: site
         # BASE_PATH lets Astro emit correct asset URLs for the project site
-        # https://xavidop.github.io/mamori/
+        # https://mamorigo.dev/
         # PUBLIC_GA_ID (optional) enables Google Analytics, loaded only after the
         # visitor accepts the cookie banner. Set it as a repository variable named
         # GA_ID (Settings -> Secrets and variables -> Actions -> Variables).
