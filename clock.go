@@ -64,11 +64,11 @@ func SystemClock() Clock { return systemClock{} }
 // FakeClock is a manually-driven Clock for deterministic tests. Advance moves
 // time forward, firing any timers/tickers whose deadline is reached.
 type FakeClock struct {
-	mu       sync.Mutex
-	now      time.Time
-	waiters  []*waiter
-	tickers  []*fakeTicker
-	nextID   int
+	mu      sync.Mutex
+	now     time.Time
+	waiters []*waiter
+	tickers []*fakeTicker
+	nextID  int
 }
 
 type waiter struct {

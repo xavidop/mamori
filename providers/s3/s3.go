@@ -188,7 +188,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	if err != nil {
 		return mamori.Value{}, mapError(ref, err)
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 	data, err := io.ReadAll(out.Body)
 	if err != nil {
 		return mamori.Value{}, fmt.Errorf("s3: read object %q: %w", ref.Path, err)

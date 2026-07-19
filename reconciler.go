@@ -130,8 +130,8 @@ type engine[T any] struct {
 	onChange func(Change[T])
 
 	// updated only by the reconciler goroutine:
-	observed map[string]Value    // latest value seen per path (always advances)
-	applied  map[string]string   // version per path at last successful apply
+	observed map[string]Value  // latest value seen per path (always advances)
+	applied  map[string]string // version per path at last successful apply
 	lastOK   map[string]time.Time
 	lastGood T
 
@@ -317,7 +317,7 @@ func (e *engine[T]) flush(pending map[string]struct{}) {
 		if !ok {
 			continue
 		}
-		if err := setField(dst, spec, v.Bytes); err != nil {
+		if err := setField(dst, spec, v.Bytes, e.o.decodeHooks); err != nil {
 			e.emitErr(&ValidationError{Err: err})
 			return
 		}

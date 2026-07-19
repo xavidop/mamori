@@ -162,7 +162,7 @@ func TestResolveNotFound(t *testing.T) {
 func TestResolveBadRef(t *testing.T) {
 	p := New(WithClient(newFakeVault()))
 	for _, raw := range []string{
-		"azure-kv://onlyvault",  // no secret
+		"azure-kv://onlyvault",   // no secret
 		"azure-kv:///secretonly", // no vault
 	} {
 		if _, err := p.Resolve(context.Background(), mustParse(t, raw)); err == nil {

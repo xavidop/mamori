@@ -84,10 +84,7 @@ func ParseRef(tag string) (Ref, error) {
 	// A hierarchical ref's remainder starts with "//"; strip it. The authority
 	// and path are treated as one opaque provider path (e.g. "prod/db"), except
 	// that a fully-slashed form like file:///etc/x keeps its leading slash.
-	rest := remainder
-	if strings.HasPrefix(rest, "//") {
-		rest = rest[2:]
-	}
+	rest := strings.TrimPrefix(remainder, "//")
 
 	// Split off the query (?opts) first - it is always last in the grammar.
 	if i := strings.IndexByte(rest, '?'); i >= 0 {

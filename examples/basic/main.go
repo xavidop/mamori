@@ -44,7 +44,7 @@ func main() {
 		logger.Error("write token", "err", err)
 		os.Exit(1)
 	}
-	defer os.Remove(tokenPath)
+	defer func() { _ = os.Remove(tokenPath) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -67,7 +67,7 @@ func main() {
 		logger.Error("watch failed", "err", err)
 		os.Exit(1)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	cfg := w.Get()
 	logger.Info("loaded config",

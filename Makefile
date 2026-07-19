@@ -1,11 +1,14 @@
 # mamori - multi-module monorepo Makefile.
 # Each module is built/tested independently with the workspace disabled, matching CI.
 
-# All Go modules in the repo (dirs containing a go.mod, excluding testdata and site).
-MODULES := . \
-	providers/aws providers/gcp providers/azure providers/vault providers/k8s \
-	providers/consul providers/doppler providers/onepassword providers/sops \
-	x/otel tools/reconcilevet
+# All Go modules in the repo, discovered dynamically: every directory with a
+# go.mod, excluding the docs site, node_modules, and analyzer testdata. New
+# provider modules are picked up automatically, so this never needs updating.
+MODULES := $(shell find . -name go.mod \
+	-not -path './site/*' \
+	-not -path './node_modules/*' \
+	-not -path '*/testdata/*' \
+	-exec dirname {} \; | sort)
 
 GO ?= go
 export GOWORK = off

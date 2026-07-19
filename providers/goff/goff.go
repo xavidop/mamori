@@ -222,7 +222,11 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, err
 	}
 
-	evalCtx := ffcontext.NewAnonymousEvaluationContext(p.targetingKey)
+	// Anonymous evaluation context, tagged via the standard "anonymous" attribute
+	// (NewAnonymousEvaluationContext is deprecated).
+	evalCtx := ffcontext.NewEvaluationContextBuilder(p.targetingKey).
+		AddCustom("anonymous", true).
+		Build()
 	res, err := ev.RawVariation(ref.Path, evalCtx, nil)
 	if isNotFound(res, err) {
 		return mamori.Value{}, fmt.Errorf("goff: flag %q: %w", ref.Path, mamori.ErrNotFound)

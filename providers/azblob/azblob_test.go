@@ -212,10 +212,10 @@ func TestNoAccountConfigured(t *testing.T) {
 
 func TestServiceURL(t *testing.T) {
 	cases := map[string]string{
-		"":                                     "",
-		"mystorageacct":                        "https://mystorageacct.blob.core.windows.net",
-		"https://acct.blob.core.windows.net":   "https://acct.blob.core.windows.net",
-		"https://acct.blob.core.windows.net/":  "https://acct.blob.core.windows.net",
+		"":                                    "",
+		"mystorageacct":                       "https://mystorageacct.blob.core.windows.net",
+		"https://acct.blob.core.windows.net":  "https://acct.blob.core.windows.net",
+		"https://acct.blob.core.windows.net/": "https://acct.blob.core.windows.net",
 		"http://127.0.0.1:10000/devstoreaccount1": "http://127.0.0.1:10000/devstoreaccount1",
 	}
 	for in, want := range cases {

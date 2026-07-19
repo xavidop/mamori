@@ -18,8 +18,8 @@ func TestStringRedaction(t *testing.T) {
 	if got := fmt.Sprintf("%v", s); got != Redacted {
 		t.Errorf("%%v = %q, want %q", got, Redacted)
 	}
-	if got := fmt.Sprintf("%s", s); got != Redacted {
-		t.Errorf("%%s = %q, want %q", got, Redacted)
+	if got := fmt.Sprintf("pw=%s", s); got != "pw="+Redacted {
+		t.Errorf("%%s = %q, want %q", got, "pw="+Redacted)
 	}
 	if got := fmt.Sprintf("%#v", s); strings.Contains(got, "hunter2") {
 		t.Errorf("%%#v leaked secret: %q", got)

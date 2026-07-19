@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"time"
+
+	"github.com/go-viper/mapstructure/v2"
 )
 
 // Default option values.
@@ -18,7 +20,7 @@ const (
 type options struct {
 	providers    map[string]Provider // explicit providers, override the registry
 	validator    Validator
-	decodeHooks  []any // reserved for user mapstructure hooks (flatten path)
+	decodeHooks  []mapstructure.DecodeHookFunc // user hooks, applied on the flatten path
 	clock        Clock
 	pollInterval time.Duration
 	jitter       float64
@@ -63,6 +65,14 @@ func WithProvider(p Provider) Option {
 
 // WithValidator overrides the default (go-playground/validator) validator.
 func WithValidator(v Validator) Option { return func(o *options) { o.validator = v } }
+
+// WithDecodeHook adds a mapstructure decode hook applied when decoding a
+// flatten:"json|yaml|env" payload into a nested struct. Hooks run after the
+// built-in secret/duration hook, in the order registered, so you can convert
+// custom field types (a time.Time layout, a net.IP, an enum, ...).
+func WithDecodeHook(h mapstructure.DecodeHookFunc) Option {
+	return func(o *options) { o.decodeHooks = append(o.decodeHooks, h) }
+}
 
 // WithClock overrides the clock, primarily for deterministic tests.
 func WithClock(c Clock) Option { return func(o *options) { o.clock = c } }
@@ -141,7 +151,7 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	if err != nil {
 		return cfg, nil, err
 	}
-	if err := buildInto(reflect.ValueOf(&cfg).Elem(), res); err != nil {
+	if err := buildInto(reflect.ValueOf(&cfg).Elem(), res, o.decodeHooks); err != nil {
 		return cfg, nil, err
 	}
 	if err := o.validator.Validate(cfg); err != nil {
@@ -151,12 +161,12 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 }
 
 // buildInto decodes all resolved values into the struct value dst.
-func buildInto(dst reflect.Value, res []resolved) error {
+func buildInto(dst reflect.Value, res []resolved, hooks []mapstructure.DecodeHookFunc) error {
 	for _, r := range res {
 		if !r.set {
 			continue // optional + not found: leave zero value
 		}
-		if err := setField(dst, r.spec, r.value.Bytes); err != nil {
+		if err := setField(dst, r.spec, r.value.Bytes, hooks); err != nil {
 			return err
 		}
 	}
