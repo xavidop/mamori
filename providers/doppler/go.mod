@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/doppler
 
-go 1.26
+go 1.26.5
 
 require github.com/xavidop/mamori v0.1.0
 

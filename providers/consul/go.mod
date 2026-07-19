@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/consul
 
-go 1.26
+go 1.26.5
 
 require (
 	github.com/hashicorp/consul/api v1.34.4
