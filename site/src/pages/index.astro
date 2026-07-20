@@ -256,7 +256,7 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
   /* HERO */
   .hero {
     position: relative;
-    padding-block: clamp(3rem, 2rem + 6vw, 7rem) clamp(4rem, 3rem + 6vw, 8rem);
+    padding-block: clamp(2rem, 1.5rem + 3vw, 4rem) clamp(2rem, 1.5rem + 2.5vw, 3.5rem);
     overflow: hidden;
     border-bottom: 1px solid var(--line);
   }
@@ -264,7 +264,9 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     position: relative;
     z-index: 1;
     display: grid;
-    grid-template-columns: 1.05fr 0.95fr;
+    /* minmax(0, ...) lets the columns shrink instead of the demo's min-content
+       blowing the track (and the page) wider than the viewport. */
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
     gap: 3rem;
     align-items: center;
   }
@@ -312,12 +314,13 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     content: "$ ";
     color: var(--shu);
   }
-  @media (max-width: 880px) {
+  /* Collapse to one column before the two-column layout gets too cramped for the
+     demo card (its min-content is ~430px). Below this the demo follows the copy:
+     eyebrow, title, lede, CTAs, go get, then the animation. */
+  @media (max-width: 1024px) {
     .hero__grid {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
-    /* On mobile the demo follows the copy: eyebrow, title, lede, CTAs, go get,
-       then the animation. */
     .hero__demo {
       order: 0;
       margin-top: 0.5rem;
