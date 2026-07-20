@@ -31,44 +31,47 @@ const features = [
   },
 ];
 
-const providers = [
-  { scheme: "env:", name: "Environment", watch: "poll", built: true },
-  { scheme: "dotenv://", name: "Dotenv files", watch: "fsnotify", built: true },
-  { scheme: "file://", name: "Files", watch: "fsnotify", built: true },
-  { scheme: "aws-sm://", name: "AWS Secrets Manager", watch: "poll" },
-  { scheme: "aws-ps://", name: "AWS Parameter Store", watch: "poll" },
-  { scheme: "vault://", name: "HashiCorp Vault", watch: "lease-aware" },
-  { scheme: "k8s-secret://", name: "Kubernetes Secret", watch: "native" },
-  { scheme: "k8s-cm://", name: "Kubernetes ConfigMap", watch: "native" },
-  { scheme: "consul://", name: "Consul KV", watch: "native" },
-  { scheme: "gcp-sm://", name: "GCP Secret Manager", watch: "poll" },
-  { scheme: "azure-kv://", name: "Azure Key Vault", watch: "poll" },
-  { scheme: "doppler://", name: "Doppler", watch: "poll" },
-  { scheme: "op://", name: "1Password", watch: "poll" },
-  { scheme: "sops://", name: "SOPS (age/KMS)", watch: "fsnotify" },
-  { scheme: "postgres://", name: "PostgreSQL", watch: "native" },
-  { scheme: "mysql://", name: "MySQL", watch: "poll" },
-  { scheme: "sqlite://", name: "SQLite", watch: "fsnotify" },
-  { scheme: "mongodb://", name: "MongoDB", watch: "native" },
-  { scheme: "redis://", name: "Redis", watch: "native" },
-  { scheme: "dynamodb://", name: "DynamoDB", watch: "poll" },
-  { scheme: "etcd://", name: "etcd", watch: "native" },
-  { scheme: "firestore://", name: "Firestore", watch: "native" },
-  { scheme: "firebase-rtdb://", name: "Firebase RTDB", watch: "native" },
-  { scheme: "firebase-rc://", name: "Firebase Remote Config", watch: "poll" },
-  { scheme: "s3://", name: "Amazon S3", watch: "poll" },
-  { scheme: "gcs://", name: "Google GCS", watch: "poll" },
-  { scheme: "azblob://", name: "Azure Blob", watch: "poll" },
-  { scheme: "cosmos://", name: "Azure Cosmos DB", watch: "poll" },
-  { scheme: "launchdarkly://", name: "LaunchDarkly", watch: "native" },
-  { scheme: "unleash://", name: "Unleash", watch: "poll" },
-  { scheme: "flagsmith://", name: "Flagsmith", watch: "poll" },
-  { scheme: "configcat://", name: "ConfigCat", watch: "poll" },
-  { scheme: "split://", name: "Split", watch: "poll" },
-  { scheme: "growthbook://", name: "GrowthBook", watch: "poll" },
-  { scheme: "flipt://", name: "Flipt", watch: "poll" },
-  { scheme: "goff://", name: "GO Feature Flag", watch: "poll" },
+// Providers are summarized on the landing by category; the full gallery lives in
+// the docs. Each card links to a representative provider page.
+const categories = [
+  {
+    name: "Built-in",
+    count: 4,
+    items: "env · dotenv · file · exec",
+    href: `${base}docs/providers/env`,
+  },
+  {
+    name: "Secret managers",
+    count: 8,
+    items: "AWS · Vault · GCP · Azure · Doppler · 1Password · SOPS",
+    href: `${base}docs/providers/aws`,
+  },
+  {
+    name: "Feature flags",
+    count: 8,
+    items: "LaunchDarkly · Unleash · Flagsmith · ConfigCat · Split · GrowthBook · Flipt · GO Feature Flag",
+    href: `${base}docs/providers/launchdarkly`,
+  },
+  {
+    name: "Databases",
+    count: 7,
+    items: "Postgres · MySQL · SQLite · MongoDB · Redis · DynamoDB · Cosmos",
+    href: `${base}docs/providers/postgres`,
+  },
+  {
+    name: "KV & Kubernetes",
+    count: 4,
+    items: "Consul · etcd · Kubernetes Secret · ConfigMap",
+    href: `${base}docs/providers/kubernetes`,
+  },
+  {
+    name: "Object storage & Firebase",
+    count: 6,
+    items: "S3 · GCS · Azure Blob · Firestore · Firebase RTDB · Remote Config",
+    href: `${base}docs/providers/s3`,
+  },
 ];
+const totalProviders = categories.reduce((n, c) => n + c.count, 0);
 ---
 
 <Layout>
@@ -161,31 +164,28 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
         <span class="eyebrow">provider ecosystem</span>
         <h2>Read from where your secrets already live.</h2>
         <p>
-          Providers register with the <code>database/sql</code> pattern. Core has zero
-          cloud-SDK dependencies - each provider is its own module. All pass the
+          {totalProviders} sources across {categories.length} categories, all behind one
+          interface. Providers register with the <code>database/sql</code> pattern, the core has
+          zero cloud-SDK dependencies, and every provider passes the{" "}
           <code>providertest</code> conformance kit.
         </p>
       </div>
-      <div class="providers">
+      <div class="cats">
         {
-          providers.map((p) => (
-            <article class="card provider">
-              <div class="provider__top">
-                <code class="provider__scheme">{p.scheme}</code>
-                {p.built && <span class="badge">built-in</span>}
+          categories.map((c) => (
+            <a class="card cat" href={c.href}>
+              <div class="cat__top">
+                <h3 class="cat__name">{c.name}</h3>
+                <span class="cat__count">{c.count}</span>
               </div>
-              <h3 class="provider__name">{p.name}</h3>
-              <span class:list={["badge", p.watch === "native" ? "badge--native" : "badge--ok"]}>
-                {p.watch === "native" ? "native watch" : p.watch}
-              </span>
-            </article>
+              <p class="cat__items">{c.items}</p>
+            </a>
           ))
         }
-        <a class="card provider provider--cta" href={`${base}docs/writing-a-provider`}>
-          <div class="provider__top"><code class="provider__scheme">yours://</code></div>
-          <h3 class="provider__name">Write your own</h3>
-          <span class="badge">Provider SPI →</span>
-        </a>
+      </div>
+      <div class="providers__cta">
+        <a class="btn btn--primary" href={`${base}docs/providers`}>Browse all providers →</a>
+        <a class="btn btn--ghost" href={`${base}docs/writing-a-provider`}>Write your own</a>
       </div>
     </div>
   </section>
@@ -356,46 +356,53 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     font-size: 0.95rem;
   }
 
-  /* PROVIDERS */
-  .providers {
+  /* PROVIDERS (category summary) */
+  .cats {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 1rem;
   }
-  .provider {
+  .cat {
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
-    padding: 1.2rem;
+    gap: 0.6rem;
+    padding: 1.3rem 1.4rem;
+    text-decoration: none;
   }
-  .provider__top {
+  .cat__top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
-  .provider__scheme {
-    font-family: var(--font-mono);
-    color: var(--shu-hi);
-    font-size: 0.92rem;
-  }
-  .provider__name {
-    font-family: var(--font-body);
-    font-weight: 500;
-    font-size: 0.98rem;
-    color: var(--kinari);
+  .cat__name {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
     margin: 0;
-    flex: 1;
+    color: var(--ink);
   }
-  .provider--cta {
-    border-style: dashed;
-    border-color: var(--line-strong);
+  .cat__count {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--green-deep);
+    background: var(--green-soft);
+    border: 1px solid rgba(47, 158, 104, 0.3);
+    border-radius: 999px;
+    padding: 0.1rem 0.6rem;
   }
-  .provider--cta:hover {
-    border-color: var(--shu);
+  .cat__items {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--muted);
   }
-  .provider--cta .provider__scheme {
-    color: var(--mist);
+  .providers__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin-top: 2rem;
   }
 
   /* MIDDLEWARE */
