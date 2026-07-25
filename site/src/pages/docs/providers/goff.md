@@ -47,6 +47,18 @@ The variation maps to bytes by type (boolean, string, number, or JSON). A flag t
 
 The evaluation context defaults to a stable targeting key (`mamori`); override it with `WithTargetingKey`.
 
+## Error classification
+
+Beyond the not-found case, other evaluation failures are classified by go-feature-flag's OpenFeature-style `ErrorCode` so `mamori.ErrorKind` can distinguish them:
+
+| ErrorCode | mamori kind |
+|---|---|
+| `PROVIDER_NOT_READY` | `unavailable` |
+| `PARSE_ERROR`, `TYPE_MISMATCH`, `INVALID_CONTEXT`, `TARGETING_KEY_MISSING` | `invalid` |
+| anything else (including `GENERAL`) | `unknown` |
+
+`GENERAL` is go-feature-flag's catch-all for a failure that fits no other code, so mapping it would be a guess; it stays `unknown` along with any unrecognized code. The underlying error stays reachable with `errors.Is`/`errors.As` when RawVariation returned one.
+
 ## Watch
 
 GO Feature Flag reloads its flag definitions from the configured retriever on an interval; mamori polls (`WithPollInterval` + jitter).

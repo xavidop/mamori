@@ -25,11 +25,18 @@ type fakeObject struct {
 type fakeGCS struct {
 	mu      sync.Mutex
 	objects map[string]*fakeObject
+	fails   map[string]error
 	closed  bool
 }
 
 func newFakeGCS() *fakeGCS {
-	return &fakeGCS{objects: map[string]*fakeObject{}}
+	return &fakeGCS{objects: map[string]*fakeObject{}, fails: map[string]error{}}
+}
+
+// key returns the same "bucket/object" form used by put, so fail and clear
+// target the exact entry Seed populated.
+func (f *fakeGCS) key(bucket, object string) string {
+	return bucket + "/" + object
 }
 
 // put writes val to bucket/object, creating it if needed and bumping the
@@ -37,7 +44,7 @@ func newFakeGCS() *fakeGCS {
 func (f *fakeGCS) put(bucket, object, val string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := bucket + "/" + object
+	key := f.key(bucket, object)
 	o, ok := f.objects[key]
 	if !ok {
 		o = &fakeObject{}
@@ -47,13 +54,33 @@ func (f *fakeGCS) put(bucket, object, val string) {
 	o.generation++
 }
 
+// fail makes the next read of bucket/object return err, until
+// clear(bucket, object) is called. It powers the providertest
+// ErrorClassification case.
+func (f *fakeGCS) fail(bucket, object string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[f.key(bucket, object)] = err
+}
+
+// clear cancels a previously injected fail(bucket, object, err).
+func (f *fakeGCS) clear(bucket, object string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, f.key(bucket, object))
+}
+
 func (f *fakeGCS) read(ctx context.Context, bucket, object string) ([]byte, int64, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, "", err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	o, ok := f.objects[bucket+"/"+object]
+	key := f.key(bucket, object)
+	if err, ok := f.fails[key]; ok {
+		return nil, 0, "", err
+	}
+	o, ok := f.objects[key]
 	if !ok {
 		return nil, 0, "", storage.ErrObjectNotExist
 	}
@@ -91,6 +118,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.put(bucket, key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(bucket, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(bucket, key)
 			return nil
 		},
 		// GCS has no cheap native watch; the provider is not watchable and mamori
@@ -221,6 +256,11 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), parse(t, "gcs://bkt/nope"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	// Resolve's not-found branch must double-wrap so the original GCS SDK
+	// sentinel stays reachable too, as the README's error table promises.
+	if !errors.Is(err, storage.ErrObjectNotExist) {
+		t.Fatalf("err = %v, want errors.Is(err, storage.ErrObjectNotExist)", err)
 	}
 }
 

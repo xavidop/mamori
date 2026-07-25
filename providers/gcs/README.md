@@ -67,6 +67,33 @@ entity tag (etag), then to a content hash. Missing objects and absent
 `#json-key` fields both resolve to an error satisfying
 `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| Condition | mamori kind |
+|---|---|
+| `storage.ErrObjectNotExist`, `storage.ErrBucketNotExist`, HTTP 404 | `not_found` |
+| HTTP 403 | `permission_denied` |
+| HTTP 401 | `unauthenticated` |
+| HTTP 429 | `rate_limited` |
+| HTTP 5xx | `unavailable` |
+| HTTP 400 | `invalid` |
+| anything else | `unknown` |
+
+The GCS Go client is REST-based: a missing object surfaces as
+`storage.ErrObjectNotExist`, and every other failure surfaces as a
+`*googleapi.Error` carrying the HTTP status the backend returned. The
+classifier also matches `storage.ErrBucketNotExist`, but this provider's read
+path (`bucket.Object(name).NewReader`) cannot actually produce it: the GCS
+client reports a missing bucket the same way it reports a missing object,
+as `storage.ErrObjectNotExist`. So the `ErrBucketNotExist` case is defensive -
+included in case a future code path calls a bucket-level operation that can
+raise it - not something you will observe through this provider today. Only
+the statuses above are mapped; any other status (and any error that is not a
+`*googleapi.Error` or a not-exist sentinel) reports `unknown` rather than being
+guessed at. The original SDK error stays reachable with `errors.As`.
+
 ### Sensitivity
 
 Resolved values are **not** marked sensitive by default, since GCS objects are

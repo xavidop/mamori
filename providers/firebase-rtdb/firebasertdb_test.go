@@ -22,6 +22,7 @@ type fakeBackend struct {
 	data    map[string]fakeEntry
 	counter int
 	streams map[*fakeStream]struct{}
+	fails   map[string]error
 }
 
 type fakeEntry struct {
@@ -33,6 +34,7 @@ func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		data:    map[string]fakeEntry{},
 		streams: map[*fakeStream]struct{}{},
+		fails:   map[string]error{},
 	}
 }
 
@@ -69,6 +71,23 @@ func (f *fakeBackend) del(path string) {
 	}
 }
 
+// fail makes the next Get for path return err, until clear(path) is called. It
+// keys identically to set (the raw database path), so a path seeded with set
+// and then failed with fail targets the same entry. It powers the
+// providertest ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+func (f *fakeBackend) fail(path string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[path] = err
+}
+
+// clear cancels a previously injected fail(path, err).
+func (f *fakeBackend) clear(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, path)
+}
+
 func etagFor(n int) string { return "etag-" + itoa(n) }
 
 func itoa(n int) string {
@@ -89,6 +108,9 @@ func (f *fakeBackend) Get(ctx context.Context, path string) ([]byte, string, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[path]; ok {
+		return nil, "", err
+	}
 	e, ok := f.data[path]
 	if !ok {
 		return nil, "", nil // absent -> provider maps to ErrNotFound
@@ -171,6 +193,14 @@ func TestConformance(t *testing.T) {
 		Seed: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
 			return nil
 		},
 		EventuallyTimeout: 3 * time.Second,
@@ -302,6 +332,30 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "firebase-rtdb://config/absent"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError proves that a non-not-found backend
+// error survives Resolve's error wrapping intact enough for errors.Is /
+// mamori.ErrorKind to recognize it. This provider has no SDK error taxonomy
+// to classify (no classifyFirebaseRTDB function exists), so unlike providers
+// with a classifier, this test injects a real mamori sentinel
+// (mamori.ErrPermissionDenied) directly through the fake, rather than a
+// backend-shaped error a classifier would map. It survives only because
+// Resolve wraps the backend error with %w, not %v; that is the entire value
+// of wiring Fail here.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeBackend()
+	fake.set("config/service/db", `"s3cr3t"`)
+	fake.fail("config/service/db", mamori.ErrPermissionDenied)
+	p := New(withBackend(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "firebase-rtdb://config/service/db"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; Resolve may not wrap the backend error with %%w", got, mamori.KindPermissionDenied)
 	}
 }
 

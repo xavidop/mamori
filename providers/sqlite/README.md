@@ -79,6 +79,24 @@ type Config struct {
 - A missing row (or a missing `#json-field`) returns an error satisfying
   `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+Beyond the not-found case above, a query failure that carries a SQLite result
+code is classified by `Code()` on `modernc.org/sqlite`'s own `*sqlite.Error`
+type, so `mamori.ErrorKind` can distinguish it:
+
+| SQLite result code | Meaning | mamori kind |
+| --- | --- | --- |
+| `SQLITE_PERM` (3), `SQLITE_READONLY` (8) | permission denied / read-only database | `permission_denied` |
+| `SQLITE_BUSY` (5), `SQLITE_LOCKED` (6), `SQLITE_CANTOPEN` (14) | locked or unreachable database | `unavailable` |
+| `SQLITE_AUTH` (23) | authorizer callback denied the operation | `unauthenticated` |
+| anything else | | `unknown` |
+
+Codes not listed above (and any error carrying no SQLite result code at all)
+report `unknown` rather than being guessed at. The original `*sqlite.Error`
+stays reachable with `errors.As`, so existing code matching on it keeps
+working.
+
 ## Configuration
 
 The **database file path** is provider configuration, not part of the ref, so
@@ -148,6 +166,7 @@ mechanism as mamori's built-in `file://` provider:
 | `providertest.Run` conformance suite | **Verified** - runs against a real temporary SQLite file (`go test ./...`, no cgo, no external service) |
 | Resolve, custom columns, JSON `#field`, not-found, version monotonicity, context cancellation | **Verified** (unit tests) |
 | `WithVersionColumn`, `WithSensitive`, `SQLITE_PATH` fallback | **Verified** (unit tests) |
+| Error classification (`SQLITE_PERM`/`READONLY` -> `permission_denied`, `BUSY`/`LOCKED`/`CANTOPEN` -> `unavailable`, `AUTH` -> `unauthenticated`), wired through `Resolve` via an injectable `queryer` seam | **Verified** (table test over real `*sqlite.Error` values + `providertest` `ErrorClassification` case + a dedicated Resolve-level test) |
 | Identifier allowlist rejects malicious table / column / version-column names | **Verified** (unit test, with a surviving-canary-row assertion) |
 | Native fsnotify watch (baseline + change + cancel/close, no goroutine leak) | **Verified** against a real file |
 | End-to-end against a large / production database | **Needs a live database** - the unit tests already use a real embedded SQLite file, so behavior is exercised end-to-end locally |

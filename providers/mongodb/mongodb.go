@@ -372,13 +372,23 @@ func (b *mongoBackend) collection(name string) *mongo.Collection {
 func (b *mongoBackend) FindDoc(ctx context.Context, coll, keyField, keyValue string) (bson.M, error) {
 	var doc bson.M
 	err := b.collection(coll).FindOne(ctx, docFilter(keyField, keyValue)).Decode(&doc)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, fmt.Errorf("mongodb: document %q not found in collection %q: %w", keyValue, coll, mamori.ErrNotFound)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("mongodb: find in %q: %w", coll, err)
+	if err := findErr(coll, keyValue, err); err != nil {
+		return nil, err
 	}
 	return doc, nil
+}
+
+// findErr maps a FindOne error onto mamori's classification. It is shared by the
+// real mongoBackend and the test fake so both classify through identical code,
+// which is what lets the Resolve-level test exercise the production path.
+func findErr(coll, keyValue string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return fmt.Errorf("mongodb: document %q not found in collection %q: %w", keyValue, coll, mamori.ErrNotFound)
+	}
+	return fmt.Errorf("mongodb: find in %q: %w", coll, classifyMongo(err))
 }
 
 // WatchDoc opens a change stream scoped to the target document, requesting the
@@ -387,9 +397,47 @@ func (b *mongoBackend) WatchDoc(ctx context.Context, coll, keyField, keyValue st
 	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
 	cs, err := b.collection(coll).Watch(ctx, watchPipeline(keyField, keyValue), opts)
 	if err != nil {
-		return nil, fmt.Errorf("mongodb: open change stream on %q: %w", coll, err)
+		return nil, fmt.Errorf("mongodb: open change stream on %q: %w", coll, classifyMongo(err))
 	}
 	return cs, nil
+}
+
+// classifyMongo maps a mongo.CommandError onto a mamori classification
+// sentinel by switching on its numeric server error code. The MongoDB Go
+// driver exposes these codes as plain ints with no named constants (unlike,
+// say, gRPC's codes package), so they are hardcoded here with a comment
+// naming each one from the server's error_codes.yml.
+//
+// This table is deliberately tiny: only AuthenticationFailed (18) and
+// Unauthorized (13) are mapped. Both are unambiguous outcomes of a read - a
+// bad credential or a denied permission - and cannot mean anything else.
+// MongoDB also defines dozens of replica-set and write-path codes
+// (NotWritablePrimary, PrimarySteppedDown, and similar) that might seem to
+// belong under ErrUnavailable, but whether a plain FindOne on a healthy
+// connection can ever actually surface them is not established, and guessing
+// a mapping for a code this provider has never observed would be worse than
+// admitting it does not know. Per the no-guessing rule, every other code -
+// including ones not yet added to this switch - passes through unclassified
+// and reports unknown. A non-CommandError (for example a raw dial failure)
+// also passes through unclassified, since there is no server code to read.
+func classifyMongo(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ce mongo.CommandError
+	if !errors.As(err, &ce) {
+		return err
+	}
+	var sentinel error
+	switch {
+	case ce.HasErrorCode(18): // AuthenticationFailed
+		sentinel = mamori.ErrUnauthenticated
+	case ce.HasErrorCode(13): // Unauthorized
+		sentinel = mamori.ErrPermissionDenied
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // docFilter builds the find filter for the selected document.

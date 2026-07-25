@@ -229,5 +229,8 @@ func TestConformance(t *testing.T) {
 			return nil
 		},
 		SkipWatch: true, // ConfigCat has no native change notification; mamori polls.
+		// settingClient is keys()/value(); value returns a bare any with no error,
+		// so there is nothing to inject and ErrorClassification is exempt.
+		NoResolveErrors: true,
 	})
 }

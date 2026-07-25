@@ -60,6 +60,18 @@ Per the mamori grammar the `#field` fragment comes before the `?opts` query (`mo
 
 `Watch` opens a change stream on the collection filtered to the target document and emits an update on each change. Change streams require the server to be a replica set (or sharded cluster).
 
+## Error classification
+
+Beyond the not-found case, other `FindOne`/change-stream failures are classified by MongoDB server error code so `mamori.ErrorKind` can distinguish them:
+
+| Code | mamori kind |
+|---|---|
+| `18` (AuthenticationFailed) | `unauthenticated` |
+| `13` (Unauthorized) | `permission_denied` |
+| anything else | `unknown` |
+
+This table is deliberately small: only auth and authorization are classified today. MongoDB has dozens of replica-set and write codes (`NotWritablePrimary`, `PrimarySteppedDown`, and similar) whose mapping to `unavailable` is arguable and whose reachability on a read is uncertain, so they are left unmapped rather than guessed at. The original `mongo.CommandError` stays reachable with `errors.As`.
+
 ## Configuration
 
 ```go

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -20,7 +21,8 @@ import (
 type fakeVault struct {
 	mu        sync.Mutex
 	entries   map[string]*fakeEntry
-	renewCall int // number of times Renew was invoked
+	fails     map[string]error // mount/path -> injected error, see fail/clear
+	renewCall int              // number of times Renew was invoked
 }
 
 type fakeEntry struct {
@@ -32,9 +34,11 @@ type fakeEntry struct {
 }
 
 func newFakeVault() *fakeVault {
-	return &fakeVault{entries: map[string]*fakeEntry{}}
+	return &fakeVault{entries: map[string]*fakeEntry{}, fails: map[string]error{}}
 }
 
+// fakeKey returns the same "mount/path" form used by setSecret, so fail and
+// clear target the exact entry Seed populated.
 func fakeKey(mount, path string) string { return mount + "/" + path }
 
 // setSecret writes/overwrites a secret, bumping its version like KV v2.
@@ -64,12 +68,30 @@ func (f *fakeVault) setLease(mount, path, leaseID string, seconds int, renewable
 	e.renewable = renewable
 }
 
+// fail makes the next Get for mount/path return err, until clear(mount, path)
+// is called. It powers the providertest ErrorClassification case.
+func (f *fakeVault) fail(mount, path string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[fakeKey(mount, path)] = err
+}
+
+// clear cancels a previously injected fail(mount, path, err).
+func (f *fakeVault) clear(mount, path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, fakeKey(mount, path))
+}
+
 func (f *fakeVault) Get(ctx context.Context, mount, path string) (*vaultapi.KVSecret, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[fakeKey(mount, path)]; ok {
+		return nil, err
+	}
 	e := f.entries[fakeKey(mount, path)]
 	if e == nil {
 		return nil, fmt.Errorf("%w: at %s/data/%s", vaultapi.ErrSecretNotFound, mount, path)
@@ -119,6 +141,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.setSecret("secret", key, map[string]interface{}{"value": val})
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail("secret", key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear("secret", key)
 			return nil
 		},
 	})
@@ -190,6 +220,28 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "vault://secret/does/not/exist"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyVault through
+// Resolve itself, not just as a direct function call. The conformance
+// ErrorClassification case cannot catch a regression here: it injects a
+// mamori sentinel directly (not a Vault SDK error), so it passes even if the
+// classifyVault call were deleted from Resolve's fallback branch. This test
+// injects a real *vaultapi.ResponseError through fakeVault, the same shape a
+// live Vault would return, so it fails if the wiring is removed.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeVault()
+	fake.setSecret("secret", "myapp/config", map[string]interface{}{"password": "s3cr3t"})
+	fake.fail("secret", "myapp/config", &vaultapi.ResponseError{StatusCode: http.StatusForbidden, Errors: []string{"permission denied"}})
+	p := newWithReader(fake)
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "vault://secret/myapp/config"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyVault may not be wired into Resolve", got, mamori.KindPermissionDenied)
 	}
 }
 
@@ -289,6 +341,10 @@ func TestSplitMountPath(t *testing.T) {
 		if tc.wantErr {
 			if err == nil {
 				t.Errorf("splitMountPath(%q) = (%q,%q,nil), want error", tc.in, m, pth)
+				continue
+			}
+			if got := mamori.ErrorKind(err); got != mamori.KindInvalid {
+				t.Errorf("splitMountPath(%q): ErrorKind = %q, want %q (a malformed ref)", tc.in, got, mamori.KindInvalid)
 			}
 			continue
 		}

@@ -229,7 +229,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 
 	val, found, err := ev.evaluateFeature(ctx, ref.Path)
 	if err != nil {
-		return mamori.Value{}, err
+		return mamori.Value{}, fmt.Errorf("growthbook: evaluating feature %q: %w", ref.Path, err)
 	}
 	if !found {
 		return mamori.Value{}, fmt.Errorf("growthbook: feature %q not found in feature set: %w", ref.Path, mamori.ErrNotFound)

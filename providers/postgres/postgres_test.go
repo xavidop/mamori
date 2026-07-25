@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/providertest"
 )
@@ -27,6 +28,7 @@ import (
 type fakeBackend struct {
 	mu       sync.Mutex
 	rows     map[string]fakeRowData
+	fails    map[string]error // key -> injected error, consulted before rows
 	verSeq   uint64
 	lastSQL  string
 	notifyCh chan struct{} // closed+replaced on each write to wake blocked Waits
@@ -40,6 +42,7 @@ type fakeRowData struct {
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		rows:     map[string]fakeRowData{},
+		fails:    map[string]error{},
 		notifyCh: make(chan struct{}),
 	}
 }
@@ -54,16 +57,36 @@ func (f *fakeBackend) set(key, val string) {
 	f.notifyCh = make(chan struct{})
 }
 
+// fail makes the next QueryRow for key return err from Scan, until clear(key)
+// is called. It keys identically to set (the raw row key), so a key seeded
+// with set and then failed with fail targets the same row. It powers the
+// providertest ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+func (f *fakeBackend) fail(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = err
+}
+
+// clear cancels a previously injected fail(key, err).
+func (f *fakeBackend) clear(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
+}
+
 func (f *fakeBackend) QueryRow(ctx context.Context, sql string, args ...any) row {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastSQL = sql
-	if err := ctx.Err(); err != nil {
-		return errRow{err: err}
-	}
 	var key string
 	if len(args) > 0 {
 		key, _ = args[0].(string)
+	}
+	if err, ok := f.fails[key]; ok {
+		return errRow{err: err}
+	}
+	if err := ctx.Err(); err != nil {
+		return errRow{err: err}
 	}
 	data, ok := f.rows[key]
 	if !ok {
@@ -155,6 +178,14 @@ func TestConformance(t *testing.T) {
 			fake.set(key, val)
 			return nil
 		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
+			return nil
+		},
 		EventuallyTimeout: 3 * time.Second,
 	})
 }
@@ -232,6 +263,31 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "postgres://app_config/absent"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyPostgres through
+// Resolve itself, not just as a direct function call. Neither existing kind
+// of test catches a regression here: TestClassifyPostgres calls
+// classifyPostgres directly, so it passes whether or not mapScanErr actually
+// calls it, and the providertest ErrorClassification case injects a mamori
+// sentinel (not a *pgconn.PgError), which classifyPostgres returns unchanged
+// either way - it would pass even with mapScanErr's classifyPostgres call
+// deleted. This test injects a real pgconn.PgError through fakeBackend.fail,
+// the same shape a live PostgreSQL server would return, so it fails if
+// mapScanErr's fallback stops routing through classifyPostgres.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeBackend()
+	fake.set("db_password", "s3cr3t")
+	fake.fail("db_password", &pgconn.PgError{Code: "42501", Message: "permission denied for table app_config"})
+	p := New(withBackend(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "postgres://app_config/db_password"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyPostgres may not be wired into mapScanErr", got, mamori.KindPermissionDenied)
 	}
 }
 

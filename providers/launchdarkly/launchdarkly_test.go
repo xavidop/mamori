@@ -26,7 +26,19 @@ import (
 type fakeClient struct {
 	mu        sync.Mutex
 	flags     map[string]ldvalue.Value
+	fails     map[string]fakeFailure
 	listeners map[*fakeListener]struct{}
+}
+
+// fakeFailure is an injected per-flag evaluation failure: the error
+// JSONVariationDetail returns, and the evaluation-reason error kind it is
+// reported under. reasonKind defaults to EvalErrorException (LaunchDarkly's
+// generic "something went wrong" reason) via fail, so an injected error does
+// not accidentally collide with a reason kind classifyReason maps; failReason
+// lets a test pick a specific reason kind instead.
+type fakeFailure struct {
+	err        error
+	reasonKind ldreason.EvalErrorKind
 }
 
 type fakeListener struct {
@@ -37,8 +49,36 @@ type fakeListener struct {
 func newFakeClient() *fakeClient {
 	return &fakeClient{
 		flags:     map[string]ldvalue.Value{},
+		fails:     map[string]fakeFailure{},
 		listeners: map[*fakeListener]struct{}{},
 	}
+}
+
+// fail makes the next JSONVariationDetail for flagKey return err with a
+// generic EXCEPTION evaluation reason, until clear(flagKey) is called. It
+// powers the providertest ErrorClassification case and
+// TestResolveClassifiesNonNotFoundError.
+func (f *fakeClient) fail(flagKey string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[flagKey] = fakeFailure{err: err, reasonKind: ldreason.EvalErrorException}
+}
+
+// failReason is like fail but reports a specific evaluation-reason error kind,
+// letting a test exercise classifyReason's CLIENT_NOT_READY mapping through
+// Resolve with a realistic (non-sentinel) SDK error, the same shape a live
+// backend would return.
+func (f *fakeClient) failReason(flagKey string, kind ldreason.EvalErrorKind, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[flagKey] = fakeFailure{err: err, reasonKind: kind}
+}
+
+// clear cancels a previously injected fail/failReason for flagKey.
+func (f *fakeClient) clear(flagKey string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, flagKey)
 }
 
 // set stores val for flagKey and, if the value actually changed, pushes a
@@ -78,6 +118,10 @@ func (f *fakeClient) setString(flagKey, val string) { f.set(flagKey, ldvalue.Str
 func (f *fakeClient) JSONVariationDetail(flagKey string, _ ldcontext.Context, defaultVal ldvalue.Value) (ldvalue.Value, ldreason.EvaluationDetail, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if fl, ok := f.fails[flagKey]; ok {
+		detail := ldreason.NewEvaluationDetailForError(fl.reasonKind, defaultVal)
+		return defaultVal, detail, fl.err
+	}
 	val, ok := f.flags[flagKey]
 	if !ok {
 		detail := ldreason.NewEvaluationDetailForError(ldreason.EvalErrorFlagNotFound, defaultVal)
@@ -132,6 +176,14 @@ func TestConformance(t *testing.T) {
 		Ref:    func(key string) string { return "launchdarkly://" + key },
 		Seed:   func(_ context.Context, key, val string) error { fake.setString(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { fake.setString(key, val); return nil },
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
+			return nil
+		},
 
 		EventuallyTimeout: 3 * time.Second,
 	})
@@ -258,6 +310,50 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://absent"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises the fake's fail/clear seam
+// through Resolve itself, not just as a unit test of the fake. It injects a
+// mamori sentinel directly (the same thing the providertest
+// ErrorClassification case does) and proves Resolve's %w wrapping keeps it
+// intact end to end: reformat the evalErr branch with %v instead of %w, or
+// drop the fake's fails-map check from JSONVariationDetail, and this test
+// fails.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("flag", ldvalue.String("v"))
+	fake.fail("flag", mamori.ErrPermissionDenied)
+	p := New(withClient(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://flag"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; the fail seam or Resolve's %%w wrapping may be broken", got, mamori.KindPermissionDenied)
+	}
+}
+
+// TestResolveClassifiesClientNotReady proves classifyReason's one mapping
+// (CLIENT_NOT_READY -> ErrUnavailable) is actually reached from Resolve, not
+// just correct in isolation (see TestClassifyReason). It injects a realistic
+// SDK-shaped failure - a generic error paired with the CLIENT_NOT_READY
+// reason, not a mamori sentinel - so it fails if the classifyReason call were
+// removed from Resolve, unlike a test that injects mamori.ErrUnavailable
+// directly.
+func TestResolveClassifiesClientNotReady(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("flag", ldvalue.String("v"))
+	fake.failReason("flag", ldreason.EvalErrorClientNotReady, errors.New("client not initialized"))
+	p := New(withClient(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://flag"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the client was not ready")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindUnavailable {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyReason may not be wired into Resolve", got, mamori.KindUnavailable)
 	}
 }
 

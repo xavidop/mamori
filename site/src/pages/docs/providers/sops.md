@@ -53,6 +53,18 @@ type Config struct {
 
 Values are always marked `Sensitive`. `Value.Version` is a hash of the encrypted file's size and modification time, so re-resolving an unchanged file is cheap and never decrypts twice just to compare.
 
+## Error classification
+
+Beyond the not-found case above, an unreadable encrypted file is classified so `mamori.ErrorKind` can distinguish it:
+
+| Condition | Detected via | mamori kind |
+| --- | --- | --- |
+| Missing file | `os.IsNotExist` | `not_found` |
+| Unreadable file (e.g. restrictive ownership on a mounted secret) | `os.IsPermission` | `permission_denied` |
+| Anything else (bad/missing key material, corrupt ciphertext, ...) | - | `unknown` |
+
+This applies to both the initial stat and the decrypt step, since a SOPS-encrypted file is read like any other local file and shares the same os-level vocabulary as the built-in `file://` provider. SOPS's own decrypt failures carry no further os-level vocabulary to classify, so anything else reports `unknown` rather than being guessed at. The original error stays reachable with `errors.As`.
+
 ## Auth and watch
 
 mamori does not manage keys; it calls SOPS to decrypt, so whatever key material SOPS finds in the environment applies (`SOPS_AGE_KEY` for age, or the configured AWS/GCP/Azure KMS credentials). The provider watches the encrypted file with fsnotify (watching the parent directory to catch atomic renames) and re-decrypts on change.
@@ -69,4 +81,4 @@ mamori.WithProvider(sopsprov.New(
 ))
 ```
 
-Verified by unit tests (yaml/json key selection, format detection, not-found, fsnotify watch) with an injected decrypt function. Real SOPS decryption with a generated age key is covered by `//go:build integration` tests.
+Verified by unit tests (yaml/json key selection, format detection, not-found, error classification, fsnotify watch) with an injected decrypt function, including a `Resolve`-level test that injects a real os-shaped permission error through the same seam. Real SOPS decryption with a generated age key is covered by `//go:build integration` tests.

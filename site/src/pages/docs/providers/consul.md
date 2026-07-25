@@ -58,6 +58,21 @@ type Config struct {
 
 `Watch` uses Consul **blocking queries**: it re-issues `KV.Get` with `WaitIndex` set to the last `ModifyIndex`, so the request parks on the server until the value changes (or a wait timeout elapses), then emits an `Update`. It handles index resets, backs off on transient errors, and closes on context cancellation.
 
+## Error classification
+
+A missing key is not an SDK error: `KV.Get` returns a nil pair with a nil error for a 404, and the provider maps that directly to `mamori.ErrNotFound` - there is no not-found row below because the classifier never sees that case. Every other non-2xx response surfaces as an `api.StatusError{Code, Body}`, classified by HTTP status:
+
+| HTTP status | mamori kind |
+|---|---|
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+403 (ACL token denied) is the confirmed common case for this endpoint. 401 and 429 are mapped on ordinary HTTP semantics rather than confirmed Consul KV behavior - whether they actually occur depends on cluster ACL/rate-limit configuration. The original `api.StatusError` stays reachable with `errors.As`.
+
 ## Explicit configuration
 
 ```go

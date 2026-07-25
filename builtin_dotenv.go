@@ -30,17 +30,11 @@ func (dotenvProvider) Scheme() string { return "dotenv" }
 func (dotenvProvider) Resolve(_ context.Context, ref Ref) (Value, error) {
 	info, err := os.Stat(ref.Path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Value{}, ErrNotFound
-		}
-		return Value{}, err
+		return Value{}, classifyFileErr(ref.Path, err)
 	}
 	b, err := os.ReadFile(ref.Path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Value{}, ErrNotFound
-		}
-		return Value{}, err
+		return Value{}, classifyFileErr(ref.Path, err)
 	}
 	ver := fmt.Sprintf("%d-%d", info.Size(), info.ModTime().UnixNano())
 

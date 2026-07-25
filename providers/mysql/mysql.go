@@ -254,7 +254,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	case errors.Is(err, sql.ErrNoRows):
 		return mamori.Value{}, fmt.Errorf("mamori/mysql: key %q not found in table %q: %w", key, table, mamori.ErrNotFound)
 	case err != nil:
-		return mamori.Value{}, fmt.Errorf("mamori/mysql: querying table %q: %w", table, err)
+		return mamori.Value{}, fmt.Errorf("mamori/mysql: querying table %q: %w", table, classifyMySQL(err))
 	}
 
 	// Select a JSON sub-field if requested. The version below is still derived
@@ -282,6 +282,50 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 			"key":   key,
 		},
 	}, nil
+}
+
+// classifyMySQL maps a *mysqldriver.MySQLError onto a mamori classification
+// sentinel by switching on its Number (the numeric server error code;
+// MySQLError.SQLState is a raw [5]byte array rather than a comparable string,
+// so Number is the reliable field to switch on).
+//
+// Only the numbers a config/secrets read can plausibly hit are mapped: the
+// database- and table-level access-denied pair (permission denied), the
+// bad-credentials error (unauthenticated), and the connection-limit pair
+// (unavailable, a server-side resource exhaustion rather than a client
+// mistake). MySQL has no rate-limit error class of its own, so there is
+// deliberately no ErrRateLimited mapping here, and the syntax-error code is
+// unreachable through this provider's fixed query template, so there is no
+// ErrInvalid mapping either; guessing either in would misrepresent what the
+// server actually reported. Any other number - including ones not yet added
+// to this switch - passes through unclassified and reports unknown, which is
+// the honest answer for a code this provider does not recognize rather than a
+// guess that might send an operator down the wrong path.
+//
+// A non-MySQLError (for example a raw dial failure from a refused TCP
+// connection, client errors 2002/2003) also passes through unclassified,
+// since there is no server error number to read; see the README for why that
+// case is deliberately left unknown rather than type-guessed.
+func classifyMySQL(err error) error {
+	if err == nil {
+		return nil
+	}
+	var me *mysqldriver.MySQLError
+	if !errors.As(err, &me) {
+		return err
+	}
+	var sentinel error
+	switch me.Number {
+	case 1044, 1142: // ER_DBACCESS_DENIED_ERROR, ER_TABLEACCESS_DENIED_ERROR
+		sentinel = mamori.ErrPermissionDenied
+	case 1045: // ER_ACCESS_DENIED_ERROR
+		sentinel = mamori.ErrUnauthenticated
+	case 1040, 1203: // ER_CON_COUNT_ERROR, ER_TOO_MANY_USER_CONNECTIONS
+		sentinel = mamori.ErrUnavailable
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // getQueryer returns the injected queryer, or lazily opens one from the DSN on

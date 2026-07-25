@@ -55,6 +55,10 @@ mamori.WithProvider(flagsmith.New(
 ))
 ```
 
+## Error classification
+
+The Flagsmith SDK exposes no structured error vocabulary beyond feature-not-found, so this provider does not classify errors: `mamori.ErrorKind` reports `unknown` for anything other than `not_found`. `Resolve` still propagates a backend error unchanged (never flattened with `%v`), so `errors.Is` / `errors.As` and any wrapped mamori sentinel survive the chain intact.
+
 ## Watch / polling
 
 Flagsmith has no native change-notification surface exposed here, so this provider is **not** watchable; mamori wraps it in its polling adapter automatically. Configure the cadence with `mamori.WithPollInterval` (interval + jitter). Each poll performs one flags fetch against the Flagsmith API.

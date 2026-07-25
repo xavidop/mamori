@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,6 +58,86 @@ func newKVTable(t *testing.T, table string) string {
 	return path
 }
 
+// failRegistry holds per-key injected errors for TestConformance's
+// ErrorClassification case. It is shared across every Provider instance
+// c.New() creates during one TestConformance run (providertest.RunErrorClassification
+// calls c.New() fresh for each case), the same way the postgres and gcp fakes
+// share state across provider instances.
+type failRegistry struct {
+	mu    sync.Mutex
+	fails map[string]error
+}
+
+func newFailRegistry() *failRegistry {
+	return &failRegistry{fails: map[string]error{}}
+}
+
+// set makes the next QueryRowContext for key return err from Scan, until
+// clear(key) is called.
+func (r *failRegistry) set(key string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fails[key] = err
+}
+
+// clear cancels a previously injected set(key, err).
+func (r *failRegistry) clear(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.fails, key)
+}
+
+func (r *failRegistry) get(key string) (error, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	err, ok := r.fails[key]
+	return err, ok
+}
+
+// failQueryer decorates a real queryer, short-circuiting QueryRowContext with
+// a registered error for the bound key argument instead of running the real
+// query. When no fail is registered for the key it forwards to the real
+// queryer unchanged, so every other conformance case (seeded resolves, watch,
+// version monotonicity, ...) still exercises the real SQLite file untouched.
+type failQueryer struct {
+	inner queryer
+	reg   *failRegistry
+}
+
+func (f failQueryer) QueryRowContext(ctx context.Context, query string, args ...any) row {
+	if len(args) > 0 {
+		if key, ok := args[0].(string); ok {
+			if err, ok := f.reg.get(key); ok {
+				return errRow{err: err}
+			}
+		}
+	}
+	return f.inner.QueryRowContext(ctx, query, args...)
+}
+
+// errRow defers a fixed error to Scan, matching how a real driver error
+// surfaces (deferred until Scan is called on the row).
+type errRow struct{ err error }
+
+func (r errRow) Scan(_ ...any) error { return r.err }
+
+// constFailQueryer always returns err from Scan, regardless of key. Used only
+// by TestResolveClassifiesNonNotFoundError to inject a fixed error
+// unconditionally.
+type constFailQueryer struct{ err error }
+
+func (c constFailQueryer) QueryRowContext(_ context.Context, _ string, _ ...any) row {
+	return errRow{err: c.err}
+}
+
+// compile-time checks that the test doubles satisfy the provider's seam.
+var (
+	_ queryer = (*dbQueryer)(nil)
+	_ queryer = failQueryer{}
+	_ queryer = constFailQueryer{}
+	_ row     = errRow{}
+)
+
 func mustRef(t *testing.T, s string) mamori.Ref {
 	t.Helper()
 	ref, err := mamori.ParseRef(s)
@@ -72,14 +153,25 @@ func mustRef(t *testing.T, s string) mamori.Ref {
 // conformance checks exercise the native watch.
 func TestConformance(t *testing.T) {
 	path := newKVTable(t, "cfg")
+	reg := newFailRegistry()
 	providertest.Run(t, providertest.Config{
 		New: func() mamori.Provider {
-			return New(WithPath(path), WithDebounce(40*time.Millisecond))
+			return New(WithPath(path), WithDebounce(40*time.Millisecond), withQueryerDecorator(func(q queryer) queryer {
+				return failQueryer{inner: q, reg: reg}
+			}))
 		},
 		Ref:  func(key string) string { return "sqlite://cfg/" + key },
 		Seed: func(_ context.Context, key, val string) error { return writeKV(path, "cfg", key, val) },
 		Mutate: func(_ context.Context, key, val string) error {
 			return writeKV(path, "cfg", key, val)
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			reg.set(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			reg.clear(key)
+			return nil
 		},
 		EventuallyTimeout: 5 * time.Second,
 	})
@@ -178,6 +270,33 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "sqlite://cfg/nope"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifySqlite through
+// Resolve itself, not just as a direct function call. The conformance kit's
+// ErrorClassification case cannot catch a regression here: it injects a
+// mamori sentinel directly (not a real SQLite error), so it passes even if
+// the classifySqlite call were deleted from scanErr's fallback branch. This
+// test injects a real *msqlite.Error through the queryer seam - the same
+// shape a live SQLITE_PERM would return - so it fails if the wiring is
+// removed.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	path := newKVTable(t, "cfg")
+	if err := writeKV(path, "cfg", "k", "v"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	injected := sqliteErrorWithCode(t, 3) // SQLITE_PERM
+	p := New(WithPath(path), withQueryerDecorator(func(queryer) queryer {
+		return constFailQueryer{err: injected}
+	}))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "sqlite://cfg/k"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the queryer was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifySqlite may not be wired into scanErr", got, mamori.KindPermissionDenied)
 	}
 }
 

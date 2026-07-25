@@ -28,6 +28,7 @@ package sops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,19 +100,17 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	// to decrypt, and so we can build a size+mtime version identifier.
 	info, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return mamori.Value{}, mamori.ErrNotFound
-		}
-		return mamori.Value{}, err
+		return mamori.Value{}, classifySops(err)
 	}
 
 	format := formatForPath(path)
 	plaintext, err := p.decrypt(path, format)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return mamori.Value{}, mamori.ErrNotFound
+		ce := classifySops(err)
+		if errors.Is(ce, mamori.ErrNotFound) {
+			return mamori.Value{}, ce
 		}
-		return mamori.Value{}, fmt.Errorf("sops: decrypt %q: %w", path, err)
+		return mamori.Value{}, fmt.Errorf("sops: decrypt %q: %w", path, ce)
 	}
 
 	// Version tracks the encrypted file's size and mtime, mirroring the core
@@ -189,6 +188,31 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 		}
 	}()
 	return ch, nil
+}
+
+// classifySops maps an os-level error from os.Stat or the decrypt step onto a
+// mamori classification sentinel. A SOPS-encrypted file is read like any
+// other local file - decrypt.File (and any injected DecryptFunc reading the
+// same path) surfaces the identical *fs.PathError vocabulary os.Stat does -
+// so this mirrors the core file:// provider's classifyFileErr: a missing file
+// is ErrNotFound, returned bare exactly as it was before this function
+// existed, and an unreadable file (mounted with restrictive ownership, or a
+// permission change racing the read) is ErrPermissionDenied, the one
+// additional real class a local encrypted file can produce. SOPS's own
+// decrypt failures (missing/wrong key material, corrupt ciphertext) are plain
+// errors with no further os-level vocabulary to classify, so anything else
+// passes through unclassified rather than being guessed at.
+func classifySops(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case os.IsNotExist(err):
+		return mamori.ErrNotFound
+	case os.IsPermission(err):
+		return fmt.Errorf("%w: %w", mamori.ErrPermissionDenied, err)
+	default:
+		return err
+	}
 }
 
 // formatForPath maps a file extension to the SOPS store format. Unknown

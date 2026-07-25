@@ -224,6 +224,7 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 			}
 			w, werr := p.startWatch(ctx, client, ns, name)
 			if werr != nil {
+				werr = fmt.Errorf("%s: watch %s/%s: %w", p.scheme, ns, name, classifyK8s(werr))
 				if !send(ctx, ch, mamori.Update{Err: werr}) {
 					return
 				}
@@ -373,23 +374,57 @@ func configMapValue(cm *corev1.ConfigMap, key string) (mamori.Value, error) {
 	return mamori.Value{Bytes: b, Version: cm.ResourceVersion}, nil
 }
 
+// classifyK8s maps a Kubernetes API error onto a mamori classification
+// sentinel, using the apierrors predicates rather than raw status codes so it
+// stays correct across API versions.
+//
+// The %w: %w wrapping keeps the underlying *StatusError reachable, so callers
+// can still use apierrors.IsForbidden and friends on an error that has passed
+// through mamori.
+func classifyK8s(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sentinel error
+	switch {
+	case apierrors.IsNotFound(err):
+		sentinel = mamori.ErrNotFound
+	case apierrors.IsForbidden(err):
+		sentinel = mamori.ErrPermissionDenied
+	case apierrors.IsUnauthorized(err):
+		sentinel = mamori.ErrUnauthenticated
+	case apierrors.IsTooManyRequests(err):
+		sentinel = mamori.ErrRateLimited
+	case apierrors.IsServiceUnavailable(err), apierrors.IsTimeout(err), apierrors.IsServerTimeout(err):
+		sentinel = mamori.ErrUnavailable
+	case apierrors.IsBadRequest(err), apierrors.IsInvalid(err):
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
+}
+
 // mapGetError converts a client-go Get error into a mamori error, mapping
-// NotFound to mamori.ErrNotFound.
+// NotFound to mamori.ErrNotFound. The IsNotFound branch is checked first and
+// verbatim so its message stays stable; every other condition falls through
+// to classifyK8s so RBAC denials, throttling, etc. are typed rather than
+// opaque.
 func mapGetError(scheme, kind, ns, name string, err error) error {
 	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("%s: %s %s/%s not found: %w", scheme, kind, ns, name, mamori.ErrNotFound)
+		return fmt.Errorf("%s: %s %s/%s not found: %w: %w", scheme, kind, ns, name, mamori.ErrNotFound, err)
 	}
-	return fmt.Errorf("%s: getting %s %s/%s: %w", scheme, kind, ns, name, err)
+	return fmt.Errorf("%s: getting %s %s/%s: %w", scheme, kind, ns, name, classifyK8s(err))
 }
 
 // splitPath parses "<namespace>/<name>" from a ref path.
 func splitPath(path string) (ns, name string, err error) {
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("k8s: ref path %q must be of the form <namespace>/<name>", path)
+		return "", "", fmt.Errorf("k8s: ref path %q must be of the form <namespace>/<name>: %w", path, mamori.ErrInvalid)
 	}
 	if strings.Contains(parts[1], "/") {
-		return "", "", fmt.Errorf("k8s: ref path %q must be of the form <namespace>/<name>", path)
+		return "", "", fmt.Errorf("k8s: ref path %q must be of the form <namespace>/<name>: %w", path, mamori.ErrInvalid)
 	}
 	return parts[0], parts[1], nil
 }

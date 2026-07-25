@@ -64,3 +64,19 @@ mamori polls (`WithPollInterval` + jitter) using the ETag. For push, Azure Event
 ## Configuration
 
 Authentication uses `DefaultAzureCredential` (environment, managed identity, Azure CLI). Verified with an in-memory fake; live behavior is covered by `//go:build integration` tests.
+
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+A transport failure (no HTTP response at all) stays `unknown`, since it could be a bug in this provider rather than a genuine backend outage. `*azcore.ResponseError` stays reachable with `errors.As`, both through the not-found path (typed `bloberror` codes and a raw 404) and the classified fallback path.
+
+Verified by unit tests and the conformance kit against an in-memory fake; live Azure behavior is covered by `//go:build integration` tests.

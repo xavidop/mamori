@@ -59,6 +59,10 @@ The Split client is built lazily on first `Resolve`, so registering the provider
 - **Readiness:** the Split SDK downloads flag definitions from Split's servers in a background goroutine after the factory is created; until that first sync completes every evaluation returns "control". The provider therefore blocks on the SDK's `BlockUntilReady` during its lazy construction (bounded by `WithReadyTimeout`, 10s by default). If the client cannot become ready in time - bad SDK key, unreachable backend - the first `Resolve` returns that initialization error rather than masking it as not-found.
 - **Watch:** the SDK refreshes flag definitions on its own interval but exposes no clean per-flag push, so this provider is **not** watchable. mamori polls it (interval + jitter); configure with `mamori.WithPollInterval`.
 
+## Error classification
+
+The Split client's `treatmentClient.Treatment` returns a bare string - not-found is signaled by the `"control"` sentinel value, not an error, so there is no per-key error vocabulary. This provider's `Resolve` therefore can only ever return `mamori.ErrNotFound` or a client-construction error; there is no classifiable per-resolve error to surface. The provider is exempt from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`.
+
 ## What is verified
 
 - Unit tests and the [`providertest`](../../providertest) conformance kit run against an in-memory fake Split client (un-seeded flags return "control" -> `ErrNotFound`), so no network is required. Verified here: scheme, default-key and per-ref-key evaluation, control -> `ErrNotFound`, content-hash versioning, context cancellation, missing-SDK-key error, and non-watchability.

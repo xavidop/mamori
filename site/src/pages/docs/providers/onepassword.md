@@ -68,4 +68,18 @@ mamori.WithProvider(opprov.New(
 
 1Password Connect has no push channel, so mamori polls (`WithPollInterval` + jitter).
 
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+Connect's error responses carry only a numeric status and a free-text message, no machine-readable error code, so classification is by status alone. A missing vault, item, or field is reported directly as `not_found` with its own message rather than through this table.
+
 Verified by unit tests and the conformance kit against an in-process HTTP fake of the Connect API (injected `*http.Client`). Live behavior against a running Connect server is covered by `//go:build integration` tests.

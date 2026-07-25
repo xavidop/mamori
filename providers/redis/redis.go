@@ -41,6 +41,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sync"
 
@@ -241,7 +242,7 @@ func resolveWith(ctx context.Context, c redisAPI, ref mamori.Ref) (mamori.Value,
 		if errors.Is(err, goredis.Nil) {
 			return mamori.Value{}, fmt.Errorf("redis: key %q: %w", ref.Path, mamori.ErrNotFound)
 		}
-		return mamori.Value{}, fmt.Errorf("redis: get %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("redis: get %q: %w", ref.Path, classifyRedis(err))
 	}
 	// The Version identifies the Redis key's revision, so hash the full stored
 	// value (before any #key selection); a change to any field changes it.
@@ -260,6 +261,55 @@ func resolveWith(ctx context.Context, c redisAPI, ref mamori.Ref) (mamori.Value,
 		Version:   version,
 		Sensitive: false,
 	}, nil
+}
+
+// classifyRedis maps a Redis client error onto a mamori classification
+// sentinel.
+//
+// Unlike Postgres or MySQL, go-redis v9 has no single error-code field to
+// switch on. Instead it exports typed IsXError predicates that each recognize
+// one wire-protocol error prefix (NOAUTH/WRONGPASS, NOPERM, LOADING,
+// CLUSTERDOWN, MASTERDOWN), and keep working even when the error arrives
+// wrapped. Auth is checked before permission so a caller Redis rejects for
+// missing or bad credentials reports unauthenticated rather than
+// permission_denied. LOADING (the server is still loading its dataset on
+// startup), CLUSTERDOWN, and MASTERDOWN all mean the backend cannot currently
+// serve the request, so all three map to unavailable.
+//
+// Redis has no rate-limit error on this path, so there is deliberately no
+// ErrRateLimited mapping here; guessing one in would misrepresent what the
+// server actually reported.
+//
+// A raw dial failure (TCP connection refused, DNS failure, ...) is not a
+// redis.Error at all - it surfaces as a *net.OpError with Op "dial" - so none
+// of the predicates above ever match it. go-redis's own retry logic
+// (shouldRetry in error.go) uses this exact errors.As(&opErr) with
+// opErr.Op == "dial" check to recognize the same condition, which is why it
+// is trusted here too: it is the library's own idiomatic signal that the
+// backend is genuinely unreachable, not a guess. Any other error - including
+// one not yet recognized by a predicate above - passes through unclassified
+// and reports unknown, the honest answer for an error this provider does not
+// recognize.
+func classifyRedis(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sentinel error
+	switch {
+	case goredis.IsAuthError(err):
+		sentinel = mamori.ErrUnauthenticated
+	case goredis.IsPermissionError(err):
+		sentinel = mamori.ErrPermissionDenied
+	case goredis.IsLoadingError(err), goredis.IsClusterDownError(err), goredis.IsMasterDownError(err):
+		sentinel = mamori.ErrUnavailable
+	default:
+		var opErr *net.OpError
+		if !errors.As(err, &opErr) || opErr.Op != "dial" {
+			return err
+		}
+		sentinel = mamori.ErrUnavailable
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // Watch implements mamori.WatchableProvider using Redis keyspace notifications.

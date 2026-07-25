@@ -57,8 +57,21 @@ mamori.WithProvider(sqliteprov.New(sqliteprov.WithPath("/var/lib/app/config.db")
 
 The database file path is not part of the ref (set it with `WithPath` or `SQLITE_PATH`), so refs stay portable across environments. The row key is always a bound `?` parameter; the table and column names are validated against a strict identifier allowlist (`^[A-Za-z_][A-Za-z0-9_]*$`) before any query runs, so a ref can never inject SQL. `Value.Version` is a content hash of the value by default, or a native revision column via `WithVersionColumn`. Values are non-sensitive unless you set `WithSensitive(true)` or wrap the field in `secret.String`.
 
+## Error classification
+
+Beyond the not-found case, a query failure that carries a SQLite result code is classified via `modernc.org/sqlite`'s own `*sqlite.Error.Code()`, so `mamori.ErrorKind` can distinguish it:
+
+| SQLite result code | mamori kind |
+| --- | --- |
+| `SQLITE_PERM` (3), `SQLITE_READONLY` (8) | `permission_denied` |
+| `SQLITE_BUSY` (5), `SQLITE_LOCKED` (6), `SQLITE_CANTOPEN` (14) | `unavailable` |
+| `SQLITE_AUTH` (23) | `unauthenticated` |
+| anything else | `unknown` |
+
+Codes not listed above report `unknown` rather than being guessed at, and the original `*sqlite.Error` stays reachable with `errors.As`.
+
 ## Watch
 
 `Watch` uses fsnotify on the database file: when the file changes, mamori re-queries and emits an update. Ideal for a config DB written by another process.
 
-Verified against a real temporary SQLite database (no cgo, no external service). An identifier-allowlist rejection test is included.
+Verified against a real temporary SQLite database (no cgo, no external service). An identifier-allowlist rejection test is included, and error classification is verified both by a table test over real driver errors and by a dedicated Resolve-level test proving the wiring is non-vacuous.

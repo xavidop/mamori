@@ -121,7 +121,7 @@ func (p *PSProvider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[s
 		WithDecryption: awssdk.Bool(true),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("aws-ps: batch resolve: %w", err)
+		return nil, fmt.Errorf("aws-ps: batch resolve: %w", classifyAWS(err))
 	}
 
 	result := make(map[string]mamori.Value, len(out.Parameters))
@@ -168,5 +168,5 @@ func mapPSError(ref mamori.Ref, err error) error {
 	if errors.As(err, &nf) {
 		return fmt.Errorf("aws-ps: parameter %q not found: %w", ref.Path, mamori.ErrNotFound)
 	}
-	return fmt.Errorf("aws-ps: resolve %q: %w", ref.Path, err)
+	return fmt.Errorf("aws-ps: resolve %q: %w", ref.Path, classifyAWS(err))
 }

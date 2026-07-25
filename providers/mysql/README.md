@@ -72,6 +72,37 @@ type Config struct {
 - A key with no matching row returns an error satisfying
   `errors.Is(err, mamori.ErrNotFound)` (from `sql.ErrNoRows`).
 
+## Error classification
+
+Beyond the not-found case above, other query failures are classified by the
+driver's numeric server error code so `mamori.ErrorKind` can distinguish them:
+
+| Number | Meaning | mamori kind |
+| --- | --- | --- |
+| `1044` | ER_DBACCESS_DENIED_ERROR | `permission_denied` |
+| `1142` | ER_TABLEACCESS_DENIED_ERROR | `permission_denied` |
+| `1045` | ER_ACCESS_DENIED_ERROR | `unauthenticated` |
+| `1040` | ER_CON_COUNT_ERROR (too many connections) | `unavailable` |
+| `1203` | ER_TOO_MANY_USER_CONNECTIONS | `unavailable` |
+| anything else | | `unknown` |
+
+MySQL has no rate-limit error class, so no number maps to `rate_limited`, and
+the syntax-error code is unreachable through this provider's fixed query
+template, so none maps to `invalid` either. Numbers not listed above report
+`unknown` rather than being guessed at. The original
+`*mysqldriver.MySQLError` (`github.com/go-sql-driver/mysql`) stays reachable
+with `errors.As`, so existing code matching on it keeps working.
+
+**Known limitation:** a refused TCP connection (client errors 2002/2003, e.g.
+the database host is down or unreachable) is **not** a `*MySQLError` - it is a
+net-level error from the Go driver, and its exact wrapped type is not stable
+enough to match reliably. Rather than guess at it, this provider leaves it
+`unknown`. The practical effect: a hard dial failure ("database is
+completely down") reports `unknown`, while a connection-limit rejection
+(`1040`/`1203`, "database is up but out of capacity") reports `unavailable`.
+This is a deliberate tradeoff - an honest `unknown` beats a type-guessed
+classification that might silently stop matching after a driver upgrade.
+
 ## Identifier safety (SQL injection)
 
 Bound parameters can carry the **key value** but not table or column **names**,

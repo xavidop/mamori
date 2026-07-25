@@ -47,6 +47,11 @@ type fakeVault struct {
 type fakeConnect struct {
 	mu     sync.Mutex
 	vaults map[string]*fakeVault // by vault id
+
+	// nextErr is the COARSE SEAM (see fail below): a single pending error
+	// applied to every request until clear is called, rather than a per-key
+	// failure map.
+	nextErr error
 }
 
 func newFakeConnect() *fakeConnect {
@@ -78,6 +83,66 @@ func (f *fakeConnect) set(label, val string) {
 	it.version++
 }
 
+// fail arranges for every request this fake serves to fail with a status
+// derived from err, until clear is called. It powers the providertest
+// ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+//
+// COARSE SEAM: most mamori providers can inject a per-key failure into their
+// fake backend, because their client's request for one logical key (a secret
+// name, a parameter path) is identifiable at the fake. 1Password Connect is
+// different: Resolve fetches the whole item (one HTTP request pair, vault
+// then item) and only afterward walks item.Fields client-side to pick out
+// the one field named by the ref (see the loop in Resolve in onepassword.go).
+// No HTTP request ever carries the field name, so a map keyed by field would
+// have nothing to key on at the transport. A single pending error, applied to
+// every request regardless of which field is being resolved, is the coarsest
+// seam that still works. It is sound here because providertest's
+// RunErrorClassification performs exactly one Seed+Fail+Resolve+Clear cycle
+// per case, so at most one Resolve (and therefore its one or two HTTP
+// requests) is ever in flight while a failure is pending.
+//
+// err is translated into an HTTP status via failStatus rather than being
+// returned as a Go error directly. That matters for what the resulting test
+// proves: if fail instead made the RoundTripper return err as a transport
+// error, err would reach Resolve's caller by straight propagation, and the
+// test would pass even with classifyOnePassword deleted. Going through a real
+// HTTP status forces the classification to be earned through
+// statusError/classifyOnePassword, the same path a live Connect server's 403
+// or 429 would take.
+func (f *fakeConnect) fail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextErr = err
+}
+
+// clear cancels a previously injected fail.
+func (f *fakeConnect) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextErr = nil
+}
+
+// failStatus maps a mamori classification sentinel onto the HTTP status
+// classifyOnePassword would decode it back from. It is the fake's mirror of
+// classifyOnePassword, used only to reify an injected sentinel as a
+// wire-level response.
+func failStatus(err error) int {
+	switch {
+	case errors.Is(err, mamori.ErrPermissionDenied):
+		return http.StatusForbidden
+	case errors.Is(err, mamori.ErrUnauthenticated):
+		return http.StatusUnauthorized
+	case errors.Is(err, mamori.ErrRateLimited):
+		return http.StatusTooManyRequests
+	case errors.Is(err, mamori.ErrUnavailable):
+		return http.StatusInternalServerError
+	case errors.Is(err, mamori.ErrInvalid):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
 func (f *fakeConnect) vaultByName(name string) *fakeVault {
 	for _, v := range f.vaults {
 		if v.name == name {
@@ -99,6 +164,11 @@ func (f *fakeConnect) itemByTitle(v *fakeVault, title string) *fakeItem {
 func (f *fakeConnect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.nextErr != nil {
+		writeJSON(w, failStatus(f.nextErr), map[string]string{"message": "injected failure"})
+		return
+	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	// Expected forms (all prefixed with "v1"):
@@ -344,6 +414,43 @@ func TestConformance(t *testing.T) {
 			fake.set(key, val)
 			return nil
 		},
+		Fail: func(_ context.Context, _ string, err error) error {
+			fake.fail(err)
+			return nil
+		},
+		Clear: func(context.Context, string) error {
+			fake.clear()
+			return nil
+		},
 		SkipWatch: true,
 	})
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyOnePassword through
+// Resolve itself, not just as a direct function call, using the same
+// pending-error seam as the conformance ErrorClassification case (see the
+// comment on fakeConnect.fail for why 1Password Connect needs that coarser
+// seam). Because fail translates the injected sentinel into a real HTTP
+// status rather than returning it as a Go error, this only passes if
+// statusError still routes through classifyOnePassword: deleting that call
+// makes the error come back unclassified (KindUnknown) and this test fails.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeConnect()
+	fake.set("password", "s3cr3t")
+	fake.fail(mamori.ErrPermissionDenied)
+	p := newTestProvider(t, fake)
+
+	ref, err := mamori.ParseRef("op://" + confVaultName + "/" + confItemTitle + "/password")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	_, resolveErr := p.Resolve(context.Background(), ref)
+	fake.clear()
+
+	if resolveErr == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(resolveErr); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyOnePassword may not be wired into statusError/Resolve", got, mamori.KindPermissionDenied)
+	}
 }

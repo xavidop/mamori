@@ -3,6 +3,7 @@ package firebaserc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,11 +18,20 @@ import (
 // fakeBackend is an in-memory templateFetcher that models a server Remote Config
 // template. Each set bumps the template version, mirroring the way publishing a
 // new template increments its versionNumber.
+//
+// fetchTemplate returns the WHOLE template in one call; there is no per-key
+// fetch to fail selectively. So unlike the per-key fakes in other providers
+// (e.g. gcp's fakeSM.fails map, keyed by secret path), error injection here
+// uses a single pending-error slot, nextErr: fail sets it, the next
+// fetchTemplate call returns it (and it is not auto-cleared), and clear resets
+// it. This is sufficient because providertest.RunErrorClassification performs
+// exactly one Resolve at a time per injected error.
 type fakeBackend struct {
 	mu      sync.Mutex
 	params  map[string]string
 	version int
 	fetches int
+	nextErr error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -35,12 +45,33 @@ func (f *fakeBackend) set(key, val string) {
 	f.version++
 }
 
+// fail makes the next fetchTemplate call return err, until clear is called.
+// It powers the providertest ErrorClassification case. Because fetchTemplate
+// has no per-key granularity, the key argument RunErrorClassification passes
+// to Fail is not consulted; a single pending error covers the one Resolve
+// RunErrorClassification performs per injected error.
+func (f *fakeBackend) fail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextErr = err
+}
+
+// clear cancels a previously injected fail.
+func (f *fakeBackend) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextErr = nil
+}
+
 func (f *fakeBackend) fetchTemplate(ctx context.Context) (*template, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.nextErr != nil {
+		return nil, f.nextErr
+	}
 	f.fetches++
 	params := make(map[string]parameter, len(f.params))
 	for k, v := range f.params {
@@ -77,6 +108,14 @@ func TestConformance(t *testing.T) {
 			fake.set(key, val)
 			return nil
 		},
+		Fail: func(_ context.Context, _ string, err error) error {
+			fake.fail(err)
+			return nil
+		},
+		Clear: func(_ context.Context, _ string) error {
+			fake.clear()
+			return nil
+		},
 		// The server Remote Config template has no cheap native push, so the
 		// provider is deliberately not watchable; mamori polls it.
 		SkipWatch: true,
@@ -108,6 +147,29 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), parse(t, "firebase-rc://nope"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolvePendingErrorSurvives verifies that an error injected through the
+// fakeBackend pending-error seam (used by providertest's ErrorClassification
+// case) reaches Resolve's caller unchanged: fakeBackend.fetchTemplate returns
+// it directly (it never touches classifyFirebaseRC, which only runs inside
+// httpFetcher.fetchTemplate), and Resolve must not mangle or lose the
+// sentinel on the way out.
+func TestResolvePendingErrorSurvives(t *testing.T) {
+	fake := newFakeBackend()
+	fake.set("k", "v")
+	fake.fail(fmt.Errorf("backend: %w", mamori.ErrPermissionDenied))
+	p := New(WithFetcher(fake))
+
+	_, err := p.Resolve(context.Background(), parse(t, "firebase-rc://k"))
+	fake.clear()
+
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q", got, mamori.KindPermissionDenied)
 	}
 }
 
@@ -288,6 +350,32 @@ func TestHTTPFetcherErrorStatus(t *testing.T) {
 	}
 	if errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("403 err should not be ErrNotFound, got %v", err)
+	}
+}
+
+// TestResolveClassifiesHTTPStatus exercises classifyFirebaseRC through Resolve
+// -> httpFetcher.fetchTemplate itself, not just as a direct function call.
+// Neither the conformance ErrorClassification case nor
+// TestResolvePendingErrorSurvives can catch a regression here: both go
+// through fakeBackend, whose fetchTemplate returns an injected error directly
+// and never calls classifyFirebaseRC, so they would still pass even if the
+// classifyFirebaseRC call were deleted from httpFetcher.fetchTemplate. This
+// test drives a real 403 response through an httptest.Server, the same shape
+// a live Remote Config API failure would take, so it fails if the wiring is
+// removed.
+func TestResolveClassifiesHTTPStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"status":"PERMISSION_DENIED"}}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	p := New(WithProjectID("demo"), WithHTTPClient(srv.Client()), WithBaseURL(srv.URL))
+	_, err := p.Resolve(context.Background(), parse(t, "firebase-rc://welcome"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyFirebaseRC may not be wired into fetchTemplate", got, mamori.KindPermissionDenied)
 	}
 }
 

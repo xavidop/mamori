@@ -87,6 +87,22 @@ Azure Key Vault has **no native change notification** for secrets, so this
 provider does not implement `WatchableProvider`. mamori polls it on the
 configured interval instead.
 
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+A transport failure (no HTTP response at all) stays `unknown`, since it could
+be a client problem rather than a backend one. `*azcore.ResponseError` stays
+reachable with `errors.As`.
+
 ## Verified vs. needs a live backend
 
 - **Verified in unit tests (no Azure account):** scheme, resolution, JSON

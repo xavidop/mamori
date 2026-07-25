@@ -53,6 +53,10 @@ type Config struct {
 
 A JSON string leaf is returned unquoted; other JSON (objects, arrays, numbers, booleans) as its JSON encoding. A null or missing path resolves to not-found, so `default:` / `optional:"true"` applies. `Value.Version` is the database ETag when available (an exact native revision), falling back to a content hash. The Realtime Database holds configuration rather than managed secrets, so values are not marked sensitive; wrap a field in `secret.String` for redaction.
 
+## Error classification
+
+Beyond the not-found case above, this provider has no SDK-specific error taxonomy to classify against, so any other backend failure reports `unknown` via `mamori.ErrorKind`. `Resolve` still wraps the backend error with `%w`, so the classification chain (`errors.Is`, `errors.As`) is preserved rather than flattened, even though nothing here maps it to a more specific kind.
+
 ## Watch
 
 `Watch` uses the Realtime Database streaming endpoint (server-sent events): the server pushes `put` and `patch` events as the data changes, and mamori emits an update on each. This is a genuine realtime subscription.

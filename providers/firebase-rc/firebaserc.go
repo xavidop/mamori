@@ -302,9 +302,40 @@ func (f *httpFetcher) fetchTemplate(ctx context.Context) (*template, error) {
 		return nil, fmt.Errorf("firebase-rc: reading template response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("firebase-rc: Remote Config API returned %s: %s", resp.Status, snippet(body))
+		apiErr := fmt.Errorf("firebase-rc: Remote Config API returned %s: %s", resp.Status, snippet(body))
+		return nil, classifyFirebaseRC(resp.StatusCode, apiErr)
 	}
 	return decodeTemplate(body)
+}
+
+// classifyFirebaseRC maps a Remote Config REST API HTTP status onto a mamori
+// classification sentinel. Unlike the Azure and GCP SDKs, the REST API has no
+// structured error type to pattern-match with errors.As; the status code is
+// already in hand at the fetch call site (fetchTemplate), so it is classified
+// directly there rather than recovered from the error afterward.
+//
+// A status this provider has no mapping for (e.g. 409 Conflict) is returned
+// unclassified rather than guessed at.
+func classifyFirebaseRC(statusCode int, err error) error {
+	if err == nil {
+		return nil
+	}
+	var sentinel error
+	switch {
+	case statusCode == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case statusCode == http.StatusUnauthorized:
+		sentinel = mamori.ErrUnauthenticated
+	case statusCode == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case statusCode >= http.StatusInternalServerError:
+		sentinel = mamori.ErrUnavailable
+	case statusCode == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // restTemplate is the decoded subset of the Remote Config REST response.

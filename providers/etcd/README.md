@@ -55,6 +55,42 @@ type Config struct {
   secrets. Wrap a field in `secret.String` if you want redaction anyway.
 - A missing key returns an error satisfying `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+Beyond the not-found case above (an empty `Kvs` slice, never a gRPC code),
+other `Get`/watch failures are classified by gRPC status so `mamori.ErrorKind`
+can distinguish them:
+
+| gRPC code | mamori kind |
+| --- | --- |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `InvalidArgument` | `unknown` (deliberately unmapped, see below) |
+| anything else | `unknown` |
+
+**`InvalidArgument` is deliberately left unmapped.** etcd reports a bad
+username/password (`rpctypes.ErrGRPCAuthFailed`) as `InvalidArgument`, not
+`Unauthenticated`, and that same code also covers ordinary malformed-request
+errors. There is no way to tell the two apart from the code alone, so mapping
+it to either `unauthenticated` or `invalid` would be wrong about half the
+time; it stays `unknown` rather than being guessed at. `codes.NotFound` is
+never returned by etcd for a missing key either, so it is not mapped - the
+local empty-`Kvs` check is what drives `not_found`.
+
+The etcd v3 client has one more wrinkle beyond a plain gRPC status: for a
+fixed set of well-known server error messages (permission denied, invalid
+auth token, no leader/request timed out, database space exceeded/too many
+requests, and others), the client's internal `ContextError` helper rewrites
+the error into an `rpctypes.EtcdError` before `Get`/`Put`/`Delete` return it.
+That type carries the original gRPC code but does not implement the
+`GRPCStatus()` interface `status.Code` relies on. This provider's classifier
+falls back to `errors.As`-ing into `rpctypes.EtcdError` when `status.Code`
+reports `Unknown`, so a live server's ordinary permission, auth,
+availability, and rate-limit errors still classify correctly instead of
+silently reporting `unknown`.
+
 ## Authentication & configuration
 
 The provider needs one or more etcd endpoints. They are read, in order of
@@ -123,6 +159,7 @@ already holds the value from the initial `Resolve`.
 | Resolve, JSON `#key` selection, not-found, version monotonicity, context cancellation | **Verified** (unit tests) |
 | Native watch (change delivery + cancel/close, no goroutine leak) | **Verified** against the fake (including `-race`) |
 | Endpoint parsing (`ETCD_ENDPOINTS`), missing-endpoints error | **Verified** (unit tests) |
+| Error classification (gRPC status table, `InvalidArgument` trap, `rpctypes.EtcdError` fallback) at both `Resolve` and `Watch` | **Verified** (unit tests, non-vacuously wired) |
 | End-to-end against a real etcd server | **Needs a live backend** - see the integration test |
 
 The unit and conformance tests use an in-memory fake that reproduces etcd's

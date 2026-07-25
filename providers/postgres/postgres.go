@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xavidop/mamori"
 )
@@ -348,13 +349,57 @@ func (p *Provider) resolveWith(ctx context.Context, be backend, sql, keyval stri
 	return mamori.Value{Bytes: b, Version: ver, Sensitive: p.sensitive}, nil
 }
 
+// classifyPostgres maps a *pgconn.PgError onto a mamori classification
+// sentinel by switching on its SQLSTATE code.
+//
+// Only the SQLSTATEs a config/secrets read can plausibly hit are mapped:
+// insufficient privilege, the authentication-failure pair, and the
+// connection-refused family (including too-many-connections, which is a
+// server-side resource exhaustion, not a client mistake). Postgres has no
+// rate-limit class of its own, so there is deliberately no ErrRateLimited
+// mapping here; guessing one in would misrepresent what the server actually
+// reported. Any other SQLSTATE - including ones not yet added to this switch
+// - passes through unclassified and reports unknown, which is the honest
+// answer for a code this provider does not recognize rather than a guess
+// that might send an operator down the wrong path. A non-PgError (for
+// example a raw dial failure) also passes through unclassified, since there
+// is no SQLSTATE to read.
+func classifyPostgres(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+	var sentinel error
+	switch pgErr.Code {
+	case "42501": // insufficient_privilege
+		sentinel = mamori.ErrPermissionDenied
+	case "28P01", "28000": // invalid_password, invalid_authorization_specification
+		sentinel = mamori.ErrUnauthenticated
+	case "53300", "57P03", "08006", "08001", "08004":
+		// too_many_connections, cannot_connect_now, connection_failure,
+		// sqlclient_unable_to_establish_sqlconnection,
+		// sqlserver_rejected_establishment_of_sqlconnection
+		sentinel = mamori.ErrUnavailable
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
+}
+
 // mapScanErr converts a row Scan error into the mamori-typed error, mapping the
-// no-rows case to ErrNotFound.
+// no-rows case to ErrNotFound. The no-rows branch has no *pgconn.PgError to
+// preserve (pgx.ErrNoRows is a plain sentinel, not a server response), so it
+// keeps a single %w rather than double-wrapping. Every other Scan error is
+// routed through classifyPostgres so a permission, auth, or connection
+// failure surfaces as its mamori kind instead of unknown.
 func mapScanErr(keyval string, err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("postgres: key %q not found: %w", keyval, mamori.ErrNotFound)
 	}
-	return fmt.Errorf("postgres: query key %q: %w", keyval, err)
+	return fmt.Errorf("postgres: query key %q: %w", keyval, classifyPostgres(err))
 }
 
 // Watch implements mamori.WatchableProvider using PostgreSQL LISTEN/NOTIFY. It

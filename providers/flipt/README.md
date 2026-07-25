@@ -69,9 +69,26 @@ Both `FLIPT_URL` and `FLIPT_TOKEN` are read lazily on first resolve, so the prov
 
 Flipt has no native change-notification API for evaluation, so this provider is not watchable - mamori wraps it in its polling adapter automatically (interval + jitter). Configure with `mamori.WithPollInterval`.
 
+## Error classification
+
+Beyond the not-found and invalid-type cases above, other evaluation failures are classified by gRPC status so `mamori.ErrorKind` can distinguish them:
+
+| gRPC code | mamori kind |
+| --- | --- |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `NotFound`, `InvalidArgument` | not classified here - handled separately, see below |
+| anything else | `unknown` |
+
+`NotFound` and `InvalidArgument` are deliberately excluded from this table even though they are real, meaningful codes: `NotFound` already drives `mamori.ErrNotFound` before classification ever runs, and `InvalidArgument` is Flipt's flag-type-mismatch signal (a variant call on a boolean flag or vice versa), consumed internally to trigger the boolean/variant fallback, not surfaced to the caller as an error. Remapping either here would fight those two call sites.
+
+The Flipt-specific typed errors `flipterrors.ErrUnauthenticated` and `flipterrors.ErrUnauthorized` are also checked (mapping to `unauthenticated` and `permission_denied` respectively), the same belt-and-suspenders way the not-found and invalid-type checks already look for their typed counterparts. Both the HTTP and gRPC SDK transports normally surface backend errors as genuine gRPC status errors already, so `status.Code` is the primary, authoritative signal; codes not listed above (including `Unknown` and `Internal`, Flipt's server-side catch-alls) report `unknown` rather than being guessed at.
+
 ## What is verified
 
-- ✅ Unit tests and the [`providertest`](../../providertest) conformance kit run against an in-memory fake of the Flipt evaluation client (injected through a minimal `evaluator` interface), so no network is required. Boolean flags, variant flags, variant attachments, entity selection, and `ErrNotFound` semantics are all covered.
+- ✅ Unit tests and the [`providertest`](../../providertest) conformance kit run against an in-memory fake of the Flipt evaluation client (injected through a minimal `evaluator` interface), so no network is required. Boolean flags, variant flags, variant attachments, entity selection, `ErrNotFound` semantics, and error classification (gRPC status codes wired through `Resolve`, not just the classifier function in isolation) are all covered.
 - ⚠️ Live Flipt behavior is exercised by `//go:build integration` tests requiring a reachable Flipt server and a pre-created flag, **not** run in CI by default. See `flipt_integration_test.go` for the required environment variables.
 
 Passes the mamori conformance kit (`SkipWatch: true`). 🛡️

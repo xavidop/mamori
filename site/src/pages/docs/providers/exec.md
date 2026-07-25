@@ -55,3 +55,16 @@ The `exec:` scheme must be enabled per call with `WithExecProvider()` (see above
 - Output is marked `Sensitive`. A non-zero exit status becomes an error (last-good value is retained under `Watch`).
 
 Because there is no native change signal, mamori re-runs the command on `WithPollInterval`.
+
+## Error classification
+
+| Condition | mamori kind |
+|---|---|
+| Empty command (nothing after `exec:`) | `invalid` |
+| Binary not found on `PATH` | `unknown` |
+| Permission denied executing the binary | `permission_denied` |
+| Command runs and exits non-zero, or any other failure | `unknown` |
+
+A binary missing from `PATH` reports `unknown`, not `not_found`: it means mamori could not even attempt to fetch the value, not that the value itself is absent, so it must never trigger `default:` or `optional` handling.
+
+A non-zero exit also reports `unknown` because mamori cannot tell whether it failed from a missing value, a permission problem, or a bug in the script.

@@ -57,6 +57,22 @@ The object name may contain slashes, so `env/prod/settings.yaml` is a single nam
 
 mamori polls (`WithPollInterval` + jitter) using the generation. For push, GCS Pub/Sub object-change notifications can trigger an on-demand reload.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| Condition | mamori kind |
+| --- | --- |
+| `storage.ErrObjectNotExist`, `storage.ErrBucketNotExist`, HTTP 404 | `not_found` |
+| HTTP 403 | `permission_denied` |
+| HTTP 401 | `unauthenticated` |
+| HTTP 429 | `rate_limited` |
+| HTTP 5xx | `unavailable` |
+| HTTP 400 | `invalid` |
+| anything else | `unknown` |
+
+The GCS Go client is REST-based: a missing object surfaces as `storage.ErrObjectNotExist`, and every other failure surfaces as a `*googleapi.Error` carrying the HTTP status. The classifier also matches `storage.ErrBucketNotExist`, but this provider's read path cannot actually produce it - a missing bucket is reported the same way as a missing object, as `storage.ErrObjectNotExist` - so that case is defensive, not something you will see through this provider today. Only the statuses above are mapped; anything else reports `unknown` rather than being guessed at. The original SDK error stays reachable with `errors.As`.
+
 ## Configuration
 
 ```go

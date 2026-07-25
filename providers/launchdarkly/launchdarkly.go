@@ -28,6 +28,13 @@
 // flag does not exist in the environment), Resolve returns an error satisfying
 // errors.Is(err, mamori.ErrNotFound).
 //
+// Other evaluation failures: LaunchDarkly's per-evaluation error vocabulary is
+// thin. The only other reason with an SDK-documented, unambiguous meaning is
+// CLIENT_NOT_READY (the client had not finished connecting), which Resolve
+// reports as errors.Is(err, mamori.ErrUnavailable). Every other evaluation
+// failure is returned unclassified rather than guessed at; see classifyReason's
+// doc comment for why.
+//
 // The provider implements mamori.WatchableProvider using the SDK's native flag
 // tracker. Watch subscribes with GetFlagTracker().AddFlagValueChangeListener,
 // which streams an event whenever the flag's value for the evaluation context
@@ -229,7 +236,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, fmt.Errorf("launchdarkly: flag %q: %w", ref.Path, mamori.ErrNotFound)
 	}
 	if evalErr != nil {
-		return mamori.Value{}, fmt.Errorf("launchdarkly: evaluate flag %q: %w", ref.Path, evalErr)
+		return mamori.Value{}, fmt.Errorf("launchdarkly: evaluate flag %q: %w", ref.Path, classifyReason(detail.Reason, evalErr))
 	}
 	return valueFor(val, ref)
 }
@@ -283,6 +290,47 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 func isFlagNotFound(reason ldreason.EvaluationReason) bool {
 	return reason.GetKind() == ldreason.EvalReasonError &&
 		reason.GetErrorKind() == ldreason.EvalErrorFlagNotFound
+}
+
+// classifyReason maps a per-evaluation error reason onto a mamori
+// classification sentinel, wrapping err with two %w verbs so both the sentinel
+// and the original SDK error survive errors.Is/errors.As (see the two-verb
+// convention documented on mamori's classification sentinels).
+//
+// LaunchDarkly's per-evaluation error vocabulary (EvaluationReason.GetErrorKind,
+// besides FLAG_NOT_FOUND, which isFlagNotFound handles before this function is
+// ever reached) is thin compared to a transport-level API such as a gRPC
+// status: only CLIENT_NOT_READY has an SDK-documented meaning that maps
+// unambiguously onto an existing mamori Kind. It means the caller evaluated a
+// flag before the client finished connecting to LaunchDarkly, which is exactly
+// what KindUnavailable denotes.
+//
+// The remaining error kinds are deliberately left unmapped rather than guessed
+// at, because their real-world cause cannot be confirmed from the reason alone:
+//
+//   - MALFORMED_FLAG is an internal inconsistency in the flag's rule data (e.g.
+//     a rule pointing at a nonexistent variation) - a LaunchDarkly-side data
+//     problem, not clearly a permission, availability, or rate-limit condition.
+//   - USER_NOT_SPECIFIED means the evaluation context was invalid or
+//     uninitialized; this provider always builds its own context (evalContext),
+//     so this should not occur in practice, and guessing at what it would mean
+//     if it somehow did is not worth doing.
+//   - EXCEPTION is the SDK's catch-all for an unexpected internal fault, with no
+//     reliable signal about which mamori kind applies.
+//   - WRONG_TYPE never applies here: JSONVariationDetail accepts any value type,
+//     so the SDK never reports it for this call.
+//
+// Any other reason kind, including one a future SDK version might add, passes
+// err through unclassified - the same "admit what is not known" choice every
+// other mamori classifier makes for an unrecognized code.
+func classifyReason(reason ldreason.EvaluationReason, err error) error {
+	if err == nil {
+		return nil
+	}
+	if reason.GetKind() == ldreason.EvalReasonError && reason.GetErrorKind() == ldreason.EvalErrorClientNotReady {
+		return fmt.Errorf("%w: %w", mamori.ErrUnavailable, err)
+	}
+	return err
 }
 
 // valueFor converts an evaluated flag value into a mamori.Value, applying

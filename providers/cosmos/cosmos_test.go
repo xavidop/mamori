@@ -21,6 +21,12 @@ type fakeStore struct {
 	mu    sync.Mutex
 	items map[string]*fakeItem
 
+	// fails maps a "<database>/<container>/<id>" key (matching put's key
+	// exactly) to an error ReadItem should return instead of the stored item,
+	// until clear removes the entry. It powers the providertest
+	// ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+	fails map[string]error
+
 	// noETag makes ReadItem return an empty ETag, exercising the "_etag" /
 	// content-hash version fallbacks.
 	noETag bool
@@ -35,7 +41,9 @@ type fakeItem struct {
 	n    int
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{items: map[string]*fakeItem{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{items: map[string]*fakeItem{}, fails: map[string]error{}}
+}
 
 func key(database, container, id string) string {
 	return database + "/" + container + "/" + id
@@ -54,6 +62,23 @@ func (f *fakeStore) put(database, container, id, val string) {
 	it.n++
 }
 
+// fail makes the next ReadItem for "<database>/<container>/<id>" return err,
+// until clear(database, container, id) is called. It powers the providertest
+// ErrorClassification case. The key form matches put's exactly, so fail
+// targets the same entry Seed populated.
+func (f *fakeStore) fail(database, container, id string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key(database, container, id)] = err
+}
+
+// clear cancels a previously injected fail(database, container, id, err).
+func (f *fakeStore) clear(database, container, id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key(database, container, id))
+}
+
 func (f *fakeStore) ReadItem(ctx context.Context, database, container, id, partitionKey string) ([]byte, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
@@ -61,7 +86,11 @@ func (f *fakeStore) ReadItem(ctx context.Context, database, container, id, parti
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastPK = partitionKey
-	it, ok := f.items[key(database, container, id)]
+	k := key(database, container, id)
+	if err, ok := f.fails[k]; ok {
+		return nil, "", err
+	}
+	it, ok := f.items[k]
 	if !ok {
 		return nil, "", mamori.ErrNotFound
 	}
@@ -313,6 +342,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, k, val string) error {
 			fake.put(confDatabase, confContainer, k, val)
+			return nil
+		},
+		Fail: func(_ context.Context, k string, err error) error {
+			fake.fail(confDatabase, confContainer, k, err)
+			return nil
+		},
+		Clear: func(_ context.Context, k string) error {
+			fake.clear(confDatabase, confContainer, k)
 			return nil
 		},
 		SkipWatch: true,

@@ -120,7 +120,7 @@ func (p *Provider) Scheme() string { return Scheme }
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
 	vault, secret, ok := strings.Cut(ref.Path, "/")
 	if !ok || vault == "" || secret == "" {
-		return mamori.Value{}, fmt.Errorf("azure-kv: ref %q must be azure-kv://<vault-name>/<secret-name>[#key][?version=v]", ref.Raw)
+		return mamori.Value{}, fmt.Errorf("azure-kv: ref %q must be azure-kv://<vault-name>/<secret-name>[#key][?version=v]: %w", ref.Raw, mamori.ErrInvalid)
 	}
 
 	client, err := p.clientFor(vault)
@@ -132,9 +132,9 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	resp, err := client.GetSecret(ctx, secret, version, nil)
 	if err != nil {
 		if isNotFound(err) {
-			return mamori.Value{}, fmt.Errorf("azure-kv: secret %q in vault %q not found: %w", secret, vault, mamori.ErrNotFound)
+			return mamori.Value{}, fmt.Errorf("azure-kv: secret %q in vault %q not found: %w: %w", secret, vault, mamori.ErrNotFound, err)
 		}
-		return mamori.Value{}, err
+		return mamori.Value{}, fmt.Errorf("azure-kv: resolve %q: %w", ref.Path, classifyAzure(err))
 	}
 	if resp.Value == nil {
 		return mamori.Value{}, fmt.Errorf("azure-kv: secret %q in vault %q has no value: %w", secret, vault, mamori.ErrNotFound)
@@ -214,4 +214,38 @@ func isNotFound(err error) bool {
 		return respErr.StatusCode == http.StatusNotFound
 	}
 	return false
+}
+
+// classifyAzure maps a Key Vault HTTP status onto a mamori classification
+// sentinel. Key Vault returns 403 both for a token that lacks an access policy
+// and for a firewall rejection; both are correctly permission_denied.
+//
+// A transport failure is not an *azcore.ResponseError at all and is left
+// unclassified, since it could equally be a provider bug as a backend outage.
+func classifyAzure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var respErr *azcore.ResponseError
+	if !errors.As(err, &respErr) {
+		return err
+	}
+	var sentinel error
+	switch code := respErr.StatusCode; {
+	case code == http.StatusNotFound:
+		sentinel = mamori.ErrNotFound
+	case code == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case code == http.StatusUnauthorized:
+		sentinel = mamori.ErrUnauthenticated
+	case code == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case code >= 500:
+		sentinel = mamori.ErrUnavailable
+	case code == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }

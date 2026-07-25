@@ -24,13 +24,36 @@ import (
 // under a composite storage key derived from their primary-key attributes so the
 // same GetItem key lookup works for simple and composite primary keys.
 type fakeDDB struct {
-	mu       sync.Mutex
-	items    map[string]map[string]ddbtypes.AttributeValue
-	errOnGet error // when set, GetItem returns it (to exercise error mapping)
+	mu    sync.Mutex
+	items map[string]map[string]ddbtypes.AttributeValue
+	fails map[string]error // storageKey -> injected error, until cleared
 }
 
 func newFakeDDB() *fakeDDB {
-	return &fakeDDB{items: map[string]map[string]ddbtypes.AttributeValue{}}
+	return &fakeDDB{
+		items: map[string]map[string]ddbtypes.AttributeValue{},
+		fails: map[string]error{},
+	}
+}
+
+// fail makes the next GetItem for table's item keyed by the single
+// partition-key attribute "pk" = pk return err, until clear(table, pk) is
+// called. It keys exactly as put/GetItem do for the default single-partition-key
+// shape (the shape every ref in this package's TestConformance and
+// TestResourceNotFoundMapsToErrNotFound uses), so a Fail injected for one key
+// cannot leak into another the way a blanket "fail every GetItem" field would.
+// It powers the providertest ErrorClassification case.
+func (f *fakeDDB) fail(table, pk string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[storageKey(table, map[string]ddbtypes.AttributeValue{"pk": s(pk)})] = err
+}
+
+// clear cancels a previously injected fail(table, pk, err).
+func (f *fakeDDB) clear(table, pk string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, storageKey(table, map[string]ddbtypes.AttributeValue{"pk": s(pk)}))
 }
 
 // put stores item under the given table, keyed by the listed key attribute names.
@@ -52,10 +75,11 @@ func (f *fakeDDB) GetItem(ctx context.Context, in *awsdynamodb.GetItemInput, _ .
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.errOnGet != nil {
-		return nil, f.errOnGet
+	key := storageKey(awssdk.ToString(in.TableName), in.Key)
+	if err, ok := f.fails[key]; ok {
+		return nil, err
 	}
-	item, ok := f.items[storageKey(awssdk.ToString(in.TableName), in.Key)]
+	item, ok := f.items[key]
 	if !ok {
 		return &awsdynamodb.GetItemOutput{}, nil // no Item -> not found
 	}
@@ -122,6 +146,14 @@ func TestConformance(t *testing.T) {
 		Ref:    func(key string) string { return "dynamodb://conf/" + key + "#value" },
 		Seed:   seed,
 		Mutate: seed, // put overwrites, so seed doubles as mutate
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail("conf", key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear("conf", key)
+			return nil
+		},
 	})
 }
 
@@ -388,7 +420,7 @@ func TestResolveBadPath(t *testing.T) {
 
 func TestResourceNotFoundMapsToErrNotFound(t *testing.T) {
 	fake := newFakeDDB()
-	fake.errOnGet = &ddbtypes.ResourceNotFoundException{Message: awssdk.String("Requested resource not found")}
+	fake.fail("missing-table", "k", &ddbtypes.ResourceNotFoundException{Message: awssdk.String("Requested resource not found")})
 	p := newWithClient(fake)
 
 	_, err := p.Resolve(context.Background(), mustParse(t, "dynamodb://missing-table/k"))

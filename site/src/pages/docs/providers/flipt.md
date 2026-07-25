@@ -50,6 +50,21 @@ A boolean flag resolves to `true` / `false`; a variant flag resolves to the matc
 
 Flipt is evaluated over its API; mamori polls (`WithPollInterval` + jitter).
 
+## Error classification
+
+Beyond the not-found case, other evaluation failures are classified by gRPC status:
+
+| gRPC code | mamori kind |
+| --- | --- |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `NotFound`, `InvalidArgument` | not classified here (deliberately) |
+| anything else | `unknown` |
+
+`NotFound` already drives not-found before classification runs, and `InvalidArgument` is Flipt's flag-type-mismatch signal, consumed internally to trigger the boolean/variant fallback rather than surfaced as an error, so neither is remapped here. The typed errors `flipterrors.ErrUnauthenticated` and `flipterrors.ErrUnauthorized` are also checked, mapping to `unauthenticated` and `permission_denied` respectively.
+
 ## Configuration
 
 ```go
@@ -61,4 +76,4 @@ mamori.WithProvider(fliptprov.New(
 ))
 ```
 
-Verified with an injected fake (un-seeded flags resolve to not-found); live behavior is covered by `//go:build integration` tests.
+Verified with an injected fake (un-seeded flags resolve to not-found, and injected gRPC status errors exercise error classification through `Resolve`); live behavior is covered by `//go:build integration` tests.

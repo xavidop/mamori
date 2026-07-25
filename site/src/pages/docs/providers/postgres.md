@@ -79,4 +79,17 @@ import pgprov "github.com/xavidop/mamori/providers/postgres"
 mamori.WithProvider(pgprov.New(pgprov.WithDSN(os.Getenv("DATABASE_URL"))))
 ```
 
+## Error classification
+
+Beyond the not-found case, query failures are classified by SQLSTATE so `mamori.ErrorKind` can distinguish them:
+
+| SQLSTATE | mamori kind |
+|---|---|
+| `42501` (insufficient_privilege) | `permission_denied` |
+| `28P01` (invalid_password), `28000` (invalid_authorization_specification) | `unauthenticated` |
+| `53300` (too_many_connections), `57P03` (cannot_connect_now), `08006`, `08001`, `08004` (connection failures) | `unavailable` |
+| anything else | `unknown` |
+
+PostgreSQL has no rate-limit SQLSTATE class, so nothing maps to `rate_limited`. Codes not listed above report `unknown` rather than being guessed at, and the original `*pgconn.PgError` stays reachable with `errors.As`. Because the pool is lazy, this is what turns a bad password or a refused connection, which only surface at query time, into a diagnosable kind instead of a bare `unknown`.
+
 Verified with an in-memory fake (including a test that the identifier allowlist rejects malicious names); live behavior is covered by `//go:build integration` tests.

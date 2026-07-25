@@ -24,7 +24,9 @@ package consul
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -159,7 +161,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	q := (&api.QueryOptions{}).WithContext(ctx)
 	pair, _, err := kv.Get(ref.Path, q)
 	if err != nil {
-		return mamori.Value{}, fmt.Errorf("consul: get %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("consul: get %q: %w", ref.Path, classifyConsul(err))
 	}
 	return valueFor(pair, ref)
 }
@@ -203,7 +205,7 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 				return
 			}
 			if err != nil {
-				if !emit(mamori.Update{Err: fmt.Errorf("consul: watch %q: %w", ref.Path, err)}) {
+				if !emit(mamori.Update{Err: fmt.Errorf("consul: watch %q: %w", ref.Path, classifyConsul(err))}) {
 					return
 				}
 				select {
@@ -238,6 +240,49 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 		}
 	}()
 	return ch, nil
+}
+
+// classifyConsul maps a Consul HTTP status onto a mamori classification
+// sentinel. Consul's HTTP API reports every non-2xx response as an
+// api.StatusError carrying the raw status code (the client returns it by
+// value, not by pointer - see api.KV.getInternal / generateUnexpectedResponseCodeError
+// in github.com/hashicorp/consul/api), so the mapping is a straight
+// HTTP-status switch, the same shape as classifyAzure.
+//
+// There is no not-found row here: KV.Get already turns a 404 into a nil
+// *api.KVPair with a nil error (see valueFor), so classifyConsul never
+// observes one for a plain Get.
+//
+// 403 (ACL token lacks permission on the key) is the case a real deployment
+// is expected to hit; it is the confirmed common case for this endpoint. 401
+// and 429 are mapped on ordinary HTTP semantics - they are defensible
+// mappings, not a claim that the Consul KV endpoint is known to emit them;
+// whether it does depends on how ACLs and rate limiting are configured for a
+// given cluster.
+func classifyConsul(err error) error {
+	if err == nil {
+		return nil
+	}
+	var se api.StatusError
+	if !errors.As(err, &se) {
+		return err
+	}
+	var sentinel error
+	switch code := se.Code; {
+	case code == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case code == http.StatusUnauthorized:
+		sentinel = mamori.ErrUnauthenticated
+	case code == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case code >= 500:
+		sentinel = mamori.ErrUnavailable
+	case code == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // update turns a KV pair into a watch Update, mapping a missing key to a

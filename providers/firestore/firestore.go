@@ -186,6 +186,38 @@ func (p *Provider) Close() error {
 	return err
 }
 
+// classifyFirestore maps a gRPC status onto a mamori classification sentinel.
+// The Firestore client is gRPC-based like Secret Manager's, so codes map one to
+// one and no string matching is needed.
+//
+// DeadlineExceeded maps to unavailable because a request that timed out is a
+// backend that did not respond in time, which is what unavailable denotes.
+// Codes with no clear mamori meaning (Internal, Unimplemented, Aborted,
+// FailedPrecondition) are returned unclassified rather than guessed at.
+func classifyFirestore(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sentinel error
+	switch status.Code(err) {
+	case codes.NotFound:
+		sentinel = mamori.ErrNotFound
+	case codes.PermissionDenied:
+		sentinel = mamori.ErrPermissionDenied
+	case codes.Unauthenticated:
+		sentinel = mamori.ErrUnauthenticated
+	case codes.Unavailable, codes.DeadlineExceeded:
+		sentinel = mamori.ErrUnavailable
+	case codes.ResourceExhausted:
+		sentinel = mamori.ErrRateLimited
+	case codes.InvalidArgument:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
+}
+
 // splitPath splits a ref path of the form "<collection>/<doc>" into its parts.
 func splitPath(ref mamori.Ref) (collection, doc string, err error) {
 	collection, doc, ok := strings.Cut(ref.Path, "/")
@@ -214,9 +246,9 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	snap, err := b.Get(ctx, collection, doc)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			return mamori.Value{}, fmt.Errorf("firestore: document %q not found: %w", ref.Path, mamori.ErrNotFound)
+			return mamori.Value{}, fmt.Errorf("firestore: document %q not found: %w: %w", ref.Path, mamori.ErrNotFound, err)
 		}
-		return mamori.Value{}, fmt.Errorf("firestore: get %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("firestore: get %q: %w", ref.Path, classifyFirestore(err))
 	}
 	return valueFor(snap, ref)
 }
@@ -263,8 +295,11 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 			}
 			if err != nil {
 				// The listener failed for a non-cancellation reason; surface it
-				// and terminate (the stream is no longer usable).
-				emit(mamori.Update{Err: fmt.Errorf("firestore: watch %q: %w", ref.Path, err)})
+				// and terminate (the stream is no longer usable). Classified so a
+				// permission change or backend outage mid-watch reports the same
+				// kind Resolve would report for the same underlying gRPC status,
+				// instead of leaking through as unknown.
+				emit(mamori.Update{Err: fmt.Errorf("firestore: watch %q: %w", ref.Path, classifyFirestore(err))})
 				return
 			}
 			if !emit(valueUpdate(snap, ref)) {

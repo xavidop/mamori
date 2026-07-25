@@ -31,9 +31,12 @@ package aws
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/smithy-go"
 	"github.com/xavidop/mamori"
 )
 
@@ -70,6 +73,48 @@ func newOptions(opts []Option) options {
 		fn(&o)
 	}
 	return o
+}
+
+// classifyAWS maps an AWS SDK error onto a mamori classification sentinel.
+//
+// Both modeled service exceptions and unmodeled API errors satisfy
+// smithy.APIError, so a single ErrorCode switch covers both. That matters for
+// Secrets Manager in particular, which has no modeled AccessDenied type in this
+// SDK version, so the code string is the only way to detect a denial.
+//
+// Unrecognized codes are returned wrapped but unclassified, reporting as
+// unknown. Guessing at a code's meaning would send an operator down the wrong
+// path, which is worse than admitting mamori does not know.
+func classifyAWS(err error) error {
+	if err == nil {
+		return nil
+	}
+	var api smithy.APIError
+	if !errors.As(err, &api) {
+		return err
+	}
+	var sentinel error
+	switch api.ErrorCode() {
+	case "ResourceNotFoundException", "ParameterNotFound", "ParameterVersionNotFound":
+		sentinel = mamori.ErrNotFound
+	case "AccessDeniedException":
+		sentinel = mamori.ErrPermissionDenied
+	case "UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException",
+		"MissingAuthenticationToken", "IncompleteSignature":
+		sentinel = mamori.ErrUnauthenticated
+	case "ThrottlingException", "Throttling", "TooManyRequestsException",
+		"RequestLimitExceeded":
+		sentinel = mamori.ErrRateLimited
+	case "InternalServiceError", "InternalServerError", "InternalFailure",
+		"ServiceUnavailable", "ServiceUnavailableException":
+		sentinel = mamori.ErrUnavailable
+	case "InvalidParameterException", "InvalidRequestException", "ValidationException",
+		"InvalidParameterValue", "InvalidKeyId":
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // init registers a lazily-initialized instance of each provider so that

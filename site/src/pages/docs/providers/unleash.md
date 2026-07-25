@@ -51,6 +51,10 @@ A toggle that does not exist resolves to not-found.
 
 The Unleash client refreshes its toggle state on its own interval; mamori polls (`WithPollInterval` + jitter) on top of that.
 
+## Error classification
+
+Unleash's client surface returns bool/string values, not errors, so this provider has no error vocabulary beyond not-found. It is conformance-exempt from the `ErrorClassification` case via `providertest.Config.NoResolveErrors`.
+
 ## Configuration
 
 ```go

@@ -40,7 +40,9 @@ import (
 // Instrument names emitted by the meter adapter.
 const (
 	// MetricResolveDuration is a histogram (unit: ms) of provider resolve
-	// latency, with attributes "scheme" and "status" (ok|error).
+	// latency, with attributes "scheme" and "status" (ok|error). On failure,
+	// "mamori.error.kind" is also present; the attribute's presence alone
+	// selects failed resolves.
 	MetricResolveDuration = "mamori.resolve.duration"
 	// MetricRefreshCount is a counter of reconciled value changes, with
 	// attribute "scheme".
@@ -57,6 +59,11 @@ const (
 
 	statusOK    = "ok"
 	statusError = "error"
+
+	// attrErrorKind carries the mamori.Kind classification of a failed resolve.
+	// It is absent on success rather than set to an empty or "none" value, so
+	// the attribute's presence alone selects failures.
+	attrErrorKind = "mamori.error.kind"
 )
 
 // Span name and attribute keys emitted by the tracer adapter.
@@ -125,19 +132,25 @@ func NewMeter(m metric.Meter) (mamori.Meter, error) {
 }
 
 // RecordResolve records the resolve duration (in milliseconds) tagged with the
-// scheme and a status of "ok" or "error".
+// scheme and a status of "ok" or "error". A failed resolve additionally carries
+// mamori.error.kind, so a dashboard can separate a denied permission from a
+// throttled request without parsing error strings.
 func (m *meter) RecordResolve(scheme string, dur time.Duration, err error) {
 	status := statusOK
 	if err != nil {
 		status = statusError
 	}
+	attrs := []attribute.KeyValue{
+		attribute.String(attrScheme, scheme),
+		attribute.String(attrStatus, status),
+	}
+	if err != nil {
+		attrs = append(attrs, attribute.String(attrErrorKind, string(mamori.ErrorKind(err))))
+	}
 	m.resolveDuration.Record(
 		m.ctx,
 		float64(dur)/float64(time.Millisecond),
-		metric.WithAttributes(
-			attribute.String(attrScheme, scheme),
-			attribute.String(attrStatus, status),
-		),
+		metric.WithAttributes(attrs...),
 	)
 }
 
@@ -164,8 +177,9 @@ func NewTracer(t trace.Tracer) mamori.Tracer {
 
 // StartResolve starts a span named "mamori.resolve" with attributes
 // "mamori.scheme" and "mamori.ref". The returned finish function ends the span:
-// on a non-nil error it records the error and sets the span status to
-// codes.Error; otherwise it sets codes.Ok.
+// on a non-nil error it records the error, tags the span with mamori.error.kind
+// (see RecordResolve), and sets the span status to codes.Error; otherwise it
+// sets codes.Ok.
 func (tr *tracer) StartResolve(ctx context.Context, scheme, ref string) (context.Context, func(err error)) {
 	ctx, span := tr.t.Start(
 		ctx,
@@ -178,6 +192,7 @@ func (tr *tracer) StartResolve(ctx context.Context, scheme, ref string) (context
 	return ctx, func(err error) {
 		if err != nil {
 			span.RecordError(err)
+			span.SetAttributes(attribute.String(attrErrorKind, string(mamori.ErrorKind(err))))
 			span.SetStatus(codes.Error, err.Error())
 		} else {
 			span.SetStatus(codes.Ok, "")

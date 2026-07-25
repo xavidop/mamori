@@ -52,6 +52,37 @@ type Config struct {
   secrets. Wrap a field in `secret.String` if you want redaction anyway.
 - A missing key returns an error satisfying `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+A missing key is **not** an SDK error at all: Consul's `KV.Get` returns
+`(nil, meta, nil)` for a 404, and the provider turns that nil pair directly
+into `mamori.ErrNotFound` (see [Value semantics](#value-semantics) above).
+There is no not-found row in the table below because the classifier never
+sees that case.
+
+Every other non-2xx response from Consul's HTTP API surfaces as an
+`api.StatusError{Code, Body}` carrying the raw HTTP status, so failures other
+than not-found are classified by status code, the same way as the HTTP-based
+providers (e.g. Azure Key Vault):
+
+| HTTP status | mamori kind |
+| --- | --- |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+**403 (an ACL token denied for the key) is the confirmed common case** - it is
+what a live Consul cluster is expected to return when a token lacks `key:read`
+on the requested path. 401 and 429 are mapped on ordinary HTTP semantics, not
+because the Consul KV endpoint has been observed to emit them: whether it
+actually does depends on how ACLs and rate limiting are configured for a given
+cluster, so treat those two rows as defensible rather than confirmed. Codes
+not listed above report `unknown` rather than being guessed at, and the
+original `api.StatusError` stays reachable with `errors.As`.
+
 ## Authentication & configuration
 
 By default the provider uses Consul's standard environment variables via

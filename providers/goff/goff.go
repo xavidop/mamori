@@ -232,11 +232,11 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, fmt.Errorf("goff: flag %q: %w", ref.Path, mamori.ErrNotFound)
 	}
 	if err != nil {
-		return mamori.Value{}, fmt.Errorf("goff: evaluate flag %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("goff: evaluate flag %q: %w", ref.Path, classifyGoff(res, err))
 	}
 	if res.Failed {
-		return mamori.Value{}, fmt.Errorf("goff: flag %q evaluation failed (reason=%s, errorCode=%s): %s",
-			ref.Path, res.Reason, res.ErrorCode, res.ErrorDetails)
+		return mamori.Value{}, fmt.Errorf("goff: flag %q evaluation failed (reason=%s, errorCode=%s): %w",
+			ref.Path, res.Reason, res.ErrorCode, classifyGoff(res, nil))
 	}
 
 	b, err := render(res.Value)
@@ -277,6 +277,50 @@ func isNotFound(res model.RawVarResult, err error) bool {
 		}
 	}
 	return false
+}
+
+// classifyGoff maps a RawVariation evaluation failure onto a mamori
+// classification sentinel by switching on its OpenFeature-style flag.ErrorCode
+// (model.RawVarResult.ErrorCode). It is only ever called once the caller has
+// already established that the evaluation failed - either err is non-nil, or
+// res.Failed is true - so unlike classifyPostgres/classifyAWS/classifyGCP it
+// has no nil/no-error case to pass through: it always returns a non-nil error.
+//
+// Only the codes a config read can plausibly hit are mapped: PROVIDER_NOT_READY
+// (the flag store has not finished its initial load - a transient
+// unavailability, not a missing flag) and the family of malformed-request codes
+// - PARSE_ERROR, TYPE_MISMATCH, INVALID_CONTEXT, and TARGETING_KEY_MISSING -
+// which all mean the evaluation request itself was invalid rather than the flag
+// being absent. GENERAL is deliberately left unclassified: go-feature-flag uses
+// it as a catch-all for failures that fit no other code, so mapping it to a
+// specific kind would be a guess rather than an honest read of what the SDK
+// reported. FLAG_NOT_FOUND is handled by isNotFound before this function is
+// ever called, and any other or empty code also passes through unclassified.
+//
+// err is the error RawVariation returned alongside res, if any; when non-nil it
+// is preserved with %w so a caller that already reaches it with errors.As or
+// errors.Is keeps working. When err is nil (a res.Failed evaluation with no
+// accompanying Go error, which is how a live go-feature-flag client reports
+// most evaluation failures), res.ErrorDetails becomes the wrapped error's
+// message instead.
+func classifyGoff(res model.RawVarResult, err error) error {
+	var sentinel error
+	switch res.ErrorCode {
+	case flag.ErrorCodeProviderNotReady:
+		sentinel = mamori.ErrUnavailable
+	case flag.ErrorCodeParseError, flag.ErrorCodeTypeMismatch,
+		flag.ErrorCodeInvalidContext, flag.ErrorCodeTargetingKeyMissing:
+		sentinel = mamori.ErrInvalid
+	default:
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%s", res.ErrorDetails)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", sentinel, err)
+	}
+	return fmt.Errorf("%w: %s", sentinel, res.ErrorDetails)
 }
 
 // render converts an evaluated variation value into its mamori byte form:

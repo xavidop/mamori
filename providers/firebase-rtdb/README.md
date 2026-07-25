@@ -61,6 +61,15 @@ type Config struct {
 - A `null` or missing path returns an error satisfying
   `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+Beyond the not-found case above, this provider has no Firebase-specific SDK
+error taxonomy to map, so any other backend failure (a rejected REST call, a
+network error, ...) reports `unknown` via `mamori.ErrorKind`. `Resolve` still
+wraps the backend error with `%w`, so the classification chain (`errors.Is`,
+`errors.As`, and any kind a *caller* attaches to the underlying error) is
+preserved rather than flattened.
+
 ## Authentication & configuration
 
 Authentication uses **Application Default Credentials (ADC)**:

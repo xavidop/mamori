@@ -11,6 +11,8 @@
 //	        Ref:    func(key string) string { return "myscheme://" + key },
 //	        Seed:   func(ctx context.Context, key, val string) error { ... },
 //	        Mutate: func(ctx context.Context, key, val string) error { ... },
+//	        Fail:   func(ctx context.Context, key string, err error) error { ... },
+//	        Clear:  func(ctx context.Context, key string) error { ... },
 //	    })
 //	}
 package providertest
@@ -18,6 +20,7 @@ package providertest
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +57,44 @@ type Config struct {
 	// EventuallyTimeout bounds how long watch/poll tests wait for a change to
 	// propagate. Defaults to 5s.
 	EventuallyTimeout time.Duration
+
+	// Fail makes the backend return err for key on the next Resolve, until
+	// Clear is called for that key. It powers the ErrorClassification case,
+	// which verifies the provider preserves a classified error's errors.Is
+	// chain rather than flattening it.
+	//
+	// Extending Fail to also affect any active Watch is reserved for future
+	// use: no conformance case exercises the watch path today, so a provider
+	// that only honors Fail on Resolve is fully conforming.
+	//
+	// The common real bug this catches is a provider that catches an error and
+	// reformats it with fmt.Errorf("...: %v", err), which destroys the chain and
+	// makes every failure report KindUnknown.
+	//
+	// Fail (and Clear) are required unless NoResolveErrors is set. A provider
+	// that supplies neither fails ErrorClassification with a hard error rather
+	// than being silently skipped.
+	Fail func(ctx context.Context, key string, err error) error
+
+	// Clear cancels a Fail for key. Required whenever Fail is set.
+	//
+	// Without it, a Fail injected for one key stays active for the rest of the
+	// run: it leaks into later conformance cases, which then resolve that key
+	// (or reuse the provider instance) and observe the injected failure instead
+	// of their own expected behavior, corrupting their results. RunErrorClassification
+	// hard-fails rather than skips when Fail is set but Clear is nil, precisely
+	// so this leak cannot happen silently.
+	Clear func(ctx context.Context, key string) error
+
+	// NoResolveErrors declares that this provider's Resolve can never return a
+	// classifiable error beyond ErrNotFound, because its client surfaces no
+	// per-key error (existence is a bool or a sentinel value). It exempts the
+	// provider from the ErrorClassification case, which has nothing to inject.
+	// Set it deliberately, with a comment naming why: Fail and Clear are
+	// required, and a provider that supplies neither Fail nor NoResolveErrors
+	// is a hard error, so this exemption is explicit and greppable, never a
+	// silent skip.
+	NoResolveErrors bool
 }
 
 func (c Config) key(name string) string {
@@ -88,6 +129,7 @@ func Run(t *testing.T, c Config) {
 	t.Run("Scheme", func(t *testing.T) { testScheme(t, c) })
 	t.Run("ResolveSeeded", func(t *testing.T) { testResolveSeeded(t, c) })
 	t.Run("NotFoundTyped", func(t *testing.T) { testNotFound(t, c) })
+	t.Run("ErrorClassification", func(t *testing.T) { RunErrorClassification(t, c) })
 	t.Run("ContextCancel", func(t *testing.T) { testContextCancel(t, c) })
 	t.Run("ConcurrentResolve", func(t *testing.T) { testConcurrentResolve(t, c) })
 	t.Run("VersionMonotonic", func(t *testing.T) { testVersionMonotonic(t, c) })
@@ -123,6 +165,75 @@ func testResolveSeeded(t *testing.T, c Config) {
 	}
 	if v.Version == "" {
 		t.Error("provider returned an empty Version; supply one (mamori.VersionHash helps)")
+	}
+}
+
+// RunErrorClassification runs only the error-classification case. Run calls it;
+// it is exported so the kit can test itself against a deliberately broken
+// provider without running the whole suite.
+func RunErrorClassification(tb testing.TB, c Config) {
+	tb.Helper()
+	if c.NoResolveErrors {
+		tb.Skip("providertest: provider declares NoResolveErrors; no per-key error surface to classify")
+		return
+	}
+	if c.Fail == nil {
+		tb.Fatal("providertest: Config.Fail and Clear are required unless NoResolveErrors is set")
+		return
+	}
+	if c.Clear == nil {
+		tb.Fatal("providertest: Config.Clear is required whenever Config.Fail is set")
+		return
+	}
+
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		err  error
+		want mamori.Kind
+	}{
+		{"PermissionDenied", mamori.ErrPermissionDenied, mamori.KindPermissionDenied},
+		{"Unauthenticated", mamori.ErrUnauthenticated, mamori.KindUnauthenticated},
+		{"Unavailable", mamori.ErrUnavailable, mamori.KindUnavailable},
+		{"RateLimited", mamori.ErrRateLimited, mamori.KindRateLimited},
+		{"Invalid", mamori.ErrInvalid, mamori.KindInvalid},
+	}
+
+	for _, tc := range cases {
+		key := c.key("classify-" + strings.ToLower(tc.name) + "-" + uniq())
+		if err := c.Seed(ctx, key, "seeded-value"); err != nil {
+			tb.Fatalf("Seed(%q): %v", key, err)
+			return
+		}
+		if err := c.Fail(ctx, key, tc.err); err != nil {
+			tb.Fatalf("Fail(%q): %v", key, err)
+			return
+		}
+
+		p := c.New()
+		ref, err := mamori.ParseRef(c.Ref(key))
+		if err != nil {
+			tb.Fatalf("Ref(%q) produced an unparseable ref: %v", key, err)
+			return
+		}
+		_, resolveErr := p.Resolve(ctx, ref)
+
+		if cerr := c.Clear(ctx, key); cerr != nil {
+			tb.Fatalf("Clear(%q): %v", key, cerr)
+			return
+		}
+
+		if resolveErr == nil {
+			tb.Fatalf("%s: Resolve returned a nil error while the backend was failing", tc.name)
+			return
+		}
+		if got := mamori.ErrorKind(resolveErr); got != tc.want {
+			tb.Fatalf("%s: ErrorKind(err) = %q, want %q. The provider most likely "+
+				"formatted the error with %%v instead of %%w, which breaks the "+
+				"errors.Is chain. Underlying error: %v",
+				tc.name, got, tc.want, resolveErr)
+			return
+		}
 	}
 }
 

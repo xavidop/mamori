@@ -17,12 +17,13 @@ import (
 // fakeVault is an in-memory kvClient. Each set appends a new version, so the
 // version string returned for the latest secret changes on every mutation.
 type fakeVault struct {
-	mu   sync.Mutex
-	data map[string][]string // secret name -> ordered version values (1-based)
+	mu    sync.Mutex
+	data  map[string][]string // secret name -> ordered version values (1-based)
+	fails map[string]error    // secret name -> injected error
 }
 
 func newFakeVault() *fakeVault {
-	return &fakeVault{data: map[string][]string{}}
+	return &fakeVault{data: map[string][]string{}, fails: map[string]error{}}
 }
 
 func (f *fakeVault) set(name, val string) {
@@ -31,12 +32,33 @@ func (f *fakeVault) set(name, val string) {
 	f.data[name] = append(f.data[name], val)
 }
 
+// fail makes the next GetSecret for name return err, until clear(name) is
+// called. It powers the providertest ErrorClassification case. name must use
+// the same key form as set, so the conformance case's Seed and Fail hit the
+// same entry.
+func (f *fakeVault) fail(name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[name] = err
+}
+
+// clear cancels a previously injected fail(name, err).
+func (f *fakeVault) clear(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, name)
+}
+
 func (f *fakeVault) GetSecret(ctx context.Context, name, version string, _ *azsecrets.GetSecretOptions) (azsecrets.GetSecretResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return azsecrets.GetSecretResponse{}, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if err, ok := f.fails[name]; ok {
+		return azsecrets.GetSecretResponse{}, err
+	}
 
 	vals, ok := f.data[name]
 	if !ok || len(vals) == 0 {
@@ -197,5 +219,35 @@ func TestConformance(t *testing.T) {
 			fake.set(key, val)
 			return nil
 		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
+			return nil
+		},
 	})
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyAzure through
+// Resolve itself, not just as a direct function call. The conformance
+// ErrorClassification case cannot catch a regression here: it injects a
+// mamori sentinel directly (not an *azcore.ResponseError), so it passes even
+// if the classifyAzure call were deleted from Resolve's fallback branch. This
+// test injects a real *azcore.ResponseError through fakeVault, the same shape
+// a live Key Vault call would return, so it fails if the wiring is removed.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeVault()
+	fake.set("db", "s3cr3t")
+	fake.fail("db", &azcore.ResponseError{StatusCode: http.StatusForbidden, ErrorCode: "Forbidden"})
+	p := New(WithClient(fake))
+
+	_, err := p.Resolve(context.Background(), mustParse(t, "azure-kv://myvault/db"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyAzure may not be wired into Resolve", got, mamori.KindPermissionDenied)
+	}
 }

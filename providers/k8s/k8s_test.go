@@ -2,14 +2,19 @@ package k8s_test
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/xavidop/mamori"
 	k8sprov "github.com/xavidop/mamori/providers/k8s"
@@ -31,6 +36,51 @@ func (c *rvCounter) next() string {
 	defer c.mu.Unlock()
 	c.n++
 	return strconv.Itoa(c.n)
+}
+
+// failInjector adds error injection to a fake clientset. A single reactor
+// installed at construction consults a map, so failures can be both added and
+// removed. Calling PrependReactor per injection would be simpler but reactors
+// accumulate on the chain and cannot be removed individually, which would make
+// Clear impossible and would leak injected failures into later conformance
+// subtests sharing the same clientset.
+//
+// The reactor only sees a GetAction's object name (via GetName()), not the
+// conformance kit's namespaced key, so fail/clear key on the object name: it
+// is the caller's job (see sanitize below) to translate the kit's key into
+// the same name Seed/Ref used to create the object.
+type failInjector struct {
+	mu    sync.Mutex
+	fails map[string]error
+}
+
+func newFailInjector(cs *fake.Clientset) *failInjector {
+	fi := &failInjector{fails: map[string]error{}}
+	cs.PrependReactor("*", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GetAction)
+		if !ok {
+			return false, nil, nil
+		}
+		fi.mu.Lock()
+		defer fi.mu.Unlock()
+		if err, found := fi.fails[ga.GetName()]; found {
+			return true, nil, err
+		}
+		return false, nil, nil
+	})
+	return fi
+}
+
+func (f *failInjector) fail(name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[name] = err
+}
+
+func (f *failInjector) clear(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, name)
 }
 
 func TestSecretResolve(t *testing.T) {
@@ -95,6 +145,7 @@ func TestSecretNotFound(t *testing.T) {
 // clientset supports Watch, so the watch conformance checks run for real.
 func TestConformanceSecret(t *testing.T) {
 	client := fake.NewSimpleClientset()
+	fi := newFailInjector(client)
 	var rv rvCounter
 
 	upsert := func(name, val string) {
@@ -118,11 +169,23 @@ func TestConformanceSecret(t *testing.T) {
 		},
 		Seed:   func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
+		// The kit's key is a namespaced conformance key; the reactor only sees
+		// the object name that Ref/Seed derived from it via sanitize, so Fail
+		// and Clear must apply the same translation or the reactor never fires.
+		Fail: func(_ context.Context, key string, err error) error {
+			fi.fail(sanitize(key), err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fi.clear(sanitize(key))
+			return nil
+		},
 	})
 }
 
 func TestConformanceConfigMap(t *testing.T) {
 	client := fake.NewSimpleClientset()
+	fi := newFailInjector(client)
 	var rv rvCounter
 
 	upsert := func(name, val string) {
@@ -143,7 +206,45 @@ func TestConformanceConfigMap(t *testing.T) {
 		Ref:    func(key string) string { return "k8s-cm://" + testNamespace + "/" + sanitize(key) + "#value" },
 		Seed:   func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
+		Fail: func(_ context.Context, key string, err error) error {
+			fi.fail(sanitize(key), err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fi.clear(sanitize(key))
+			return nil
+		},
 	})
+}
+
+// TestResolveClassifiesForbidden exercises classifyK8s through Resolve
+// itself, not just as a direct function call. The conformance
+// ErrorClassification case (and the failInjector powering it) injects a
+// mamori sentinel directly, so it would still pass even if the classifyK8s
+// call were deleted from mapGetError's fallback branch. This test instead
+// injects a real *apierrors.StatusError via PrependReactor, the same shape a
+// live API server returns for an RBAC denial, so it fails if the classify
+// wiring in mapGetError is removed.
+func TestResolveClassifiesForbidden(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("get", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		gr := schema.GroupResource{Group: "", Resource: "secrets"}
+		return true, nil, apierrors.NewForbidden(gr, "db", errors.New("rbac denied"))
+	})
+	p := k8sprov.New(k8sprov.WithClient(client))
+
+	ref, err := mamori.ParseRef("k8s-secret://default/db")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	_, resolveErr := p.Resolve(context.Background(), ref)
+	if resolveErr == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(resolveErr); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyK8s may not be wired into mapGetError: %v",
+			got, mamori.KindPermissionDenied, resolveErr)
+	}
 }
 
 // sanitize maps arbitrary conformance keys to RFC-1123 object names.

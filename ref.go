@@ -3,6 +3,7 @@ package mamori
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -102,4 +103,67 @@ func ParseRef(tag string) (Ref, error) {
 	}
 	ref.Path = rest
 	return ref, nil
+}
+
+// schemeStart matches a scheme-like token at the start of a string, e.g.
+// "aws-sm:" or "env:". It is how ParseRefs decides a comma is a chain
+// separator rather than a comma inside a path or query.
+var schemeStart = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*:`)
+
+// ParseRefs parses a `source` tag that may hold a comma-separated precedence
+// chain of refs, e.g. "env:PORT,aws-ps://svc/port". This is the entry point
+// for chained sources (spec 10.2): the first ref to yield a value wins, so the
+// chain lets a field prefer a fast/local source and fall back to a slower or
+// more authoritative one without the caller writing that fallback logic by
+// hand.
+//
+// A comma is treated as a separator only when the text after it begins with a
+// scheme-like token (see schemeStart); a comma inside a query option (?tags=a,b)
+// or an opaque exec: path (exec:echo a,b) is preserved as part of that ref. To
+// force a literal comma that would otherwise be read as a separator,
+// percent-encode it as %2C.
+//
+// Because of that rule, a doubled or trailing comma is not a split point (no
+// scheme token follows it) and is instead kept as part of the adjacent ref's
+// value, e.g. "env:A,,env:B" yields a first ref with path "A," rather than an
+// empty chain entry. Such a malformed ref simply resolves not-found at lookup
+// time and the chain falls through to the next entry, so this is treated as a
+// caller error rather than something ParseRefs rejects outright.
+//
+// A single-ref tag (the common case) yields a one-element slice, so callers
+// that do not use chains see no behavior change from switching to ParseRefs.
+func ParseRefs(tag string) ([]Ref, error) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return nil, fmt.Errorf("mamori: empty source ref")
+	}
+	parts := splitChain(tag)
+	refs := make([]Ref, 0, len(parts))
+	for _, p := range parts {
+		ref, err := ParseRef(p)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+// splitChain splits tag on commas that begin a new scheme-prefixed ref,
+// leaving every other comma (inside a query string or an opaque path)
+// untouched.
+func splitChain(tag string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(tag); i++ {
+		if tag[i] != ',' {
+			continue
+		}
+		if schemeStart.MatchString(tag[i+1:]) {
+			parts = append(parts, tag[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, tag[start:])
+	return parts
 }

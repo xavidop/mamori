@@ -17,10 +17,11 @@ import (
 type fakeSource struct {
 	mu    sync.Mutex
 	flags map[string]featureState
+	fails map[string]error
 }
 
 func newFake() *fakeSource {
-	return &fakeSource{flags: map[string]featureState{}}
+	return &fakeSource{flags: map[string]featureState{}, fails: map[string]error{}}
 }
 
 // set seeds a feature's value with enabled=true (the shape Seed/Mutate need).
@@ -35,12 +36,33 @@ func (f *fakeSource) setFlag(name string, value any, enabled bool) {
 	f.flags[name] = featureState{value: value, enabled: enabled}
 }
 
+// fail makes the next getFeature for name return err, until clear(name) is
+// called. It keys identically to set/setFlag (the raw feature name), so a
+// feature seeded with set and then failed with fail targets the same entry.
+// It powers the providertest ErrorClassification case and
+// TestResolveClassifiesNonNotFoundError.
+func (f *fakeSource) fail(name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[name] = err
+}
+
+// clear cancels a previously injected fail(name, err).
+func (f *fakeSource) clear(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, name)
+}
+
 func (f *fakeSource) getFeature(ctx context.Context, name string) (featureState, error) {
 	if err := ctx.Err(); err != nil {
 		return featureState{}, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[name]; ok {
+		return featureState{}, err
+	}
 	st, ok := f.flags[name]
 	if !ok {
 		return featureState{}, fmt.Errorf("mamori/flagsmith: feature %q not found: %w", name, mamori.ErrNotFound)
@@ -218,8 +240,41 @@ func TestConformance(t *testing.T) {
 			f.set(key, val)
 			return nil
 		},
+		Fail: func(_ context.Context, key string, err error) error {
+			f.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			f.clear(key)
+			return nil
+		},
 		SkipWatch: true, // Flagsmith has no native change notification here.
 	})
+}
+
+// TestResolveClassifiesNonNotFoundError proves that a non-not-found backend
+// error survives Resolve's error path intact enough for errors.Is /
+// mamori.ErrorKind to recognize it. Flagsmith has no SDK error taxonomy to
+// classify (no classifyFlagsmith function exists; see the package doc comment
+// on Resolve: "ErrNotFound (and real errors) propagate unchanged"), so unlike
+// providers with a classifier, this test injects a real mamori sentinel
+// (mamori.ErrPermissionDenied) directly through the fake, rather than an
+// SDK-shaped error a classifier would map. It survives because Resolve
+// returns the source error unchanged rather than reformatting it with %v;
+// that is the entire value of wiring Fail here.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	f := newFake()
+	f.setFlag("db_config", "irrelevant", true)
+	f.fail("db_config", mamori.ErrPermissionDenied)
+
+	p := newWithSource(f)
+	_, err := p.Resolve(context.Background(), mustRef(t, "flagsmith://db_config"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; Resolve may not propagate the backend error unchanged", got, mamori.KindPermissionDenied)
+	}
 }
 
 func mustRef(t *testing.T, raw string) mamori.Ref {

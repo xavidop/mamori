@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -159,11 +160,11 @@ func splitMountPath(raw string) (mount, path string, err error) {
 	trimmed := strings.Trim(raw, "/")
 	mount, path, ok := strings.Cut(trimmed, "/")
 	if !ok || mount == "" || path == "" {
-		return "", "", fmt.Errorf("vault: ref path %q must be of the form <mount>/<path>", raw)
+		return "", "", fmt.Errorf("vault: ref path %q must be of the form <mount>/<path>: %w", raw, mamori.ErrInvalid)
 	}
 	path = strings.TrimPrefix(path, "data/")
 	if path == "" {
-		return "", "", fmt.Errorf("vault: ref path %q has empty secret path after mount", raw)
+		return "", "", fmt.Errorf("vault: ref path %q has empty secret path after mount: %w", raw, mamori.ErrInvalid)
 	}
 	return mount, path, nil
 }
@@ -185,9 +186,9 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	secret, err := client.Get(ctx, mount, path)
 	if err != nil {
 		if isNotFound(err) {
-			return mamori.Value{}, fmt.Errorf("vault: secret %q: %w", ref.Path, mamori.ErrNotFound)
+			return mamori.Value{}, fmt.Errorf("vault: secret %q: %w: %w", ref.Path, mamori.ErrNotFound, err)
 		}
-		return mamori.Value{}, err
+		return mamori.Value{}, fmt.Errorf("vault: resolve %q: %w", ref.Path, classifyVault(err))
 	}
 	if secret == nil || secret.Data == nil {
 		return mamori.Value{}, fmt.Errorf("vault: secret %q: %w", ref.Path, mamori.ErrNotFound)
@@ -260,4 +261,44 @@ func isNotFound(err error) bool {
 		return true
 	}
 	return false
+}
+
+// classifyVault maps a Vault API error onto a mamori classification sentinel.
+//
+// 403 maps to permission_denied. Vault returns 403 with "permission denied"
+// for both a policy that does not cover the path AND a missing, invalid, or
+// expired token, and the status code cannot separate them. permission_denied
+// is the more common cause in a running service. Matching on the response body
+// text to distinguish them was considered and rejected as brittle across Vault
+// versions; the README documents the ambiguity so an operator knows to also
+// check the token.
+//
+// 503 is Vault's sealed-or-standby response, which is genuinely unavailable.
+func classifyVault(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, vaultapi.ErrSecretNotFound) {
+		return fmt.Errorf("%w: %w", mamori.ErrNotFound, err)
+	}
+	var re *vaultapi.ResponseError
+	if !errors.As(err, &re) {
+		return err
+	}
+	var sentinel error
+	switch code := re.StatusCode; {
+	case code == http.StatusNotFound:
+		sentinel = mamori.ErrNotFound
+	case code == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case code == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case code >= 500:
+		sentinel = mamori.ErrUnavailable
+	case code == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }

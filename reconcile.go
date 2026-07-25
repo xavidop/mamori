@@ -2,6 +2,7 @@ package mamori
 
 import (
 	"context"
+	"crypto/tls"
 	"reflect"
 	"time"
 
@@ -31,6 +32,14 @@ type options struct {
 	backoffMax   time.Duration
 	meter        Meter
 	tracer       Tracer
+	historyN     int // snapshots retained beyond the current one; 0 = current only
+
+	// admin server config, consumed only by Watch (see adminhttp.go). Load
+	// accepts the same Option values but has no watcher to run a server
+	// against, so it ignores all three.
+	adminAddr string
+	adminOpts []HandlerOption
+	adminTLS  *tls.Config
 
 	// change/error callbacks are typed per T, stored as any and asserted by
 	// Watch[T]. onChange holds a func(Change[T]); onError holds a func(error).
@@ -97,6 +106,22 @@ func WithQueueDepth(n int) Option { return func(o *options) { o.queueDepth = n }
 // WithStale escalates staleness to a hard error: if a ref cannot be refreshed
 // for longer than maxAge, OnError receives a *StaleError.
 func WithStale(maxAge time.Duration) Option { return func(o *options) { o.stale = maxAge } }
+
+// WithHistory retains the n most recent snapshots in addition to the current
+// one, readable via Watcher.History and pinnable via Watcher.Pin. It defaults
+// to 0. A negative n clamps to 0.
+//
+// Retained snapshots hold full copies of T, including any secret material that
+// has since been rotated. Enabling history extends the in-memory lifetime of
+// old secrets; enable it deliberately.
+func WithHistory(n int) Option {
+	return func(o *options) {
+		if n < 0 {
+			n = 0
+		}
+		o.historyN = n
+	}
+}
 
 // WithBackoff configures per-ref exponential backoff on resolve failure.
 func WithBackoff(base, max time.Duration) Option {

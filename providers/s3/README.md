@@ -66,6 +66,24 @@ S3 has no cheap native change push, so this provider **does not** implement `Wat
 
 A future push mode could bridge **S3 Event Notifications** through **SQS** or **EventBridge**, turning object writes into watch updates; it is not implemented here.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| S3 error code | mamori kind |
+|---|---|
+| `NoSuchKey`, `NoSuchBucket`, `NoSuchVersion`, `NotFound` | `not_found` |
+| `AccessDenied`, `AllAccessDisabled` | `permission_denied` |
+| `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `ExpiredToken`, `InvalidToken`, `TokenRefreshRequired` | `unauthenticated` |
+| `SlowDown` | `rate_limited` |
+| `ServiceUnavailable`, `InternalError` | `unavailable` |
+| `InvalidRequest`, `InvalidArgument`, `MalformedXML` | `invalid` |
+| anything else | `unknown` |
+
+Codes not listed above (including any not yet added to this table) report `unknown` rather than being guessed at. `SlowDown` and `ServiceUnavailable` share the same 503 status but mean different things (throttling vs. overload), so they are kept apart. `NoSuchKey`/`NoSuchBucket` are matched first as their typed `*s3types.NoSuchKey`/`*s3types.NoSuchBucket` shapes before classification runs; the classifier also recognizes their raw codes (plus `NoSuchVersion` and the generic `NotFound`) so S3-compatible stores (MinIO, R2) that return an untyped error still map to `not_found`. `NoSuchVersion` is defensive: `Resolve` never sets `GetObjectInput.VersionId`, so this provider cannot actually trigger it today; it is included in case a future code path requests a specific object version.
+
+The original SDK error remains reachable with `errors.As`, so existing code matching on `*s3types.NoSuchKey` / `*s3types.NoSuchBucket` keeps working.
+
 ## What is verified
 
 - ✅ Unit tests against an injected fake S3 client (object resolve, `#json-key` selection, nested slashed keys, `WithSensitive`, ETag / VersionId / `VersionHash` version precedence, `NoSuchKey` and `NoSuchBucket` → `ErrNotFound`, malformed-ref handling), plus the [`providertest`](../../providertest) conformance kit against an in-memory fake (`SkipWatch`).

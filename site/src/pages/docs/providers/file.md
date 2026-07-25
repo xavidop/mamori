@@ -62,3 +62,13 @@ Cert []byte `source:"file:///etc/tls/tls.crt?debounce=0"`
 - `Value.Version` is a hash of the file's size and modification time, so unchanged files are not re-read.
 - A missing file resolves to not-found, so `default:` / `optional:"true"` applies.
 - `file://` values are non-sensitive by default; use `secret.Bytes` for private keys so they stay redacted.
+
+## Error classification
+
+| Condition | mamori kind |
+|---|---|
+| File does not exist | `not_found` |
+| File exists but is unreadable (permission denied) | `permission_denied` |
+| Any other OS error | `unknown` |
+
+`file://` has no malformed-ref case - any path is syntactically valid - so there's no `invalid` row.

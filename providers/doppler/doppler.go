@@ -163,7 +163,8 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	default:
 		// Read a bounded amount of the error body for diagnostics. Never log it.
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return mamori.Value{}, fmt.Errorf("mamori/doppler: unexpected status %d fetching secret %q: %s", resp.StatusCode, name, strings.TrimSpace(string(msg)))
+		statusErr := fmt.Errorf("mamori/doppler: unexpected status %d fetching secret %q: %s", resp.StatusCode, name, strings.TrimSpace(string(msg)))
+		return mamori.Value{}, classifyDopplerStatus(resp.StatusCode, statusErr)
 	}
 
 	var sr secretResponse
@@ -207,4 +208,42 @@ func parsePath(path string) (project, config string, err error) {
 		return "", "", fmt.Errorf("mamori/doppler: path %q must be <project>/<config>", path)
 	}
 	return segs[0], segs[1], nil
+}
+
+// classifyDopplerStatus maps a Doppler REST API HTTP status onto a mamori
+// classification sentinel, wrapping statusErr (the error Resolve already
+// built from the response, carrying the status code and body for
+// diagnostics) so both the sentinel and that context survive in the
+// errors.Is chain. 404 is handled by its own branch in Resolve above and
+// never reaches this function.
+//
+// 429 is the confirmed case: Doppler's API reference documents rate limiting
+// explicitly, including the response headers that accompany a 429. 401 (a
+// missing or malformed token) is well established from Doppler's
+// token-based auth model and its own community support threads, though the
+// API reference's status-code section only describes the 2xx/4xx/5xx
+// categories in general terms rather than spelling out 401 by name. 403,
+// 400, and 5xx are mapped on ordinary HTTP semantics - defensible mappings,
+// not individually confirmed by Doppler's documentation. Codes not listed
+// above report unknown rather than being guessed at.
+func classifyDopplerStatus(code int, statusErr error) error {
+	if statusErr == nil {
+		return nil
+	}
+	var sentinel error
+	switch {
+	case code == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case code == http.StatusUnauthorized:
+		sentinel = mamori.ErrUnauthenticated
+	case code == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case code >= 500:
+		sentinel = mamori.ErrUnavailable
+	case code == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return statusErr
+	}
+	return fmt.Errorf("%w: %w", sentinel, statusErr)
 }

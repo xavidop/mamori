@@ -65,6 +65,10 @@ ConfigCat has no push-style change notification, so this provider is **not** wat
 - The ConfigCat SDK auto-polls the CDN in the background (default 60s, tune with `configcat.WithPollInterval`). This keeps the in-memory config fresh.
 - mamori re-resolves your struct on its own schedule (tune with `mamori.WithPollInterval`). This is what pushes a changed flag into your config value.
 
+## Error classification
+
+The ConfigCat client's `settingClient` surface (`keys` / `value`) returns a bare `any` with no error - it has no per-key error vocabulary. This provider's `Resolve` therefore can only ever return `mamori.ErrNotFound` or a client-construction error; there is no classifiable per-resolve error to surface. The provider is exempt from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`.
+
 ## What is verified
 
 - Unit tests and the [`providertest`](../../providertest) conformance kit run against an in-memory fake of the SDK (injected through a minimal `keys` / `value` client interface), so no network is required. Verified: scheme, value rendering for bool/string/number, not-found via the config key set, versioning, context cancellation, concurrency, and goroutine hygiene.

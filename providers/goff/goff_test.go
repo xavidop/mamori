@@ -22,9 +22,12 @@ import (
 type fakeEvaluator struct {
 	mu    sync.Mutex
 	flags map[string]any
+	fails map[string]error
 }
 
-func newFake() *fakeEvaluator { return &fakeEvaluator{flags: map[string]any{}} }
+func newFake() *fakeEvaluator {
+	return &fakeEvaluator{flags: map[string]any{}, fails: map[string]error{}}
+}
 
 // set seeds or replaces the evaluated variation for flagKey.
 func (f *fakeEvaluator) set(flagKey string, val any) {
@@ -33,9 +36,29 @@ func (f *fakeEvaluator) set(flagKey string, val any) {
 	f.flags[flagKey] = val
 }
 
+// fail makes the next RawVariation call for flagKey return err, until
+// clear(flagKey) is called. It powers the providertest ErrorClassification
+// case: the injected err is returned as RawVariation's error return, exactly
+// how the provider reads a genuine evaluation failure that carries a Go error.
+func (f *fakeEvaluator) fail(flagKey string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[flagKey] = err
+}
+
+// clear cancels a previously injected fail(flagKey, err).
+func (f *fakeEvaluator) clear(flagKey string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, flagKey)
+}
+
 func (f *fakeEvaluator) RawVariation(flagKey string, _ ffcontext.Context, _ any) (model.RawVarResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[flagKey]; ok {
+		return model.RawVarResult{Failed: true, Reason: flag.ReasonError}, err
+	}
 	val, ok := f.flags[flagKey]
 	if !ok {
 		return model.RawVarResult{
@@ -64,6 +87,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
 			return nil
 		},
 		SkipWatch: true, // go-feature-flag has no native push; mamori polls.
@@ -172,6 +203,43 @@ func TestResolveNotFound(t *testing.T) {
 	}
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("error %v does not satisfy errors.Is(err, mamori.ErrNotFound)", err)
+	}
+}
+
+// codeFailEvaluator returns a RawVarResult carrying a specific OpenFeature-style
+// flag.ErrorCode with a nil error, the same shape a live go-feature-flag client
+// returns for an evaluation-level failure (Failed: true, no accompanying Go
+// error). fakeEvaluator.fail cannot produce this shape: it only injects a plain
+// error via RawVariation's error return, which is what Config.Fail's signature
+// allows and what the providertest ErrorClassification case needs.
+type codeFailEvaluator struct {
+	code flag.ErrorCode
+}
+
+func (c *codeFailEvaluator) RawVariation(_ string, _ ffcontext.Context, _ any) (model.RawVarResult, error) {
+	return model.RawVarResult{Failed: true, Reason: flag.ReasonError, ErrorCode: c.code, ErrorDetails: "injected failure"}, nil
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyGoff through Resolve
+// itself, not just as a direct function call. Neither existing kind of test
+// catches a regression here: TestClassifyGoff calls classifyGoff directly, so
+// it passes whether or not Resolve actually calls it, and the providertest
+// ErrorClassification case injects a mamori sentinel as a plain Go error (not a
+// RawVarResult carrying a real flag.ErrorCode), which classifyGoff's default
+// branch returns unchanged either way - it would pass even with Resolve's
+// classifyGoff calls deleted. This test injects a RawVarResult with a real
+// ErrorCode and no Go error, the shape a live client returns for a res.Failed
+// evaluation, so it fails if Resolve's res.Failed branch stops routing through
+// classifyGoff.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	p := New(withEvaluator(&codeFailEvaluator{code: flag.ErrorCodeProviderNotReady}))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "goff://any"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindUnavailable {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyGoff may not be wired into Resolve", got, mamori.KindUnavailable)
 	}
 }
 

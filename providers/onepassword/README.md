@@ -47,6 +47,20 @@ mamori.WithProvider(onepassword.New(
 
 No native change notification - mamori polls (interval + jitter).
 
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+Connect's error responses carry only a numeric status and a free-text message, no machine-readable error code, so classification is by status alone. 404 is handled directly by each lookup (vault, item) rather than through this table, since a missing vault, item, or field needs its own message naming what was not found.
+
 ## What is verified
 
 - ✅ Unit tests and the [`providertest`](../../providertest) conformance kit run against an in-process HTTP fake of the Connect API (injected `*http.Client`).

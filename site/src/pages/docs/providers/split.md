@@ -49,6 +49,10 @@ The value is the treatment, which is a string you define in Split (commonly `on`
 
 The Split SDK synchronizes definitions in the background; mamori polls (`WithPollInterval` + jitter). The client is started and waited-until-ready lazily on first use.
 
+## Error classification
+
+Split's client surface returns a bare treatment string (not-found is the `control` sentinel, not an error), so this provider has no error vocabulary beyond not-found. It is conformance-exempt from the `ErrorClassification` case via `providertest.Config.NoResolveErrors`.
+
 ## Configuration
 
 ```go

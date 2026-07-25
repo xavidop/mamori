@@ -115,6 +115,10 @@ also refreshes its own in-memory feature repository on an internal interval
 (`WithRefreshInterval`, 15s by default), so the value mamori polls stays current
 with the server independently of the mamori poll cadence.
 
+## Error classification
+
+The Unleash client's `featureClient` surface (`Exists` / `IsEnabled` / `GetVariant`) returns only bool and string values - it has no per-key error vocabulary. This provider's `Resolve` therefore can only ever return `mamori.ErrNotFound` or a client-construction error; there is no classifiable per-resolve error to surface. The provider is exempt from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`.
+
 ## What is verified
 
 - The unit tests and the [`providertest`](../../providertest) conformance kit run

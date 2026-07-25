@@ -110,6 +110,21 @@ mamori.WithProvider(gcp.New(gcp.WithClient(client)))
 `WithClientFactory` is also available if you want mamori to build the client
 lazily on first use with your own constructor.
 
+## Error classification
+
+| gRPC code | mamori kind |
+|---|---|
+| `NotFound` | `not_found` |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `InvalidArgument` | `invalid` |
+| anything else | `unknown` |
+
+A malformed ref (not `project/secret`) reports `invalid` without a round trip.
+The gRPC status stays reachable through `status.Code`.
+
 ## Verified vs. needs a live backend
 
 **Verified in unit tests (no cloud access):** scheme, ref parsing

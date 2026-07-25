@@ -17,17 +17,37 @@ import (
 // "<container>/<blob>", and every put appends a new version so the ETag returned
 // for a blob changes on each mutation.
 type fakeStore struct {
-	mu   sync.Mutex
-	data map[string][]string // "container/blob" -> ordered version values
+	mu    sync.Mutex
+	data  map[string][]string // "container/blob" -> ordered version values
+	fails map[string]error    // "container/blob" -> injected error
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{data: map[string][]string{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{data: map[string][]string{}, fails: map[string]error{}}
+}
 
 func (f *fakeStore) put(container, blob, val string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k := container + "/" + blob
 	f.data[k] = append(f.data[k], val)
+}
+
+// fail makes the next Download for "container/blob" return err, until
+// clear(container, blob) is called. It powers the providertest
+// ErrorClassification case. The key form matches put's exactly, so fail
+// targets the same entry Seed populated.
+func (f *fakeStore) fail(container, blob string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[container+"/"+blob] = err
+}
+
+// clear cancels a previously injected fail(container, blob, err).
+func (f *fakeStore) clear(container, blob string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, container+"/"+blob)
 }
 
 func (f *fakeStore) Download(ctx context.Context, container, blob string) ([]byte, string, error) {
@@ -37,7 +57,11 @@ func (f *fakeStore) Download(ctx context.Context, container, blob string) ([]byt
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	vals, ok := f.data[container+"/"+blob]
+	k := container + "/" + blob
+	if err, ok := f.fails[k]; ok {
+		return nil, "", err
+	}
+	vals, ok := f.data[k]
 	if !ok || len(vals) == 0 {
 		return nil, "", mamori.ErrNotFound
 	}
@@ -265,6 +289,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.put(confContainer, key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(confContainer, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(confContainer, key)
 			return nil
 		},
 		SkipWatch: true,

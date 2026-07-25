@@ -25,6 +25,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -33,7 +34,10 @@ import (
 
 	"github.com/xavidop/mamori"
 	"go.etcd.io/etcd/api/v3/mvccpb"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // scheme is the URL scheme this provider handles.
@@ -147,6 +151,71 @@ func endpointsFromEnv() []string {
 	return out
 }
 
+// classifyEtcd maps an etcd v3 client error onto a mamori classification
+// sentinel. The client is gRPC-based, so the primary signal is
+// status.Code(err), exactly as classifyGCP and classifyFirestore use it.
+//
+// DeadlineExceeded maps to unavailable because a request that timed out is a
+// backend that did not respond in time, which is what unavailable denotes.
+//
+// codes.InvalidArgument is deliberately left unmapped. etcd reports a bad
+// username/password (rpctypes.ErrGRPCAuthFailed) as InvalidArgument, not
+// Unauthenticated, which makes that code genuinely ambiguous for etcd: the
+// same code also covers ordinary malformed-request errors. Mapping it to
+// ErrUnauthenticated would misclassify every malformed request as an auth
+// failure; mapping it to ErrInvalid would misclassify every bad-credentials
+// error as a request problem. There is no way to tell the two apart from the
+// code alone, so InvalidArgument stays unclassified (reports unknown) rather
+// than guessed at either way.
+//
+// codes.NotFound is not used here either: etcd never returns it for a missing
+// key. A missing key is reported as an empty Kvs slice, handled locally in
+// valueFor/valueFromKV, not through an SDK error at all.
+//
+// The etcd v3 client has one more wrinkle beyond a plain gRPC status: for a
+// fixed set of well-known server error messages (see rpctypes.errStringToError,
+// which includes the exact "permission denied", "invalid auth token",
+// "no leader"/"request timed out", and "database space exceeded"/"too many
+// requests" texts this classifier targets), the client's internal ContextError
+// helper rewrites the error into an rpctypes.EtcdError before Get/Put/Delete
+// ever return it. EtcdError carries the original gRPC code via Code(), but
+// does not implement the GRPCStatus() interface status.Code relies on, so
+// status.Code(err) reports Unknown for it even though the code is genuinely
+// known. Without the fallback below, a live server's ordinary permission,
+// auth, availability, and rate-limit errors would silently report unknown
+// despite being exactly what this classifier exists to catch, so
+// status.Code's Unknown result is treated as inconclusive and errors.As is
+// used to recover the code from rpctypes.EtcdError when present. This does
+// not change the InvalidArgument decision above: ErrGRPCAuthFailed converts
+// to an EtcdError the same way, and InvalidArgument still is not a case this
+// switch maps.
+func classifyEtcd(err error) error {
+	if err == nil {
+		return nil
+	}
+	code := status.Code(err)
+	if code == codes.Unknown {
+		var etcdErr rpctypes.EtcdError
+		if errors.As(err, &etcdErr) {
+			code = etcdErr.Code()
+		}
+	}
+	var sentinel error
+	switch code {
+	case codes.PermissionDenied:
+		sentinel = mamori.ErrPermissionDenied
+	case codes.Unauthenticated:
+		sentinel = mamori.ErrUnauthenticated
+	case codes.Unavailable, codes.DeadlineExceeded:
+		sentinel = mamori.ErrUnavailable
+	case codes.ResourceExhausted:
+		sentinel = mamori.ErrRateLimited
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
+}
+
 // Resolve fetches the current value for ref from etcd. A missing key yields an
 // error satisfying errors.Is(err, mamori.ErrNotFound).
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
@@ -159,7 +228,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	}
 	resp, err := cli.Get(ctx, ref.Path)
 	if err != nil {
-		return mamori.Value{}, fmt.Errorf("etcd: get %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("etcd: get %q: %w", ref.Path, classifyEtcd(err))
 	}
 	return valueFor(resp, ref)
 }
@@ -198,7 +267,7 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 					return
 				}
 				if err := resp.Err(); err != nil {
-					if !emit(mamori.Update{Err: fmt.Errorf("etcd: watch %q: %w", ref.Path, err)}) {
+					if !emit(mamori.Update{Err: fmt.Errorf("etcd: watch %q: %w", ref.Path, classifyEtcd(err))}) {
 						return
 					}
 					continue

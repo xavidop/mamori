@@ -65,3 +65,21 @@ mamori.WithProvider(cosmosprov.New(cosmosprov.WithConnectionString(os.Getenv("CO
 ```
 
 Verified with an in-memory fake; live behavior is covered by `//go:build integration` tests.
+
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+Cosmos DB returns **429 for request-unit (RU/s) throttling** - its most common operational failure. It maps to `rate_limited` like any other 429, but if you see `rate_limited` on a `cosmos://` ref, check the container's/database's provisioned RU/s first; it is very unlikely to be a client-side rate limiter.
+
+A transport failure (no HTTP response at all) stays `unknown`, since it could be a bug in this provider rather than a genuine backend outage. `*azcore.ResponseError` stays reachable with `errors.As` through the classified fallback path. The not-found path is a special case: the item reader returns the bare `mamori.ErrNotFound` sentinel for a 404 (an internal signal, not the SDK error itself), so there is no `*azcore.ResponseError` to recover there.
+
+Verified by unit tests and the conformance kit against an in-memory fake; live Azure behavior is covered by `//go:build integration` tests.

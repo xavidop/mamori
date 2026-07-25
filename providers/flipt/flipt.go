@@ -209,7 +209,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	case isInvalidType(vErr):
 		// Fall through to a boolean evaluation below.
 	default:
-		return mamori.Value{}, fmt.Errorf("mamori/flipt: evaluating %s/%s: %w", namespace, flag, vErr)
+		return mamori.Value{}, fmt.Errorf("mamori/flipt: evaluating %s/%s: %w", namespace, flag, classifyFlipt(vErr))
 	}
 
 	bResp, bErr := ev.Boolean(ctx, req)
@@ -219,7 +219,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	case isNotFound(bErr):
 		return mamori.Value{}, notFound(namespace, flag)
 	default:
-		return mamori.Value{}, fmt.Errorf("mamori/flipt: evaluating %s/%s: %w", namespace, flag, bErr)
+		return mamori.Value{}, fmt.Errorf("mamori/flipt: evaluating %s/%s: %w", namespace, flag, classifyFlipt(bErr))
 	}
 }
 
@@ -264,6 +264,51 @@ func isInvalidType(err error) bool {
 		return true
 	}
 	return flipterrors.AsMatch[flipterrors.ErrInvalid](err)
+}
+
+// classifyFlipt maps an evaluation error onto a mamori classification
+// sentinel. Both SDK transports surface backend errors as gRPC status errors
+// (the HTTP transport in particular parses the response body's
+// google.rpc.Status proto and reconstructs a genuine status error via
+// status.ErrorProto), so status.Code(err) is the primary, authoritative
+// signal, exactly as classifyGCP and classifyEtcd use it. The Flipt-specific
+// typed errors (flipterrors.ErrUnauthenticated, flipterrors.ErrUnauthorized)
+// are checked too, the same belt-and-suspenders way isNotFound and
+// isInvalidType already check their typed counterparts.
+//
+// codes.NotFound and codes.InvalidArgument are deliberately excluded from
+// this switch even though they are real, meaningful codes here: Resolve
+// already special-cases both ahead of this function - isNotFound routes a
+// missing flag to ErrNotFound before classifyFlipt is ever reached, and
+// isInvalidType treats InvalidArgument purely as the boolean-vs-variant
+// evaluation-kind fallback signal, not as an error to surface to the caller.
+// Remapping either code here would fight those two call sites and is exactly
+// what this function must not do.
+//
+// codes.Unknown and codes.Internal are left unmapped: both are catch-alls for
+// "something went wrong server-side" with no reliable signal about which
+// mamori kind applies, so guessing would misrepresent what the server
+// actually reported. Any other code not listed below passes through
+// unclassified for the same reason.
+func classifyFlipt(err error) error {
+	if err == nil {
+		return nil
+	}
+	code := status.Code(err)
+	var sentinel error
+	switch {
+	case code == codes.PermissionDenied || flipterrors.AsMatch[flipterrors.ErrUnauthorized](err):
+		sentinel = mamori.ErrPermissionDenied
+	case code == codes.Unauthenticated || flipterrors.AsMatch[flipterrors.ErrUnauthenticated](err):
+		sentinel = mamori.ErrUnauthenticated
+	case code == codes.Unavailable || code == codes.DeadlineExceeded:
+		sentinel = mamori.ErrUnavailable
+	case code == codes.ResourceExhausted:
+		sentinel = mamori.ErrRateLimited
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // parsePath splits "<namespace>/<flag-key>" into its two required, non-empty

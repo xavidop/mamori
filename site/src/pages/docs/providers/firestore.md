@@ -58,6 +58,20 @@ A scalar field is returned unquoted; maps and arrays as their JSON encoding. `Va
 
 `Watch` uses `Doc.Snapshots`, Firestore's real-time listener, emitting an update on every change to the document. No polling.
 
+## Error classification
+
+| gRPC code | mamori kind |
+|---|---|
+| `NotFound` | `not_found` |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `InvalidArgument` | `invalid` |
+| anything else | `unknown` |
+
+The Firestore client is gRPC-based, so codes map one to one and no string matching is needed. Codes with no clear mamori meaning (`Internal`, `Unimplemented`, `Aborted`, `FailedPrecondition`) report `unknown` rather than being guessed at. The gRPC status stays reachable through `status.Code` on a classified error for both `Resolve` and `Watch` - a listener failure mid-watch is classified the same way a `Resolve` failure would be, instead of surfacing as `unknown`.
+
 ## Configuration
 
 ```go

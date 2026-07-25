@@ -33,6 +33,7 @@ const (
 type fakeDoppler struct {
 	mu       sync.Mutex
 	store    map[string]string // key: project/config/name -> value
+	fails    map[string]error  // key: project/config/name -> injected transport error
 	lastAuth string            // last Authorization header seen
 }
 
@@ -41,13 +42,30 @@ func storeKey(project, config, name string) string {
 }
 
 func newFake() *fakeDoppler {
-	return &fakeDoppler{store: map[string]string{}}
+	return &fakeDoppler{store: map[string]string{}, fails: map[string]error{}}
 }
 
 func (f *fakeDoppler) set(project, config, name, val string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.store[storeKey(project, config, name)] = val
+}
+
+// fail makes the next request for project/config/name return err as a raw
+// transport failure (the RoundTripper returns it before the handler ever
+// runs), until clear(project, config, name) is called. It powers the
+// providertest ErrorClassification case.
+func (f *fakeDoppler) fail(project, config, name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[storeKey(project, config, name)] = err
+}
+
+// clear cancels a previously injected fail(project, config, name, err).
+func (f *fakeDoppler) clear(project, config, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, storeKey(project, config, name))
 }
 
 func (f *fakeDoppler) handle(w http.ResponseWriter, r *http.Request) {
@@ -112,8 +130,42 @@ func (f *fakeDoppler) inProcessProvider() *Provider {
 	return New(
 		WithBaseURL("http://doppler.test"),
 		WithToken(testToken),
-		WithHTTPClient(inProcessClient(http.HandlerFunc(f.handle))),
+		WithHTTPClient(f.failClient()),
 	)
+}
+
+// failClient behaves like inProcessClient (in-process, no sockets, honors
+// context cancellation), but first checks fails for an injected transport
+// error keyed by the requested project/config/name and, when present,
+// returns it directly instead of invoking the handler.
+//
+// This is the seam the providertest ErrorClassification case and
+// TestResolveInjectedSentinelSurvives exercise: http.Client.Do wraps a
+// RoundTripper error in *url.Error, which is Unwrap-compatible, and
+// doppler.go's Resolve returns that error verbatim on a transport failure
+// (it never touches an HTTP response at all), so an injected mamori sentinel
+// survives errors.Is unchanged. This is a separate path from
+// classifyDopplerStatus, which only classifies a real HTTP status on a real
+// response; both must work independently.
+func (f *fakeDoppler) failClient() *http.Client {
+	return &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if err := req.Context().Err(); err != nil {
+				return nil, err
+			}
+			q := req.URL.Query()
+			key := storeKey(q.Get("project"), q.Get("config"), q.Get("name"))
+			f.mu.Lock()
+			err, failing := f.fails[key]
+			f.mu.Unlock()
+			if failing {
+				return nil, err
+			}
+			rec := httptest.NewRecorder()
+			f.handle(rec, req)
+			return rec.Result(), nil
+		}),
+	}
 }
 
 // serverProvider spins up a real httptest.Server for f and returns a provider
@@ -302,8 +354,67 @@ func TestConformance(t *testing.T) {
 			f.set(testProject, testConfig, key, val)
 			return nil
 		},
+		Fail: func(_ context.Context, key string, err error) error {
+			f.fail(testProject, testConfig, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			f.clear(testProject, testConfig, key)
+			return nil
+		},
 		SkipWatch: true, // Doppler has no native change notification.
 	})
+}
+
+// TestResolveInjectedSentinelSurvives exercises the RoundTripper injection
+// seam directly (not just through providertest's ErrorClassification case,
+// which would still pass even if Resolve's transport-error branch were
+// broken, as long as it returned some non-nil error unmodified). It injects
+// mamori.ErrPermissionDenied as a raw transport failure - the RoundTripper
+// returns it before fakeDoppler.handle ever runs, so there is no HTTP
+// response to classify - and asserts it comes back out of Resolve unchanged
+// despite http.Client.Do wrapping it in *url.Error along the way.
+func TestResolveInjectedSentinelSurvives(t *testing.T) {
+	f := newFake()
+	f.set(testProject, testConfig, "K", "v")
+	f.fail(testProject, testConfig, "K", mamori.ErrPermissionDenied)
+
+	p := New(WithBaseURL("http://doppler.test"), WithToken(testToken), WithHTTPClient(f.failClient()))
+	_, err := p.Resolve(context.Background(), mustRef(t, "doppler://"+testProject+"/"+testConfig+"#K"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the transport was failing")
+	}
+	if !errors.Is(err, mamori.ErrPermissionDenied) {
+		t.Fatalf("error %v does not satisfy errors.Is(err, mamori.ErrPermissionDenied)", err)
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q", got, mamori.KindPermissionDenied)
+	}
+}
+
+// TestResolveClassifiesRealStatus exercises classifyDopplerStatus through
+// Resolve itself, using a real HTTP 403 response from a handler (not an
+// injected transport error). Neither the conformance ErrorClassification
+// case nor TestResolveInjectedSentinelSurvives can catch a regression in
+// Resolve's default-branch wiring: both inject a mamori sentinel directly at
+// the RoundTripper, bypassing the HTTP-status path entirely, so they would
+// keep passing even if the classifyDopplerStatus call were deleted from
+// Resolve. This test fails if that wiring is removed.
+func TestResolveClassifiesRealStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"success":false,"messages":["insufficient permissions"]}`))
+	}))
+	defer srv.Close()
+
+	p := New(WithBaseURL(srv.URL), WithToken(testToken), WithHTTPClient(srv.Client()))
+	_, err := p.Resolve(context.Background(), mustRef(t, "doppler://"+testProject+"/"+testConfig+"#K"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error for a 403 response")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyDopplerStatus may not be wired into Resolve", got, mamori.KindPermissionDenied)
+	}
 }
 
 func mustRef(t *testing.T, raw string) mamori.Ref {

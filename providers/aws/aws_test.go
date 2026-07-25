@@ -29,11 +29,28 @@ type fakeSecret struct {
 type fakeSM struct {
 	mu      sync.Mutex
 	secrets map[string]fakeSecret
+	fails   map[string]error
 	counter int
 }
 
 func newFakeSM() *fakeSM {
-	return &fakeSM{secrets: map[string]fakeSecret{}}
+	return &fakeSM{secrets: map[string]fakeSecret{}, fails: map[string]error{}}
+}
+
+// fail makes the next GetSecretValue/BatchGetSecretValue for id return err,
+// until clear(id) is called. It powers the providertest ErrorClassification
+// case.
+func (f *fakeSM) fail(id string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[id] = err
+}
+
+// clear cancels a previously injected fail(id, err).
+func (f *fakeSM) clear(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, id)
 }
 
 // set stores a string secret, assigning a fresh (globally unique) version id.
@@ -59,6 +76,9 @@ func (f *fakeSM) GetSecretValue(ctx context.Context, in *secretsmanager.GetSecre
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := awssdk.ToString(in.SecretId)
+	if err, ok := f.fails[id]; ok {
+		return nil, err
+	}
 	s, ok := f.secrets[id]
 	if !ok {
 		return nil, &smtypes.ResourceNotFoundException{Message: awssdk.String("Secrets Manager can't find the specified secret.")}
@@ -83,6 +103,9 @@ func (f *fakeSM) BatchGetSecretValue(ctx context.Context, in *secretsmanager.Bat
 	defer f.mu.Unlock()
 	out := &secretsmanager.BatchGetSecretValueOutput{}
 	for _, id := range in.SecretIdList {
+		if err, ok := f.fails[id]; ok {
+			return nil, err
+		}
 		s, ok := f.secrets[id]
 		if !ok {
 			out.Errors = append(out.Errors, smtypes.APIErrorType{
@@ -119,10 +142,26 @@ type fakeParam struct {
 type fakeSSM struct {
 	mu     sync.Mutex
 	params map[string]fakeParam
+	fails  map[string]error
 }
 
 func newFakeSSM() *fakeSSM {
-	return &fakeSSM{params: map[string]fakeParam{}}
+	return &fakeSSM{params: map[string]fakeParam{}, fails: map[string]error{}}
+}
+
+// fail makes the next GetParameter/GetParameters for name return err, until
+// clear(name) is called. It powers the providertest ErrorClassification case.
+func (f *fakeSSM) fail(name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[name] = err
+}
+
+// clear cancels a previously injected fail(name, err).
+func (f *fakeSSM) clear(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, name)
 }
 
 // set stores/overwrites a String parameter, incrementing its version.
@@ -160,6 +199,9 @@ func (f *fakeSSM) GetParameter(ctx context.Context, in *ssm.GetParameterInput, _
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := awssdk.ToString(in.Name)
+	if err, ok := f.fails[name]; ok {
+		return nil, err
+	}
 	p, ok := f.params[name]
 	if !ok {
 		return nil, &ssmtypes.ParameterNotFound{Message: awssdk.String("parameter not found")}
@@ -182,6 +224,9 @@ func (f *fakeSSM) GetParameters(ctx context.Context, in *ssm.GetParametersInput,
 	defer f.mu.Unlock()
 	out := &ssm.GetParametersOutput{}
 	for _, name := range in.Names {
+		if err, ok := f.fails[name]; ok {
+			return nil, err
+		}
 		p, ok := f.params[name]
 		if !ok {
 			out.InvalidParameters = append(out.InvalidParameters, name)
@@ -221,6 +266,8 @@ func TestConformanceSecretsManager(t *testing.T) {
 		Ref:    func(key string) string { return schemeSM + "://" + key },
 		Seed:   func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Fail:   func(_ context.Context, key string, err error) error { fake.fail(key, err); return nil },
+		Clear:  func(_ context.Context, key string) error { fake.clear(key); return nil },
 	})
 }
 
@@ -231,6 +278,8 @@ func TestConformanceParameterStore(t *testing.T) {
 		Ref:    func(key string) string { return schemePS + "://" + key },
 		Seed:   func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Fail:   func(_ context.Context, key string, err error) error { fake.fail(key, err); return nil },
+		Clear:  func(_ context.Context, key string) error { fake.clear(key); return nil },
 	})
 }
 

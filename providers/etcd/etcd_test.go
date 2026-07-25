@@ -11,6 +11,8 @@ import (
 	"github.com/xavidop/mamori/providertest"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // fakeClient is an in-memory implementation of etcdClient supporting the parts
@@ -24,6 +26,7 @@ type fakeClient struct {
 	data     map[string]*mvccpb.KeyValue
 	rev      int64
 	watchers map[*fakeWatcher]struct{}
+	fails    map[string]error
 }
 
 type fakeWatcher struct {
@@ -36,6 +39,49 @@ func newFakeClient() *fakeClient {
 	return &fakeClient{
 		data:     map[string]*mvccpb.KeyValue{},
 		watchers: map[*fakeWatcher]struct{}{},
+		fails:    map[string]error{},
+	}
+}
+
+// fail makes the next Get for key return err, until clear(key) is called. It
+// powers the providertest ErrorClassification case and
+// TestResolveClassifiesNonNotFoundError. key must match the raw key form set
+// uses (f.data is keyed directly by it, with no transformation), so fail and
+// clear target the exact entry Seed populated.
+func (f *fakeClient) fail(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = err
+}
+
+// clear cancels a previously injected fail(key, err).
+func (f *fakeClient) clear(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
+}
+
+// failWatch pushes a canceled WatchResponse to every active watcher of key,
+// with CancelReason set to reason. The real clientv3.WatchResponse.Err()
+// computes its return value from CancelReason via rpctypes.Error, which
+// recognizes a fixed set of well-known etcd server error texts (see
+// go.etcd.io/etcd/api/v3/v3rpc/rpctypes) and, on a match, converts it into an
+// rpctypes.EtcdError carrying that error's original gRPC code. This models
+// exactly what a live server reports when e.g. a caller's permissions are
+// revoked mid-watch, and is what lets TestWatchClassifiesNonNotFoundError
+// exercise classifyEtcd's EtcdError fallback through the real Watch stream
+// error path rather than a synthetic one.
+func (f *fakeClient) failWatch(key, reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	resp := clientv3.WatchResponse{Canceled: true, CancelReason: reason}
+	for w := range f.watchers {
+		if w.key == key {
+			select {
+			case w.inbox <- resp:
+			default:
+			}
+		}
 	}
 }
 
@@ -80,6 +126,9 @@ func (f *fakeClient) Get(ctx context.Context, key string, _ ...clientv3.OpOption
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[key]; ok {
+		return nil, err
+	}
 	resp := &clientv3.GetResponse{}
 	if kv := f.data[key]; kv != nil {
 		resp.Kvs = []*mvccpb.KeyValue{copyKV(kv)}
@@ -156,6 +205,14 @@ func TestConformance(t *testing.T) {
 		Seed: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
 			return nil
 		},
 		EventuallyTimeout: 3 * time.Second,
@@ -237,6 +294,28 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "etcd://absent"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyEtcd through
+// Resolve itself, not just as a direct function call. The conformance
+// ErrorClassification case cannot catch a regression here: it injects a
+// mamori sentinel directly (not a gRPC status), so it passes even if the
+// classifyEtcd call were deleted from Resolve's fallback branch. This test
+// injects a real gRPC status through fakeClient.fail, the same shape a live
+// etcd server would return, so it fails if the wiring is removed.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("config/app", "hello")
+	fake.fail("config/app", status.Error(codes.PermissionDenied, "etcdserver: permission denied"))
+	p := New(withClient(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "etcd://config/app"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyEtcd may not be wired into Resolve", got, mamori.KindPermissionDenied)
 	}
 }
 
@@ -328,6 +407,41 @@ func TestWatchJSONKey(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("mutation not delivered")
+	}
+}
+
+// TestWatchClassifiesNonNotFoundError proves classifyEtcd is wired into
+// Watch's own stream-error branch (etcd.go's `if err := resp.Err(); err !=
+// nil` case), not just Resolve. fakeClient.failWatch pushes a canceled
+// WatchResponse whose CancelReason is one of the exact server error texts
+// etcd's real WatchResponse.Err() recognizes, so this goes through the
+// genuine rpctypes conversion classifyEtcd's fallback exists to handle,
+// rather than a synthetic status error. Without this test, deleting the
+// classifyEtcd call from Watch's error branch would go unnoticed by every
+// other test in this package.
+func TestWatchClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("watched", "v1")
+	p := New(withClient(fake))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := p.Watch(ctx, mustRef(t, "etcd://watched"))
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	fake.failWatch("watched", "etcdserver: permission denied")
+	select {
+	case u := <-ch:
+		if u.Err == nil {
+			t.Fatal("Watch emitted a nil error while the stream was failing")
+		}
+		if got := mamori.ErrorKind(u.Err); got != mamori.KindPermissionDenied {
+			t.Fatalf("ErrorKind(u.Err) = %q, want %q; classifyEtcd may not be wired into Watch's stream error path", got, mamori.KindPermissionDenied)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Update emitted")
 	}
 }
 

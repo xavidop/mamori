@@ -67,4 +67,19 @@ mamori.WithProvider(dopplerprov.New(
 
 Doppler has no push channel, so mamori polls (`WithPollInterval` + jitter).
 
-Verified by unit tests and the conformance kit against an in-process HTTP fake of the Doppler API (injected `*http.Client`), so no network is required. Live behavior is covered by `//go:build integration` tests.
+## Error classification
+
+A missing secret is detected before any status classification runs: a 404 maps directly to `mamori.ErrNotFound`. Every other non-2xx response is classified by HTTP status:
+
+| HTTP status | mamori kind |
+| --- | --- |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+429 is the confirmed case: Doppler's API reference documents rate limiting explicitly, including the response headers that accompany a 429. 401 is well established from Doppler's token-based auth model, though the API reference's status-code section only describes the 2xx/4xx/5xx categories in general terms rather than naming 401 specifically. 403, 400, and 5xx are mapped on ordinary HTTP semantics - defensible, not individually confirmed by Doppler's documentation. A raw transport failure (no HTTP response at all) is returned unclassified, since it could be a client-side problem as easily as a genuine backend outage.
+
+Verified by unit tests and the conformance kit against an in-process HTTP fake of the Doppler API (injected `*http.Client`), so no network is required. The conformance `ErrorClassification` case injects mamori sentinels directly at the `http.RoundTripper`, before the fake's handler runs, and confirms they survive `http.Client.Do`'s error wrapping unchanged. Live behavior is covered by `//go:build integration` tests.

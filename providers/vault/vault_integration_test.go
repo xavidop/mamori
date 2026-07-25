@@ -99,5 +99,7 @@ func TestLiveConformance(t *testing.T) {
 			_, err := c.KVv2(mount).Put(ctx, key, map[string]interface{}{"value": val})
 			return err
 		},
+		// live-backend integration test; error injection not possible, unit test covers classification
+		NoResolveErrors: true,
 	})
 }

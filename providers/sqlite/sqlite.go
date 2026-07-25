@@ -41,6 +41,15 @@
 //     not managed secrets). Set WithSensitive(true) to mark every resolved value
 //     sensitive so it is redacted downstream.
 //
+// # Error classification
+//
+// Beyond the not-found case above, a query failure that carries a SQLite
+// result code (a *modernc.org/sqlite.Error) is classified so mamori.ErrorKind
+// can distinguish it: permission/read-only errors report ErrPermissionDenied,
+// busy/locked/cannot-open errors report ErrUnavailable, and an authorizer
+// denial reports ErrUnauthenticated. Any other code, or an error with no
+// SQLite result code at all, reports unknown rather than being guessed at.
+//
 // # Watching
 //
 // The provider implements mamori.WatchableProvider by watching the database
@@ -71,7 +80,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/xavidop/mamori"
 
-	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" database/sql driver
+	// Named (not blank) so classifySqlite can type-assert *msqlite.Error via
+	// errors.As; the driver still self-registers via its init(), unaffected by
+	// the alias. Aliased because this package is also named "sqlite".
+	msqlite "modernc.org/sqlite"
 )
 
 // scheme is the URL scheme this provider handles.
@@ -98,6 +110,31 @@ const (
 // non-parameterizable parts of the statement would otherwise open.
 var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// row is the minimal single-row scan result query consumes. *sql.Row (returned
+// by (*sql.DB).QueryRowContext) satisfies it directly.
+type row interface {
+	Scan(dest ...any) error
+}
+
+// queryer is the minimal database surface query depends on to run its single
+// parameterized SELECT, instead of calling (*sql.DB).QueryRowContext directly.
+// dbQueryer (below) is the only production implementation, and it changes
+// nothing about how a query actually runs; decorateQueryer (on Provider) lets
+// the conformance kit wrap it with a double that injects an error for one key
+// without needing to provoke a real SQLite error code - see
+// withQueryerDecorator and sqlite_test.go's failQueryer.
+type queryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) row
+}
+
+// dbQueryer adapts *sql.DB to queryer. *sql.Row already satisfies row, so this
+// is a zero-behavior-change wrapper around the real driver.
+type dbQueryer struct{ db *sql.DB }
+
+func (d dbQueryer) QueryRowContext(ctx context.Context, query string, args ...any) row {
+	return d.db.QueryRowContext(ctx, query, args...)
+}
+
 // Provider resolves sqlite:// refs against a single SQLite database file. It is
 // safe for concurrent use. A short-lived *sql.DB is opened per resolve and
 // closed again, so the provider holds no background goroutines or open file
@@ -109,6 +146,13 @@ type Provider struct {
 	versionCol string        // optional revision column (from WithVersionColumn)
 	sensitive  bool          // mark resolved values Sensitive (from WithSensitive)
 	debounce   time.Duration // watch debounce window
+
+	// decorateQueryer, when non-nil, wraps the real per-resolve queryer before
+	// it is used. Unexported: set only by withQueryerDecorator, which tests use
+	// to inject an error for one key. Production Providers never set this, so
+	// queryerFor's real path (open the real *sql.DB, adapt it with dbQueryer) is
+	// unaffected and identical to before this seam existed.
+	decorateQueryer func(queryer) queryer
 }
 
 // Option configures a Provider.
@@ -147,6 +191,15 @@ func WithSensitive(sensitive bool) Option {
 // re-querying (default 150ms).
 func WithDebounce(d time.Duration) Option {
 	return func(p *Provider) { p.debounce = d }
+}
+
+// withQueryerDecorator injects decorateQueryer. Unexported: used by tests to
+// wrap the real per-resolve queryer with a double that can inject an error for
+// one key, which is how the conformance kit's ErrorClassification case and
+// TestResolveClassifiesNonNotFoundError exercise scanErr's non-not-found
+// branch without needing to provoke a real SQLite error code.
+func withQueryerDecorator(fn func(queryer) queryer) Option {
+	return func(p *Provider) { p.decorateQueryer = fn }
 }
 
 // New constructs a SQLite provider. The database is opened lazily on first
@@ -215,11 +268,20 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, err
 	}
 	defer func() { _ = db.Close() }()
-	return p.query(ctx, db, ref)
+
+	// The real path: adapt the freshly opened *sql.DB to queryer. When no
+	// decorateQueryer is configured (every production Provider), this is the
+	// only thing query ever sees, and dbQueryer.QueryRowContext just forwards
+	// to db.QueryRowContext - identical to calling it directly.
+	var qu queryer = dbQueryer{db: db}
+	if p.decorateQueryer != nil {
+		qu = p.decorateQueryer(qu)
+	}
+	return p.query(ctx, qu, ref)
 }
 
-// query runs the parameterized SELECT for ref against db and builds the Value.
-func (p *Provider) query(ctx context.Context, db *sql.DB, ref mamori.Ref) (mamori.Value, error) {
+// query runs the parameterized SELECT for ref against qu and builds the Value.
+func (p *Provider) query(ctx context.Context, qu queryer, ref mamori.Ref) (mamori.Value, error) {
 	table, key, ok := strings.Cut(ref.Path, "/")
 	if !ok || table == "" || key == "" {
 		return mamori.Value{}, fmt.Errorf("sqlite: ref %q: path must be <table>/<key>", ref.Raw)
@@ -252,16 +314,16 @@ func (p *Provider) query(ctx context.Context, db *sql.DB, ref mamori.Ref) (mamor
 	}
 	stmt := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ? LIMIT 1", cols, table, keyCol)
 
-	row := db.QueryRowContext(ctx, stmt, key)
+	r := qu.QueryRowContext(ctx, stmt, key)
 	var rawVal any
 	var rawVer any
 	if p.versionCol != "" {
-		err := row.Scan(&rawVal, &rawVer)
+		err := r.Scan(&rawVal, &rawVer)
 		if err != nil {
 			return mamori.Value{}, p.scanErr(table, key, err)
 		}
 	} else {
-		if err := row.Scan(&rawVal); err != nil {
+		if err := r.Scan(&rawVal); err != nil {
 			return mamori.Value{}, p.scanErr(table, key, err)
 		}
 	}
@@ -290,12 +352,56 @@ func (p *Provider) query(ctx context.Context, db *sql.DB, ref mamori.Ref) (mamor
 }
 
 // scanErr maps a row-scan error to a typed not-found (for a missing row) or
-// wraps it with context otherwise.
+// routes it through classifySqlite and wraps it with context otherwise.
 func (p *Provider) scanErr(table, key string, err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("sqlite: %s/%s: %w", table, key, mamori.ErrNotFound)
 	}
-	return fmt.Errorf("sqlite: query %s: %w", table, err)
+	return fmt.Errorf("sqlite: query %s: %w", table, classifySqlite(err))
+}
+
+// classifySqlite maps a *msqlite.Error (modernc.org/sqlite's own error type,
+// which carries the raw SQLite result code via Code()) onto a mamori
+// classification sentinel.
+//
+// Only codes a config/secrets read can plausibly hit are mapped:
+// SQLITE_PERM and SQLITE_READONLY (both a denied write/access - a read-only
+// mount or a permission problem), SQLITE_BUSY, SQLITE_LOCKED, and
+// SQLITE_CANTOPEN (all forms of "the database is temporarily unreachable" -
+// a concurrent locker or a file/path problem), and SQLITE_AUTH (an
+// authorizer callback denied the operation). Any other code - including one
+// not yet added to this switch - passes through unclassified and reports
+// unknown, which is the honest answer for a code this provider does not
+// recognize rather than a guess that might send an operator down the wrong
+// path. A non-*msqlite.Error (for example a plain sentinel injected by a
+// test double) also passes through unclassified, since there is no SQLite
+// result code to read.
+//
+// Every code below was verified directly against the raw constants generated
+// into modernc.org/sqlite@v1.54.0's lib/sqlite.go: SQLITE_PERM=3,
+// SQLITE_BUSY=5, SQLITE_LOCKED=6, SQLITE_READONLY=8, SQLITE_CANTOPEN=14,
+// SQLITE_AUTH=23. These are the SQLite C API's own result codes and have been
+// stable across the library's history.
+func classifySqlite(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sqliteErr *msqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return err
+	}
+	var sentinel error
+	switch sqliteErr.Code() {
+	case 3, 8: // SQLITE_PERM, SQLITE_READONLY
+		sentinel = mamori.ErrPermissionDenied
+	case 5, 6, 14: // SQLITE_BUSY, SQLITE_LOCKED, SQLITE_CANTOPEN
+		sentinel = mamori.ErrUnavailable
+	case 23: // SQLITE_AUTH
+		sentinel = mamori.ErrUnauthenticated
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // Watch implements mamori.WatchableProvider by watching the database file with

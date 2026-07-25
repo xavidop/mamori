@@ -87,6 +87,8 @@ func TestIntegrationConformance(t *testing.T) {
 		Seed:              upsert(pool, table),
 		Mutate:            upsert(pool, table),
 		EventuallyTimeout: 15 * time.Second,
+		// live-backend integration test; error injection not possible, unit test covers classification
+		NoResolveErrors: true,
 	})
 }
 

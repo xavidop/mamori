@@ -108,6 +108,38 @@ func (p *Provider) getClient(ctx context.Context) (smClient, error) {
 	return c, nil
 }
 
+// classifyGCP maps a gRPC status onto a mamori classification sentinel. The
+// Secret Manager v1 client is gRPC-based, so codes map one to one and no
+// string matching is needed.
+//
+// DeadlineExceeded maps to unavailable because a request that timed out is a
+// backend that did not respond in time, which is what unavailable denotes.
+// Codes with no clear mamori meaning (Internal, Unimplemented, Aborted) are
+// returned unclassified rather than guessed at.
+func classifyGCP(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sentinel error
+	switch status.Code(err) {
+	case codes.NotFound:
+		sentinel = mamori.ErrNotFound
+	case codes.PermissionDenied:
+		sentinel = mamori.ErrPermissionDenied
+	case codes.Unauthenticated:
+		sentinel = mamori.ErrUnauthenticated
+	case codes.Unavailable, codes.DeadlineExceeded:
+		sentinel = mamori.ErrUnavailable
+	case codes.ResourceExhausted:
+		sentinel = mamori.ErrRateLimited
+	case codes.InvalidArgument:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
+}
+
 // Close releases the backing client, if one has been created.
 func (p *Provider) Close() error {
 	p.mu.Lock()
@@ -131,7 +163,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 
 	project, secret, ok := strings.Cut(ref.Path, "/")
 	if !ok || project == "" || secret == "" {
-		return mamori.Value{}, fmt.Errorf("gcp-sm: ref %q must be of the form gcp-sm://<project>/<secret>[#key][?version=]", ref.Raw)
+		return mamori.Value{}, fmt.Errorf("gcp-sm: ref %q must be of the form gcp-sm://<project>/<secret>[#key][?version=]: %w", ref.Raw, mamori.ErrInvalid)
 	}
 
 	version := ref.Opt("version")
@@ -148,9 +180,9 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	resp, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: name})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			return mamori.Value{}, fmt.Errorf("gcp-sm: secret %q not found: %w", ref.Path, mamori.ErrNotFound)
+			return mamori.Value{}, fmt.Errorf("gcp-sm: secret %q not found: %w: %w", ref.Path, mamori.ErrNotFound, err)
 		}
-		return mamori.Value{}, fmt.Errorf("gcp-sm: accessing %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("gcp-sm: accessing %q: %w", ref.Path, classifyGCP(err))
 	}
 
 	data := resp.GetPayload().GetData()

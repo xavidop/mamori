@@ -22,4 +22,12 @@ type Config struct {
 	// OK: no source tag at all.
 	Plain    string
 	Internal []byte `json:"internal"`
+
+	// BAD: chained source tag whose sensitive ref is NOT first. The analyzer
+	// must check every ref in the chain, not just the first, or this goes
+	// unflagged.
+	ChainedPassword string `source:"env:LEVEL,aws-sm://prod/db#password"` // want `field "ChainedPassword" has a secret-bearing source scheme "aws-sm" but stores it in a plain string; use secret.String or secret.Bytes`
+
+	// OK: chained source tag where every ref is a non-secret scheme.
+	ChainedLevel string `source:"env:LEVEL,file:///etc/app/level"`
 }

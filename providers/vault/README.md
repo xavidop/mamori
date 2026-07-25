@@ -113,6 +113,25 @@ plus the usual `VAULT_CACERT`, `VAULT_NAMESPACE`, etc. honored by
 override the environment, and `WithClient(*api.Client)` injects a fully
 preconfigured client (for AppRole, Kubernetes auth, custom TLS, and the like).
 
+## Error classification
+
+| Vault response | mamori kind |
+|---|---|
+| 404, `api.ErrSecretNotFound` | `not_found` |
+| 403 | `permission_denied` |
+| 429 | `rate_limited` |
+| 5xx (including a sealed vault's 503) | `unavailable` |
+| 400 | `invalid` |
+| Malformed ref (not `<mount>/<path>`) | `invalid` |
+| anything else | `unknown` |
+
+**One known ambiguity:** Vault answers 403 for both a policy that does not
+cover the path and a missing or expired token. The status code cannot separate
+them, so both report `permission_denied`. If you are investigating one, check
+token validity as well as policy. mamori deliberately does not match on the
+response body text to guess, because that string has changed between Vault
+versions.
+
 ## Verified vs. needs a live backend
 
 | Area                                                          | Status                                     |

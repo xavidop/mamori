@@ -69,6 +69,30 @@ type Config struct {
   wrap individual fields in `secret.String`.
 - A missing row returns an error satisfying `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+Beyond the not-found case above, other query failures are classified by
+SQLSTATE so `mamori.ErrorKind` can distinguish them:
+
+| SQLSTATE | Meaning | mamori kind |
+| --- | --- | --- |
+| `42501` | insufficient_privilege | `permission_denied` |
+| `28P01` | invalid_password | `unauthenticated` |
+| `28000` | invalid_authorization_specification | `unauthenticated` |
+| `53300` | too_many_connections | `unavailable` |
+| `57P03` | cannot_connect_now | `unavailable` |
+| `08006` | connection_failure | `unavailable` |
+| `08001` | sqlclient_unable_to_establish_sqlconnection | `unavailable` |
+| `08004` | sqlserver_rejected_establishment_of_sqlconnection | `unavailable` |
+| anything else | | `unknown` |
+
+PostgreSQL has no rate-limit SQLSTATE class, so no code maps to `rate_limited`.
+Codes not listed above report `unknown` rather than being guessed at. Because
+the pool is built lazily, a bad password or a refused connection surfaces at
+query time inside `Resolve`, not at construction, which is exactly where this
+classification applies. The original `*pgconn.PgError` stays reachable with
+`errors.As`, so existing code matching on it keeps working.
+
 ## Authentication & configuration
 
 By default the provider reads the connection string from the `DATABASE_URL`

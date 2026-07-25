@@ -33,11 +33,28 @@ type fakeObject struct {
 type fakeS3 struct {
 	mu      sync.Mutex
 	objects map[string]fakeObject // keyed by "<bucket>/<key>"
+	fails   map[string]error      // keyed by "<bucket>/<key>", same form as objects
 	counter int
 }
 
 func newFakeS3() *fakeS3 {
-	return &fakeS3{objects: map[string]fakeObject{}}
+	return &fakeS3{objects: map[string]fakeObject{}, fails: map[string]error{}}
+}
+
+// fail makes the next GetObject for "<bucket>/<key>" return err, until
+// clear(bucket, key) is called. It powers the providertest ErrorClassification
+// case.
+func (f *fakeS3) fail(bucket, key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[bucket+"/"+key] = err
+}
+
+// clear cancels a previously injected fail(bucket, key, err).
+func (f *fakeS3) clear(bucket, key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, bucket+"/"+key)
 }
 
 // put stores/overwrites an object, assigning a fresh (globally unique) quoted
@@ -68,6 +85,9 @@ func (f *fakeS3) GetObject(ctx context.Context, in *awss3.GetObjectInput, _ ...f
 	defer f.mu.Unlock()
 	bucket := awssdk.ToString(in.Bucket)
 	key := awssdk.ToString(in.Key)
+	if err, ok := f.fails[bucket+"/"+key]; ok {
+		return nil, err
+	}
 	if bucket == missingBucket {
 		return nil, &s3types.NoSuchBucket{Message: awssdk.String("The specified bucket does not exist")}
 	}
@@ -110,10 +130,18 @@ const testBucket = "mamori-test-bucket"
 func TestConformance(t *testing.T) {
 	fake := newFakeS3()
 	providertest.Run(t, providertest.Config{
-		New:       func() mamori.Provider { return newWithClient(fake) },
-		Ref:       func(key string) string { return scheme + "://" + testBucket + "/" + key },
-		Seed:      func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
-		Mutate:    func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
+		New:    func() mamori.Provider { return newWithClient(fake) },
+		Ref:    func(key string) string { return scheme + "://" + testBucket + "/" + key },
+		Seed:   func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
+		Mutate: func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(testBucket, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(testBucket, key)
+			return nil
+		},
 		SkipWatch: true,
 	})
 }

@@ -62,3 +62,14 @@ Values are not marked `Sensitive` by default; because `.env` files often hold se
 ## Watch
 
 `Watch` uses fsnotify on the file (watching the parent directory to catch atomic renames), re-reading and re-emitting when the `.env` file changes.
+
+## Error classification
+
+| Condition | mamori kind |
+|---|---|
+| File does not exist | `not_found` |
+| File exists but is unreadable (permission denied) | `permission_denied` |
+| Requested `#KEY` not present in the file | `not_found` |
+| Any other OS error | `unknown` |
+
+Like `file://`, `dotenv://` has no malformed-ref case, so there's no `invalid` row.

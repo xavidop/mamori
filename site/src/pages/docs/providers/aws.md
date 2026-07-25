@@ -70,4 +70,20 @@ mamori.WithProvider(awsprov.NewParameterStore(awsprov.WithRegion("eu-west-1")))
 
 Neither backend has native change notification, so mamori polls (`WithPollInterval` + jitter, `Value.Version` comparison). For push-based rotation you can pair this with an EventBridge -> SQS trigger in your app and call `Load` on demand.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| AWS error code | mamori kind |
+|---|---|
+| `ResourceNotFoundException`, `ParameterNotFound`, `ParameterVersionNotFound` | `not_found` |
+| `AccessDeniedException` | `permission_denied` |
+| `UnrecognizedClientException`, `ExpiredTokenException`, `InvalidSignatureException`, `MissingAuthenticationToken`, `IncompleteSignature` | `unauthenticated` |
+| `ThrottlingException`, `Throttling`, `TooManyRequestsException`, `RequestLimitExceeded` | `rate_limited` |
+| `InternalServiceError`, `InternalServerError`, `InternalFailure`, `ServiceUnavailable`, `ServiceUnavailableException` | `unavailable` |
+| `InvalidParameterException`, `InvalidRequestException`, `ValidationException`, `InvalidParameterValue`, `InvalidKeyId` | `invalid` |
+| anything else | `unknown` |
+
+Codes not listed above report `unknown` rather than being guessed at. Notably, Secrets Manager's `DecryptionFailure` is deliberately left unmapped: it can mean a KMS key policy problem, a disabled key, or a KMS outage, and doesn't map cleanly to one kind. The original SDK error stays reachable with `errors.As`.
+
 Verified by unit tests and the `providertest` conformance kit against in-memory fakes; live AWS behavior is covered by `//go:build integration` tests.

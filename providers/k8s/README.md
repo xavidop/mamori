@@ -42,6 +42,24 @@ mamori.WithProvider(k8s.NewConfigMap(k8s.WithClient(myClientset)))
 
 `Watch` opens a name-scoped watch and emits an `Update` on every Added/Modified event; it re-establishes (re-list + re-watch) if the server-side watch ends while the context is alive, and closes cleanly on cancellation.
 
+## Error classification
+
+| Kubernetes condition | mamori kind |
+|---|---|
+| `IsNotFound` | `not_found` |
+| `IsForbidden` (RBAC) | `permission_denied` |
+| `IsUnauthorized` | `unauthenticated` |
+| `IsTooManyRequests` | `rate_limited` |
+| `IsServiceUnavailable`, `IsTimeout`, `IsServerTimeout` | `unavailable` |
+| `IsBadRequest`, `IsInvalid` | `invalid` |
+| Malformed ref (not `<namespace>/<name>`) | `invalid` |
+| anything else | `unknown` |
+
+Detection uses the `apierrors` predicates rather than raw status codes, so it
+stays correct across API versions. The underlying `*StatusError` remains
+reachable, so `apierrors.IsForbidden` still works on an error that has passed
+through mamori.
+
 ## What is verified
 
 - ✅ Unit tests and the full [`providertest`](../../providertest) conformance kit run against `client-go`'s fake clientset - which supports **watch**, so the watch-emits-on-mutate and watch-closes-on-cancel conformance checks run for real (not skipped).

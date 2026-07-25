@@ -3,6 +3,7 @@ package mamori
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,6 +107,119 @@ func TestFileProviderWatch(t *testing.T) {
 
 	cancel()
 	for range ch { // drain to closure
+	}
+}
+
+func TestFileProviderClassifiesPermissionDenied(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; permission bits are not enforced")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(path, []byte("hunter2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	ref, err := ParseRef("file://" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fileProvider{}.Resolve(context.Background(), ref)
+	if err == nil {
+		t.Fatal("Resolve of an unreadable file returned nil error")
+	}
+	if got := ErrorKind(err); got != KindPermissionDenied {
+		t.Fatalf("ErrorKind = %q, want %q (err: %v)", got, KindPermissionDenied, err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("wrapped error no longer satisfies errors.Is(err, fs.ErrPermission); "+
+			"the %%w: %%w pattern must preserve the original: %v", err)
+	}
+}
+
+func TestFileProviderStillReportsNotFound(t *testing.T) {
+	ref, err := ParseRef("file:///nonexistent/path/to/nothing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fileProvider{}.Resolve(context.Background(), ref)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing file must still report ErrNotFound, got %v", err)
+	}
+	if got := ErrorKind(err); got != KindNotFound {
+		t.Fatalf("ErrorKind = %q, want %q", got, KindNotFound)
+	}
+}
+
+func TestExecProviderMissingBinaryStaysUnknown(t *testing.T) {
+	// A binary missing from PATH means mamori could not even attempt to fetch
+	// the value; it is not evidence the value itself is absent. It must NOT be
+	// classified as ErrNotFound (that would trigger default:/optional
+	// handling), so it stays unclassified and reports unknown.
+	ref, err := ParseRef("exec:mamori-no-such-binary-exists-anywhere")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = execProvider{}.Resolve(context.Background(), ref)
+	if err == nil {
+		t.Fatal("Resolve of a nonexistent binary returned nil error")
+	}
+	if got := ErrorKind(err); got != KindUnknown {
+		t.Fatalf("ErrorKind = %q, want %q (err: %v)", got, KindUnknown, err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing binary must not satisfy errors.Is(err, ErrNotFound): %v", err)
+	}
+}
+
+// TestExecProviderMissingBinaryDoesNotTriggerDefault is the regression test for
+// the semantic bug this fix restores: a missing binary must fail Load loudly,
+// never fall back to a field's default:. If exec.ErrNotFound is ever remapped
+// to mamori.ErrNotFound again, this test must fail.
+func TestExecProviderMissingBinaryDoesNotTriggerDefault(t *testing.T) {
+	type cfg struct {
+		Out string `source:"exec:mamori-no-such-binary-exists-anywhere" default:"FALLBACK"`
+	}
+	_, err := Load[cfg](context.Background(), WithExecProvider())
+	if err == nil {
+		t.Fatal("Load with a missing exec binary returned nil error; " +
+			"it must fail instead of silently applying default:")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("Load error satisfies errors.Is(err, ErrNotFound); "+
+			"a missing binary must not be classified as not-found: %v", err)
+	}
+}
+
+func TestExecProviderClassifiesEmptyCommand(t *testing.T) {
+	ref, err := ParseRef("exec:   ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = execProvider{}.Resolve(context.Background(), ref)
+	if got := ErrorKind(err); got != KindInvalid {
+		t.Fatalf("ErrorKind = %q, want %q (err: %v)", got, KindInvalid, err)
+	}
+}
+
+func TestExecProviderNonZeroExitStaysUnknown(t *testing.T) {
+	// A command that runs and fails is a real failure, but mamori has no way to
+	// know whether it was a permission problem, a missing value, or a bug in the
+	// script. Reporting unknown is the honest answer.
+	ref, err := ParseRef("exec:false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = execProvider{}.Resolve(context.Background(), ref)
+	if err == nil {
+		t.Fatal("Resolve of a failing command returned nil error")
+	}
+	if got := ErrorKind(err); got != KindUnknown {
+		t.Fatalf("ErrorKind = %q, want %q (err: %v)", got, KindUnknown, err)
 	}
 }
 

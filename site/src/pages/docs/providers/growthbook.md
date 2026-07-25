@@ -61,3 +61,7 @@ mamori.WithProvider(gbprov.New(
 ```
 
 Verified with an injected fake (un-seeded features resolve to not-found); live behavior is covered by `//go:build integration` tests.
+
+## Error classification
+
+Beyond not-found, this provider has no error vocabulary to classify against - a non-not-found evaluator error reports `unknown`. The chain is preserved: `Resolve` wraps the error with `%w`, so `errors.Is` / `errors.As` still reach it.

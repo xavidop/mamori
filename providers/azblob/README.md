@@ -109,13 +109,33 @@ A future push mode could subscribe to
 (`Microsoft.Storage.BlobCreated`) to get change notifications without polling;
 it is not implemented today.
 
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+A transport failure (no HTTP response at all, e.g. a DNS failure or a dropped
+connection) stays `unknown`, since it could be a bug in this provider as
+easily as a genuine backend outage. `*azcore.ResponseError` stays reachable
+with `errors.As` through both the not-found path (typed `bloberror` codes and
+a raw 404) and the classified fallback path.
+
 ## Verified vs. needs a live backend
 
 - **Verified in unit tests (no Azure account):** scheme, resolution, nested blob
   paths, JSON `#key` selection, not-found → `mamori.ErrNotFound` mapping (both the
-  typed `bloberror` codes and a raw 404), default vs. `WithSensitive`, account URL
-  normalization, missing-account configuration error, version change on mutate,
-  context cancellation, concurrency, goroutine hygiene, and the full
+  typed `bloberror` codes and a raw 404), error classification (permission
+  denied, unauthenticated, rate limited, unavailable, invalid, unmapped stays
+  `unknown`), default vs. `WithSensitive`, account URL normalization,
+  missing-account configuration error, version change on mutate, context
+  cancellation, concurrency, goroutine hygiene, and the full
   `providertest.Run` conformance suite - all run against an in-memory fake
   downloader.
 - **Needs a live backend:** end-to-end auth via the default credential chain,

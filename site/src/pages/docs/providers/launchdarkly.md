@@ -54,6 +54,18 @@ type Config struct {
 
 The evaluation context defaults to a stable key (`mamori`); override it with `WithContextKey`.
 
+## Error classification
+
+Beyond the not-found case, other evaluation failures are classified by the SDK's per-evaluation error reason:
+
+| Evaluation error kind | mamori kind |
+| --- | --- |
+| `CLIENT_NOT_READY` | `unavailable` |
+| `FLAG_NOT_FOUND` | not classified here - already drives not-found |
+| anything else (`MALFORMED_FLAG`, `USER_NOT_SPECIFIED`, `WRONG_TYPE`, `EXCEPTION`, ...) | `unknown` |
+
+LaunchDarkly's per-evaluation error vocabulary is thin: `CLIENT_NOT_READY` (evaluating before the client finished connecting) is the only kind with a confirmed, unambiguous meaning, so it is the only one mapped. The rest describe internal or data conditions with no reliable single real-world cause and are deliberately left `unknown` rather than guessed at.
+
 ## Watch
 
 `Watch` uses the SDK flag tracker: LaunchDarkly streams flag changes, and mamori emits an update the instant the flag's value for your context changes. This is a genuine push, not polling.
@@ -66,4 +78,4 @@ import ldprov "github.com/xavidop/mamori/providers/launchdarkly"
 mamori.WithProvider(ldprov.New(ldprov.WithSDKKey(os.Getenv("LAUNCHDARKLY_SDK_KEY"))))
 ```
 
-Verified with an injected fake evaluator (including value-change subscriptions and not-found), so the watch conformance checks run without a live LaunchDarkly. A real-SDK test is provided behind `//go:build integration`.
+Verified with an injected fake evaluator (including value-change subscriptions, not-found, and injected per-flag failures for error classification), so the watch and `providertest` `ErrorClassification` conformance checks run without a live LaunchDarkly. A real-SDK test is provided behind `//go:build integration`.

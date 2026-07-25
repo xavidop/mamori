@@ -67,6 +67,28 @@ type Config struct {
 - A missing document (or a missing `#field`) returns an error satisfying
   `errors.Is(err, mamori.ErrNotFound)`.
 
+## Error classification
+
+Beyond the not-found case above, other `FindOne`/change-stream failures are
+classified by MongoDB server error code so `mamori.ErrorKind` can distinguish
+them:
+
+| Code | Name | mamori kind |
+| --- | --- | --- |
+| `18` | AuthenticationFailed | `unauthenticated` |
+| `13` | Unauthorized | `permission_denied` |
+| anything else | | `unknown` |
+
+This table is deliberately small: only authentication and authorization are
+classified today. MongoDB defines dozens of additional server error codes for
+replica-set and write conditions (`NotWritablePrimary`, `PrimarySteppedDown`,
+and similar), but whether a plain read (`FindOne`, or opening a change stream)
+can genuinely surface them is not established, and mapping one on a guess
+would be worse than reporting `unknown`. That mapping is deliberately left for
+a future change once the reachable codes are confirmed against a real server,
+rather than added speculatively now. The original `mongo.CommandError` stays
+reachable with `errors.As`, so existing code matching on it keeps working.
+
 ## Authentication & configuration
 
 The connection string is read from the standard `MONGODB_URI` environment
@@ -130,6 +152,7 @@ streams** - the idiomatic MongoDB push mechanism, not a polling ticker:
 | --- | --- |
 | `providertest.Run` conformance suite | **Verified** - runs against an in-memory fake backend (`go test ./...`) |
 | Resolve (whole doc + `#field` + `?key=` selection), not-found, version (field & hash), context cancellation, bad path | **Verified** (unit tests) |
+| Error code classification (table test) and classification wired into `Resolve` (non-vacuous, backend-level test) | **Verified** (unit tests) |
 | Native change-stream watch (baseline + change + unrelated-write isolation + delete + cancel/close, no goroutine leak) | **Verified** against the fake |
 | End-to-end against a real MongoDB replica set (real `*mongo.ChangeStream`, ObjectID `_id` matching) | **Needs a live backend** - see the integration test |
 

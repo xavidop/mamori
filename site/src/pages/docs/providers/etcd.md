@@ -53,6 +53,23 @@ type Config struct {
 
 `Value.Version` is the key's `ModRevision`, etcd's native per-key revision, so change detection is exact and monotonic. etcd holds configuration rather than managed secrets, so values are non-sensitive; wrap a field in `secret.String` if you want redaction anyway.
 
+## Error classification
+
+Beyond the not-found case (an empty `Kvs` slice, never a gRPC code), other `Get`/watch failures are classified by gRPC status:
+
+| gRPC code | mamori kind |
+| --- | --- |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `InvalidArgument` | `unknown` (deliberately unmapped) |
+| anything else | `unknown` |
+
+`InvalidArgument` is deliberately left unmapped: etcd reports a bad username/password (`rpctypes.ErrGRPCAuthFailed`) as `InvalidArgument`, the same code ordinary malformed requests use, so there is no way to tell the two apart from the code alone. Mapping it either way would be wrong about half the time, so it stays `unknown`. `codes.NotFound` is never returned by etcd for a missing key either; the local empty-`Kvs` check drives `not_found` instead.
+
+The etcd v3 client also rewrites a fixed set of well-known server error messages (permission denied, invalid auth token, no leader/timed out, no space/too many requests) into an `rpctypes.EtcdError` that does not implement the `GRPCStatus()` interface `status.Code` relies on. The classifier falls back to `errors.As`-ing into `rpctypes.EtcdError` when `status.Code` reports `Unknown`, so these still classify correctly against a live server instead of silently reporting `unknown`.
+
 ## Watch
 
 `Watch` uses the etcd v3 `Watch` API, a genuine server push: it emits an `Update` on every PUT to the key and closes cleanly on context cancellation.

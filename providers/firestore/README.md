@@ -111,6 +111,26 @@ listeners** - the idiomatic Firestore push mechanism, not a polling ticker:
    goroutine exits, and the channel is closed - no goroutine leaks (verified with
    `goleak`).
 
+## Error classification
+
+| gRPC code | mamori kind |
+| --- | --- |
+| `NotFound` | `not_found` |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `InvalidArgument` | `invalid` |
+| anything else | `unknown` |
+
+The Firestore client is gRPC-based, so codes map one to one and no string
+matching is needed. Codes with no clear mamori meaning (`Internal`,
+`Unimplemented`, `Aborted`, `FailedPrecondition`) report `unknown` rather than
+being guessed at. The gRPC status stays reachable through `status.Code` on a
+classified error, for both `Resolve` and `Watch`: a listener failure mid-watch
+(a revoked permission, a backend outage) is classified the same way a
+`Resolve` failure would be, instead of surfacing as `unknown`.
+
 ## Testing status
 
 | Aspect | Status |

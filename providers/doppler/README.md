@@ -38,9 +38,27 @@ mamori.WithProvider(doppler.New(doppler.WithBaseURL("https://api.doppler.com"), 
 
 No native change notification - mamori polls (interval + jitter). Configure with `mamori.WithPollInterval`.
 
+## Error classification
+
+A missing secret is not a status-classified error: a 404 is detected first and mapped directly to `mamori.ErrNotFound`, before the general status switch runs. Every other non-2xx response is classified by HTTP status so `mamori.ErrorKind` can distinguish them:
+
+| HTTP status | mamori kind |
+| --- | --- |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+429 is the confirmed case: Doppler's API reference documents rate limiting explicitly, including the response headers that accompany a 429. 401 (a missing or malformed token) is well established from Doppler's token-based auth model and its own community support threads, though the API reference's status-code section only describes the 2xx/4xx/5xx categories in general terms rather than spelling out 401 by name. 403, 400, and 5xx are mapped on ordinary HTTP semantics - defensible mappings, not individually confirmed by Doppler's documentation. Codes not listed above report `unknown` rather than being guessed at.
+
+A raw transport failure (no HTTP response at all, e.g. a dropped connection) is returned unclassified, since it could be a client-side problem as easily as a genuine backend outage.
+
 ## What is verified
 
 - ✅ Unit tests and the [`providertest`](../../providertest) conformance kit run against an in-process HTTP fake of the Doppler API (injected `*http.Client`), so no network is required.
+- ✅ Error classification: a table test drives every mapped status through `classifyDopplerStatus`, a `Resolve`-level test drives a real 403 response through the fake HTTP server, and the conformance `ErrorClassification` case injects mamori sentinels directly at the `http.RoundTripper` (before the fake's handler ever runs) and confirms they survive `http.Client.Do`'s `*url.Error` wrapping unchanged.
 - ⚠️ Live Doppler behavior is exercised by `//go:build integration` tests requiring a real token, **not** run in CI by default.
 
 Passes the mamori conformance kit. 🛡️

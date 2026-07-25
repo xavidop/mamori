@@ -20,10 +20,11 @@ import (
 type fakeEvaluator struct {
 	mu     sync.Mutex
 	values map[string]any
+	fails  map[string]error
 }
 
 func newFakeEvaluator() *fakeEvaluator {
-	return &fakeEvaluator{values: map[string]any{}}
+	return &fakeEvaluator{values: map[string]any{}, fails: map[string]error{}}
 }
 
 func (f *fakeEvaluator) set(key string, val any) {
@@ -32,12 +33,32 @@ func (f *fakeEvaluator) set(key string, val any) {
 	f.values[key] = val
 }
 
+// fail makes the next evaluateFeature for key return err, until clear(key) is
+// called. It keys identically to set, so a key seeded with set and then
+// failed with fail targets the same entry. It powers the providertest
+// ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+func (f *fakeEvaluator) fail(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = err
+}
+
+// clear cancels a previously injected fail(key, err).
+func (f *fakeEvaluator) clear(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
+}
+
 func (f *fakeEvaluator) evaluateFeature(ctx context.Context, key string) (any, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[key]; ok {
+		return nil, false, err
+	}
 	v, ok := f.values[key]
 	return v, ok, nil
 }
@@ -66,6 +87,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
 			return nil
 		},
 		// GrowthBook has an SSE endpoint, but this provider is intentionally not
@@ -98,6 +127,30 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), parse(t, "growthbook://nope"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError proves that a non-not-found evaluator
+// error survives Resolve's error wrapping intact enough for errors.Is /
+// mamori.ErrorKind to recognize it. This provider has no error vocabulary
+// beyond not-found (no classifyGrowthBook function exists), so unlike
+// providers with a classifier, this test injects a real mamori sentinel
+// (mamori.ErrPermissionDenied) directly through the fake, rather than an
+// SDK-shaped error a classifier would map. It survives only because Resolve
+// wraps the evaluator error with %w, not %v; that is the entire value of
+// wiring Fail here.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeEvaluator()
+	fake.set("db", "s3cr3t")
+	fake.fail("db", mamori.ErrPermissionDenied)
+	p := New(withEvaluator(fake))
+
+	_, err := p.Resolve(context.Background(), parse(t, "growthbook://db"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; Resolve may not wrap the evaluator error with %%w", got, mamori.KindPermissionDenied)
 	}
 }
 

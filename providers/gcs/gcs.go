@@ -37,6 +37,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/xavidop/mamori"
+	"google.golang.org/api/googleapi"
 )
 
 // scheme is the URL scheme this provider handles.
@@ -147,6 +148,54 @@ func (p *Provider) Close() error {
 	return err
 }
 
+// classifyGCS maps a GCS object-read failure onto a mamori classification
+// sentinel. The GCS Go client is REST-based, not gRPC: a missing object or
+// bucket surfaces as one of the storage.Err*NotExist sentinels, and every
+// other failure surfaces as a *googleapi.Error carrying the HTTP status the
+// backend returned. So, unlike the gRPC-based Secret Manager client, this is a
+// status-code switch, structurally the same shape as Azure Key Vault's
+// classifyAzure.
+//
+// Only the HTTP statuses verified to actually occur for a GCS object read are
+// handled: 404 (not found, alongside the storage sentinels), 403 (permission
+// denied), 401 (unauthenticated), 429 (rate limited), 5xx (unavailable), and
+// 400 (invalid). Any other status, and any error that is not a
+// *googleapi.Error or a not-exist sentinel at all, is returned unclassified
+// rather than guessed at.
+func classifyGCS(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var sentinel error
+	switch {
+	case errors.Is(err, storage.ErrObjectNotExist), errors.Is(err, storage.ErrBucketNotExist):
+		sentinel = mamori.ErrNotFound
+	default:
+		var gerr *googleapi.Error
+		if !errors.As(err, &gerr) {
+			return err
+		}
+		switch code := gerr.Code; {
+		case code == 404:
+			sentinel = mamori.ErrNotFound
+		case code == 403:
+			sentinel = mamori.ErrPermissionDenied
+		case code == 401:
+			sentinel = mamori.ErrUnauthenticated
+		case code == 429:
+			sentinel = mamori.ErrRateLimited
+		case code >= 500:
+			sentinel = mamori.ErrUnavailable
+		case code == 400:
+			sentinel = mamori.ErrInvalid
+		default:
+			return err
+		}
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
+}
+
 // Resolve fetches the object named by ref. The ref path is <bucket>/<object>;
 // the object name may contain slashes. When ref.Key is set the JSON payload
 // field is selected. Missing objects return an error satisfying
@@ -169,9 +218,15 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	data, generation, etag, err := r.read(ctx, bucket, object)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {
-			return mamori.Value{}, fmt.Errorf("gcs: object %q not found: %w", ref.Path, mamori.ErrNotFound)
+			// Double-wrap (%w: %w) rather than replacing err with the bare
+			// mamori sentinel, so errors.Is(err, storage.ErrObjectNotExist)
+			// keeps working for callers matching on the GCS SDK sentinel
+			// directly, exactly as the README's error table promises. This
+			// mirrors providers/azblob's Resolve, which preserves its
+			// underlying SDK error the same way.
+			return mamori.Value{}, fmt.Errorf("gcs: object %q not found: %w: %w", ref.Path, mamori.ErrNotFound, err)
 		}
-		return mamori.Value{}, fmt.Errorf("gcs: reading %q: %w", ref.Path, err)
+		return mamori.Value{}, fmt.Errorf("gcs: reading %q: %w", ref.Path, classifyGCS(err))
 	}
 
 	// Prefer the object generation for cheap change detection: it changes on

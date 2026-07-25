@@ -70,4 +70,19 @@ mamori.WithProvider(k8sprov.New(k8sprov.WithKubeconfig("/home/me/.kube/config"))
 mamori.WithProvider(k8sprov.NewConfigMap(k8sprov.WithClient(myClientset)))
 ```
 
+## Error classification
+
+| Kubernetes condition | mamori kind |
+|---|---|
+| `IsNotFound` | `not_found` |
+| `IsForbidden` (RBAC) | `permission_denied` |
+| `IsUnauthorized` | `unauthenticated` |
+| `IsTooManyRequests` | `rate_limited` |
+| `IsServiceUnavailable`, `IsTimeout`, `IsServerTimeout` | `unavailable` |
+| `IsBadRequest`, `IsInvalid` | `invalid` |
+| Malformed ref (not `<namespace>/<name>`) | `invalid` |
+| anything else | `unknown` |
+
+Detection uses the `apierrors` predicates rather than raw status codes, so it stays correct across API versions. The underlying `*StatusError` remains reachable, so `apierrors.IsForbidden` still works on an error that has passed through mamori.
+
 Verified against `client-go`'s fake clientset, which supports watch - so the watch conformance checks run for real, not skipped. Live-cluster behavior is covered by `//go:build integration` tests.

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/providertest"
 )
@@ -24,6 +25,7 @@ type fakeDB struct {
 	mu    sync.Mutex
 	rows  map[string]fakeRowData
 	rev   map[string]int
+	fails map[string]error // key -> injected error, consulted before rows
 	calls []fakeCall
 }
 
@@ -38,7 +40,7 @@ type fakeCall struct {
 }
 
 func newFakeDB() *fakeDB {
-	return &fakeDB{rows: map[string]fakeRowData{}, rev: map[string]int{}}
+	return &fakeDB{rows: map[string]fakeRowData{}, rev: map[string]int{}, fails: map[string]error{}}
 }
 
 // set upserts a row, bumping a synthetic native revision so the version column
@@ -48,6 +50,24 @@ func (f *fakeDB) set(key, val string) {
 	defer f.mu.Unlock()
 	f.rev[key]++
 	f.rows[key] = fakeRowData{value: val, version: "rev-" + strconv.Itoa(f.rev[key])}
+}
+
+// fail makes the next QueryRowContext for key return err from Scan, until
+// clear(key) is called. It keys identically to set (the raw row key), so a
+// key seeded with set and then failed with fail targets the same row. It
+// powers the providertest ErrorClassification case and
+// TestResolveClassifiesNonNotFoundError.
+func (f *fakeDB) fail(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = err
+}
+
+// clear cancels a previously injected fail(key, err).
+func (f *fakeDB) clear(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
 }
 
 func (f *fakeDB) lastCall() (fakeCall, bool) {
@@ -67,20 +87,25 @@ func (f *fakeDB) QueryRowContext(ctx context.Context, query string, args ...any)
 	if len(args) > 0 {
 		key, _ = args[0].(string)
 	}
+	injectedErr := f.fails[key]
 	data, ok := f.rows[key]
 	f.mu.Unlock()
-	return &fakeRow{ctxErr: ctx.Err(), data: data, found: ok}
+	return &fakeRow{ctxErr: ctx.Err(), injectedErr: injectedErr, data: data, found: ok}
 }
 
 // fakeRow implements rowScanner. It honors context cancellation the way a real
 // *sql.Row does and returns sql.ErrNoRows for a missing key.
 type fakeRow struct {
-	ctxErr error
-	data   fakeRowData
-	found  bool
+	ctxErr      error
+	injectedErr error // set by fakeDB.fail; consulted before ctxErr/not-found
+	data        fakeRowData
+	found       bool
 }
 
 func (r *fakeRow) Scan(dest ...any) error {
+	if r.injectedErr != nil {
+		return r.injectedErr
+	}
 	if r.ctxErr != nil {
 		return r.ctxErr
 	}
@@ -198,6 +223,31 @@ func TestResolveNotFound(t *testing.T) {
 	}
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("error %v does not satisfy errors.Is(err, mamori.ErrNotFound)", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyMySQL through
+// Resolve itself, not just as a direct function call. Neither existing kind
+// of test catches a regression here: TestClassifyMySQL calls classifyMySQL
+// directly, so it passes whether or not Resolve actually calls it, and the
+// providertest ErrorClassification case injects a mamori sentinel (not a
+// *mysqldriver.MySQLError), which classifyMySQL returns unchanged either way
+// - it would pass even with Resolve's classifyMySQL call deleted. This test
+// injects a real MySQLError through fakeDB.fail, the same shape a live MySQL
+// server would return, so it fails if Resolve's error branch stops routing
+// through classifyMySQL.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	f := newFakeDB()
+	f.set("db_password", "s3cr3t")
+	f.fail("db_password", &mysqldriver.MySQLError{Number: 1044, Message: "access denied for db config"})
+	p := New(withQueryer(f))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "mysql://config/db_password"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyMySQL may not be wired into Resolve", got, mamori.KindPermissionDenied)
 	}
 }
 
@@ -420,6 +470,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			f.set(key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			f.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			f.clear(key)
 			return nil
 		},
 		SkipWatch: true, // MySQL has no native change notification.

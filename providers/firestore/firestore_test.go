@@ -21,6 +21,7 @@ import (
 type fakeStore struct {
 	mu       sync.Mutex
 	docs     map[string]fakeDoc
+	fails    map[string]error // "<collection>/<doc>" -> injected error, consulted by Get
 	version  uint64
 	baseTime time.Time
 	waiters  chan struct{} // closed (and replaced) on every write to wake blocked streams
@@ -34,12 +35,30 @@ type fakeDoc struct {
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		docs:     map[string]fakeDoc{},
+		fails:    map[string]error{},
 		baseTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		waiters:  make(chan struct{}),
 	}
 }
 
 func docKey(collection, doc string) string { return collection + "/" + doc }
+
+// fail makes the next Get for collection/doc return err, until clear is
+// called for the same key. It powers the providertest ErrorClassification
+// case and TestResolveClassifiesNonNotFoundError. Keyed identically to set,
+// so fail/clear target the exact entry Seed populated.
+func (f *fakeStore) fail(collection, doc string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[docKey(collection, doc)] = err
+}
+
+// clear cancels a previously injected fail(collection, doc, err).
+func (f *fakeStore) clear(collection, doc string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, docKey(collection, doc))
+}
 
 // set writes data for collection/doc, bumping the global version and the
 // document's UpdateTime, then wakes any blocked snapshot streams.
@@ -62,6 +81,9 @@ func (f *fakeStore) Get(ctx context.Context, collection, doc string) (snapshot, 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[docKey(collection, doc)]; ok {
+		return nil, err
+	}
 	d, ok := f.docs[docKey(collection, doc)]
 	if !ok {
 		return fakeSnapshot{exists: false}, nil
@@ -148,6 +170,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			store.set(collection, key, map[string]interface{}{"value": val})
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			store.fail(collection, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			store.clear(collection, key)
 			return nil
 		},
 		EventuallyTimeout: 3 * time.Second,

@@ -141,6 +141,15 @@ mamori.WithProvider(growthbook.New(growthbook.WithFeatures(features)))
 
 Combine `WithFeatures` with `WithDecryptionKey` to supply an encrypted payload.
 
+## Error classification
+
+This provider has no error vocabulary beyond not-found: the GrowthBook SDK
+does not expose a typed error taxonomy to classify against (no
+`classifyGrowthBook` function exists). Any non-not-found error from
+evaluating a feature is reported as `mamori.KindUnknown`, but the underlying
+error is never lost - `Resolve` wraps it with `%w`, so `errors.Is` /
+`errors.As` still reach it through `mamori.ErrorKind` and beyond.
+
 ## Verified vs. needs a live backend
 
 **Verified in unit tests (no GrowthBook access):** scheme and registration, ref

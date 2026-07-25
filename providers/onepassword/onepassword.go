@@ -302,12 +302,46 @@ func (p *Provider) get(ctx context.Context, host, token, path string, query url.
 
 // statusError builds an error for an unexpected HTTP status without leaking any
 // secret payload (Connect error bodies are diagnostic JSON, not secret values).
+// The status is routed through classifyOnePassword so callers can recover a
+// mamori classification sentinel with errors.Is or mamori.ErrorKind; a status
+// classifyOnePassword does not recognize comes back unclassified.
 func statusError(op string, status int, body []byte) error {
 	msg := strings.TrimSpace(string(body))
 	if len(msg) > 200 {
 		msg = msg[:200]
 	}
-	return fmt.Errorf("onepassword: %s: unexpected status %d: %s", op, status, msg)
+	err := fmt.Errorf("onepassword: %s: unexpected status %d: %s", op, status, msg)
+	if sentinel := classifyOnePassword(status); sentinel != nil {
+		return fmt.Errorf("%w: %w", sentinel, err)
+	}
+	return err
+}
+
+// classifyOnePassword maps a Connect HTTP status onto a mamori classification
+// sentinel. Connect's error responses carry only a numeric status and a
+// free-text message, no machine-readable error code, so classification is by
+// status code alone.
+//
+// 404 is deliberately not handled here: resolveVaultID and resolveItem each
+// check for it directly, before falling into the statusError path this
+// function feeds, because a missing vault, item, or field needs its own
+// specific message naming what was not found. Statuses with no clear mamori
+// meaning are left unclassified (nil) rather than guessed at.
+func classifyOnePassword(status int) error {
+	switch {
+	case status == http.StatusForbidden:
+		return mamori.ErrPermissionDenied
+	case status == http.StatusUnauthorized:
+		return mamori.ErrUnauthenticated
+	case status == http.StatusTooManyRequests:
+		return mamori.ErrRateLimited
+	case status >= http.StatusInternalServerError:
+		return mamori.ErrUnavailable
+	case status == http.StatusBadRequest:
+		return mamori.ErrInvalid
+	default:
+		return nil
+	}
 }
 
 // Ensure Provider satisfies the core interface. Note: no Watch method is

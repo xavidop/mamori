@@ -54,6 +54,18 @@ func (w *watchProvider) push(path, val, version string) {
 	}
 }
 
+// pushErr sends an error update (no value change) to all active watchers of
+// path, exercising the native-watch error-delivery path the way push
+// exercises the value-delivery path.
+func (w *watchProvider) pushErr(path string, err error) {
+	w.mu.Lock()
+	chans := append([]chan Update(nil), w.watchers[path]...)
+	w.mu.Unlock()
+	for _, ch := range chans {
+		ch <- Update{Err: err}
+	}
+}
+
 func (w *watchProvider) Resolve(_ context.Context, ref Ref) (Value, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

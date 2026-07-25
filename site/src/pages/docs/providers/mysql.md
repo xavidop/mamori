@@ -69,4 +69,19 @@ import mysqlprov "github.com/xavidop/mamori/providers/mysql"
 mamori.WithProvider(mysqlprov.New(mysqlprov.WithDSN("user:pass@tcp(mysql:3306)/appdb")))
 ```
 
+## Error classification
+
+Beyond the not-found case, query failures are classified by the driver's numeric server error code so `mamori.ErrorKind` can distinguish them:
+
+| Number | mamori kind |
+|---|---|
+| `1044` (ER_DBACCESS_DENIED_ERROR), `1142` (ER_TABLEACCESS_DENIED_ERROR) | `permission_denied` |
+| `1045` (ER_ACCESS_DENIED_ERROR) | `unauthenticated` |
+| `1040` (ER_CON_COUNT_ERROR), `1203` (ER_TOO_MANY_USER_CONNECTIONS) | `unavailable` |
+| anything else | `unknown` |
+
+MySQL has no rate-limit error class, so nothing maps to `rate_limited`, and the syntax-error code is unreachable through this provider's fixed query template, so nothing maps to `invalid` either. Numbers not listed above report `unknown` rather than being guessed at, and the original `*mysqldriver.MySQLError` stays reachable with `errors.As`.
+
+A refused TCP connection (client errors 2002/2003, a fully down database) is **not** a `*MySQLError` - it is a net-level error whose exact wrapped type is not stable enough to match reliably, so it deliberately reports `unknown` rather than being type-guessed. A connection-limit rejection (`1040`/`1203`, a reachable but overloaded database) still reports `unavailable`.
+
 Verified with an in-memory fake (including an identifier-allowlist rejection test); live behavior is covered by `//go:build integration` tests.

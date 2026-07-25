@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -178,13 +179,30 @@ func TestFormatForPath(t *testing.T) {
 // with an injected fake decrypt. Seed/Mutate write plaintext to a temp file that
 // the fake reads back, so the full suite (resolve, not-found, versioning, native
 // fsnotify watch, concurrency, goroutine hygiene) runs without any SOPS keys.
+//
+// Fail/Clear are wired through a fails map keyed by the encrypted file's path
+// (not the logical key providertest uses), consulted first inside the fake
+// decrypt closure: this is the same seam WithDecrypt already exposes to every
+// caller, so no special-case hook is needed on Provider itself. Without this,
+// ErrorClassification has no Fail hook and providertest skips it entirely (as
+// it did before this change) rather than actually proving the decrypt-error
+// path preserves errors.Is.
 func TestConformance(t *testing.T) {
 	dir := t.TempDir()
 	pathFor := func(key string) string { return filepath.Join(dir, key+".enc.yaml") }
 
+	var mu sync.Mutex
+	fails := map[string]error{}
+
 	providertest.Run(t, providertest.Config{
 		New: func() mamori.Provider {
 			return New(WithDecrypt(func(path, _ string) ([]byte, error) {
+				mu.Lock()
+				err, failing := fails[path]
+				mu.Unlock()
+				if failing {
+					return nil, err
+				}
 				return os.ReadFile(path)
 			}))
 		},
@@ -194,6 +212,18 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			return os.WriteFile(pathFor(key), []byte(val), 0o600)
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			mu.Lock()
+			fails[pathFor(key)] = err
+			mu.Unlock()
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			mu.Lock()
+			delete(fails, pathFor(key))
+			mu.Unlock()
+			return nil
 		},
 	})
 }

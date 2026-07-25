@@ -75,4 +75,18 @@ mamori.WithProvider(vaultprov.New(
 ))
 ```
 
+## Error classification
+
+| Vault response | mamori kind |
+|---|---|
+| 404, `api.ErrSecretNotFound` | `not_found` |
+| 403 | `permission_denied` |
+| 429 | `rate_limited` |
+| 5xx (including a sealed vault's 503) | `unavailable` |
+| 400 | `invalid` |
+| Malformed ref (not `<mount>/<path>`) | `invalid` |
+| anything else | `unknown` |
+
+Vault answers 403 both for a policy that doesn't cover the path and for a missing or expired token, and the status code can't separate them, so both report `permission_denied`. If you're investigating one, check token validity as well as policy.
+
 Verified by unit tests (with/without `#key`, lease `NotAfter`) and the conformance kit against an in-memory fake; a dev-Vault integration test is provided behind `//go:build integration`.

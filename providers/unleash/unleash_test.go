@@ -261,6 +261,9 @@ func TestConformance(t *testing.T) {
 			return nil
 		},
 		SkipWatch: true, // Unleash has no clean per-toggle native change notification.
+		// featureClient is Exists/IsEnabled/GetVariant, all returning bool/string;
+		// there is no per-key error to inject, so ErrorClassification is exempt.
+		NoResolveErrors: true,
 	})
 }
 

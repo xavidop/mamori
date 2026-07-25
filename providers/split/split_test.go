@@ -217,5 +217,8 @@ func TestConformance(t *testing.T) {
 			return nil
 		},
 		SkipWatch: true, // Split has no native per-flag change notification.
+		// treatmentClient.Treatment returns a bare string; not-found is the
+		// "control" sentinel, not an error, so ErrorClassification is exempt.
+		NoResolveErrors: true,
 	})
 }

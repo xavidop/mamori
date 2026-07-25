@@ -42,6 +42,29 @@ mamori.WithProvider(aws.NewParameterStore(aws.WithRegion("eu-west-1")))
 
 Neither backend has native change notification, so mamori polls (interval + jitter, `Value.Version` comparison). Configure with `mamori.WithPollInterval`.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| AWS error code | mamori kind |
+|---|---|
+| `ResourceNotFoundException`, `ParameterNotFound`, `ParameterVersionNotFound` | `not_found` |
+| `AccessDeniedException` | `permission_denied` |
+| `UnrecognizedClientException`, `ExpiredTokenException`, `InvalidSignatureException`, `MissingAuthenticationToken`, `IncompleteSignature` | `unauthenticated` |
+| `ThrottlingException`, `Throttling`, `TooManyRequestsException`, `RequestLimitExceeded` | `rate_limited` |
+| `InternalServiceError`, `InternalServerError`, `InternalFailure`, `ServiceUnavailable`, `ServiceUnavailableException` | `unavailable` |
+| `InvalidParameterException`, `InvalidRequestException`, `ValidationException`, `InvalidParameterValue`, `InvalidKeyId` | `invalid` |
+| anything else | `unknown` |
+
+Codes not listed above (including any not yet added to this table) report
+`unknown` rather than being guessed at. Notably, Secrets Manager's
+`DecryptionFailure` is deliberately left unmapped: it can mean a KMS key
+policy problem, a disabled key, or a KMS outage, and does not map cleanly to
+one kind, so reporting it as `unknown` is the honest outcome.
+
+The original SDK error remains reachable with `errors.As`, so existing code
+matching on `*smtypes.ResourceNotFoundException` keeps working.
+
 ## What is verified
 
 - ✅ Unit tests against injected fake SDK clients, and the [`providertest`](../../providertest) conformance kit against in-memory fakes for both schemes.

@@ -112,7 +112,7 @@ func (p *SMProvider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[s
 		SecretIdList: ids,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("aws-sm: batch resolve: %w", err)
+		return nil, fmt.Errorf("aws-sm: batch resolve: %w", classifyAWS(err))
 	}
 
 	result := make(map[string]mamori.Value, len(out.SecretValues))
@@ -162,7 +162,7 @@ func smValue(key string, data []byte, versionID *string) (mamori.Value, error) {
 func mapSMError(ref mamori.Ref, err error) error {
 	var nf *smtypes.ResourceNotFoundException
 	if errors.As(err, &nf) {
-		return fmt.Errorf("aws-sm: secret %q not found: %w", ref.Path, mamori.ErrNotFound)
+		return fmt.Errorf("aws-sm: secret %q not found: %w: %w", ref.Path, mamori.ErrNotFound, err)
 	}
-	return fmt.Errorf("aws-sm: resolve %q: %w", ref.Path, err)
+	return fmt.Errorf("aws-sm: resolve %q: %w", ref.Path, classifyAWS(err))
 }

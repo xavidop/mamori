@@ -48,6 +48,10 @@ The value maps to bytes by type: a boolean setting resolves to `true` / `false`,
 
 The ConfigCat SDK auto-polls its config; mamori polls (`WithPollInterval` + jitter) on top.
 
+## Error classification
+
+ConfigCat's client surface returns a bare value with no error, so this provider has no error vocabulary beyond not-found. It is conformance-exempt from the `ErrorClassification` case via `providertest.Config.NoResolveErrors`.
+
 ## Configuration
 
 ```go

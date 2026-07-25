@@ -74,6 +74,28 @@ type Config struct {
   missing `#json-key` inside an existing JSON variation is likewise a typed
   not-found.
 
+## Error classification
+
+Beyond the not-found case above, other evaluation failures are classified by
+go-feature-flag's OpenFeature-style `ErrorCode` so `mamori.ErrorKind` can
+distinguish them:
+
+| ErrorCode | Meaning | mamori kind |
+| --- | --- | --- |
+| `PROVIDER_NOT_READY` | flag store has not finished its initial load | `unavailable` |
+| `PARSE_ERROR` | flag configuration could not be parsed | `invalid` |
+| `TYPE_MISMATCH` | flag's variation is not the requested type | `invalid` |
+| `INVALID_CONTEXT` | the evaluation context is invalid | `invalid` |
+| `TARGETING_KEY_MISSING` | no targeting key on the evaluation context | `invalid` |
+| `GENERAL` | go-feature-flag's catch-all for anything else | `unknown` |
+| anything else | | `unknown` |
+
+`GENERAL` is deliberately left unclassified: go-feature-flag uses it for
+failures that fit no other code, so mapping it to a specific kind would be a
+guess rather than an honest read of what the SDK reported. Codes not listed
+above report `unknown` rather than being guessed at, and the underlying error
+(when RawVariation returned one) stays reachable with `errors.Is`/`errors.As`.
+
 ## Configuration (retriever)
 
 go-feature-flag loads its flag definitions from a **retriever** - a local file,
@@ -150,6 +172,7 @@ the other.
 | --- | --- |
 | `providertest.Run` conformance suite | **Verified** - runs against an in-memory fake evaluator (`GOWORK=off go test ./...`), no flag file needed |
 | Resolve, type mapping (bool / string / number / JSON), JSON `#key` selection, not-found, version monotonicity, context cancellation, concurrency, goroutine hygiene | **Verified** (unit + conformance tests) |
+| Error classification (`ErrorCode` -> mamori kind) | **Verified** - table test plus a `Resolve`-level test injecting a real `ErrorCode` through the fake evaluator |
 | Targeting-key propagation into the evaluation context | **Verified** (unit test) |
 | End-to-end against a **real** `ffclient` loaded from a file, including FLAG_NOT_FOUND and poll-interval hot-reload | **Needs the integration build tag** - see below |
 

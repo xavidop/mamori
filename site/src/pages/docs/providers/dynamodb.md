@@ -62,6 +62,24 @@ type Config struct {
 
 mamori polls (`WithPollInterval` + jitter). For push, DynamoDB Streams can drive an on-demand reload in your app.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| DynamoDB error code | mamori kind |
+|---|---|
+| `ResourceNotFoundException` | `not_found` |
+| `AccessDeniedException` | `permission_denied` |
+| `UnrecognizedClientException`, `ExpiredTokenException`, `InvalidSignatureException`, `MissingAuthenticationToken`, `IncompleteSignature` | `unauthenticated` |
+| `ProvisionedThroughputExceededException`, `ThrottlingException`, `RequestLimitExceeded`, `Throttling`, `TooManyRequestsException` | `rate_limited` |
+| `InternalServerError`, `ServiceUnavailable`, `InternalFailure` | `unavailable` |
+| `ValidationException` | `invalid` |
+| anything else | `unknown` |
+
+Codes not listed above report `unknown` rather than being guessed at. `ResourceNotFoundException` is matched first as its typed `*ddbtypes.ResourceNotFoundException` shape before classification runs; the classifier also recognizes the raw code, so an untyped error carrying it still maps to `not_found`. The original SDK error stays reachable with `errors.As`.
+
+Most codes come from DynamoDB's own error reference or the AWS-wide Common Errors page (`MissingAuthenticationToken`, `IncompleteSignature`, `Throttling`, `TooManyRequestsException`, `InternalFailure` are AWS-wide codes, mapped the same way the AWS provider maps them for other services). `ExpiredTokenException` and `InvalidSignatureException` are real AWS signing and credential errors DynamoDB can return, but are not actually enumerated on either reference page.
+
 ## Configuration
 
 ```go

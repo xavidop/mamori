@@ -3,6 +3,7 @@ package consul
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 type fakeKV struct {
 	mu      sync.Mutex
 	data    map[string]*api.KVPair
+	fails   map[string]error // key -> injected error, consulted before data
 	index   uint64
 	waiters chan struct{} // closed (and replaced) on every write to wake blocked Gets
 }
@@ -27,6 +29,7 @@ type fakeKV struct {
 func newFakeKV() *fakeKV {
 	return &fakeKV{
 		data:    map[string]*api.KVPair{},
+		fails:   map[string]error{},
 		waiters: make(chan struct{}),
 	}
 }
@@ -40,6 +43,23 @@ func (f *fakeKV) set(key, val string) {
 	f.data[key] = &api.KVPair{Key: key, Value: []byte(val), ModifyIndex: f.index, CreateIndex: f.index}
 	close(f.waiters)
 	f.waiters = make(chan struct{})
+}
+
+// fail makes the next Get for key return err, until clear(key) is called. It
+// keys identically to set (the raw KV path), so a key seeded with set and
+// then failed with fail targets the same entry. It powers the providertest
+// ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+func (f *fakeKV) fail(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = err
+}
+
+// clear cancels a previously injected fail(key, err).
+func (f *fakeKV) clear(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
 }
 
 func (f *fakeKV) snapshot(key string) (*api.KVPair, uint64) {
@@ -73,6 +93,13 @@ func (f *fakeKV) Get(key string, q *api.QueryOptions) (*api.KVPair, *api.QueryMe
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+
+	f.mu.Lock()
+	failErr, failing := f.fails[key]
+	f.mu.Unlock()
+	if failing {
+		return nil, nil, failErr
 	}
 
 	for {
@@ -125,6 +152,14 @@ func TestConformance(t *testing.T) {
 		Seed: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
 			return nil
 		},
 		EventuallyTimeout: 3 * time.Second,
@@ -206,6 +241,31 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "consul://absent"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyConsul through
+// Resolve itself, not just as a direct function call. Neither existing kind
+// of test catches a regression here: TestClassifyConsul calls classifyConsul
+// directly, so it passes whether or not Resolve actually calls it, and the
+// providertest ErrorClassification case injects a mamori sentinel (not an
+// api.StatusError), which classifyConsul returns unchanged either way - it
+// would pass even with Resolve's classifyConsul call deleted. This test
+// injects a real api.StatusError through fakeKV.fail, the same shape a live
+// Consul agent's non-2xx response would produce, so it fails if Resolve stops
+// routing through classifyConsul.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeKV()
+	fake.set("config/app", "s3cr3t")
+	fake.fail("config/app", api.StatusError{Code: http.StatusForbidden, Body: "Permission denied"})
+	p := New(withKV(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "consul://config/app"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyConsul may not be wired into Resolve", got, mamori.KindPermissionDenied)
 	}
 }
 

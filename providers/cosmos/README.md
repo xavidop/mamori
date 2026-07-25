@@ -155,6 +155,32 @@ Configure with `mamori.WithPollInterval`.
 > release may add an opt-in change-feed-backed `Watch`; today the provider stays
 > zero-infrastructure and relies on polling.
 
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+**Cosmos DB returns 429 for request-unit (RU/s) throttling** - exhausting the
+container or database's provisioned throughput - which is this service's most
+common operational failure. It maps to `rate_limited` like any other 429, but
+if you see `rate_limited` on a `cosmos://` ref, look at the container's/database's
+provisioned RU/s first; it is very unlikely to be a client-side rate limiter.
+
+A transport failure (no HTTP response at all, e.g. a DNS failure or a dropped
+connection) stays `unknown`, since it could be a bug in this provider as
+easily as a genuine backend outage. `*azcore.ResponseError` stays reachable
+with `errors.As` through the classified fallback path. The not-found path is
+a special case: `sdkReader.ReadItem` returns the bare `mamori.ErrNotFound`
+sentinel for a 404 (an internal signal, not the SDK error itself), so there is
+no `*azcore.ResponseError` to recover on that path.
+
 ## Verified vs. needs a live backend
 
 - **Verified in unit tests (no Cosmos account):** scheme, whole-document
@@ -162,7 +188,9 @@ Configure with `mamori.WithPollInterval`.
   (both a raw 404 `*azcore.ResponseError` and a missing `#field`), partition-key
   defaulting to the id and the `?pk` override, `Version` from the response ETag /
   document `_etag` / content-hash fallbacks, default vs. `WithSensitive`,
-  missing-account configuration error, context cancellation, concurrency,
+  missing-account configuration error, error classification (permission denied,
+  unauthenticated, rate limited including the RU/s-throttling shape, unavailable,
+  invalid, unmapped stays `unknown`), context cancellation, concurrency,
   goroutine hygiene, and the full `providertest.Run` conformance suite - all run
   against an in-memory fake reader.
 - **Needs a live backend:** end-to-end auth (DefaultAzureCredential + endpoint, or

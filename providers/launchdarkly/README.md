@@ -69,6 +69,35 @@ receives both the value and the evaluation reason. The value is converted to
   `FLAG_NOT_FOUND`) returns an error satisfying
   `errors.Is(err, mamori.ErrNotFound)`, so defaults and optional fields apply.
 
+## Error classification
+
+Beyond the not-found case, `Resolve` classifies evaluation failures by
+LaunchDarkly's per-evaluation error reason
+(`EvaluationReason.GetErrorKind()`), so `mamori.ErrorKind` can distinguish
+them:
+
+| Evaluation error kind | mamori kind |
+| --- | --- |
+| `CLIENT_NOT_READY` | `unavailable` |
+| `FLAG_NOT_FOUND` | not classified here - handled separately, see above |
+| `MALFORMED_FLAG`, `USER_NOT_SPECIFIED`, `WRONG_TYPE`, `EXCEPTION` | `unknown` (deliberately unmapped) |
+| anything else | `unknown` |
+
+LaunchDarkly's per-evaluation error vocabulary is thin compared to a
+transport-level API such as a gRPC status. `CLIENT_NOT_READY` is the only
+kind with an SDK-documented meaning that maps unambiguously onto an existing
+mamori `Kind`: the caller evaluated a flag before the client finished
+connecting to LaunchDarkly, which is exactly what `unavailable` denotes. The
+rest are deliberately left unclassified rather than guessed at:
+`MALFORMED_FLAG` is an internal inconsistency in the flag's rule data (a
+LaunchDarkly-side data problem, not clearly permission/availability/rate-limit),
+`USER_NOT_SPECIFIED` means the evaluation context was invalid (this provider
+always builds its own context, so it should not occur in practice), `EXCEPTION`
+is the SDK's catch-all for an unexpected internal fault with no reliable
+signal about which kind applies, and `WRONG_TYPE` never applies here because
+`JSONVariationDetail` accepts any value type. See `classifyReason`'s doc
+comment in `launchdarkly.go` for the full reasoning.
+
 ### Evaluation context
 
 Every LaunchDarkly evaluation requires an evaluation context. This provider uses
@@ -155,6 +184,7 @@ is emitted at subscription time; mamori already holds the value from the initial
 | `providertest.Run` conformance suite | **Verified** - runs against an in-memory fake client with flag evaluation + value-change streaming (`go test ./...`) |
 | Value mapping (bool, string, number, JSON object/array), JSON `#key` selection | **Verified** (unit tests) |
 | Not-found (`FLAG_NOT_FOUND` reason), version change on value change, context cancellation | **Verified** (unit tests) |
+| Error classification (`CLIENT_NOT_READY` -> `unavailable`, other kinds left `unknown`), wired through `Resolve` via the fake's fail/clear seam | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
 | Native watch (change delivery + cancel/close, no goroutine leak) | **Verified** against the fake (including `-race`) |
 | Missing-SDK-key error, context-key option | **Verified** (unit tests) |
 | End-to-end against a real LaunchDarkly environment | **Needs a live backend** - see the integration test |

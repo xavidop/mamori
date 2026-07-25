@@ -55,6 +55,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/xavidop/mamori"
 )
 
@@ -291,14 +292,82 @@ func itemVersion(item map[string]ddbtypes.AttributeValue, data []byte) string {
 	return mamori.VersionHash(data)
 }
 
-// mapError maps a DynamoDB table/index-not-found error to mamori.ErrNotFound and
-// otherwise annotates the error with the ref for diagnostics.
+// mapError maps a DynamoDB not-found error (a missing table or index) to
+// mamori.ErrNotFound and otherwise routes the error through classifyDynamoDB
+// before annotating it with the ref for diagnostics. The typed
+// ResourceNotFoundException is matched first, ahead of the classifier, because
+// it is the shape the real AWS SDK actually returns; the wrap is double
+// (%w: %w) so the original SDK error stays reachable with errors.As, exactly
+// like the not-yet-classified errors returned below. classifyDynamoDB
+// separately recognizes the ResourceNotFoundException code as a fallback, so a
+// DynamoDB-compatible backend that returns a generic error carrying that code
+// instead of the typed shape still yields ErrNotFound. This is distinct from
+// the empty-item not-found path in Resolve (len(out.Item) == 0): that path has
+// no SDK error to preserve, so a single %w there is correct, not an oversight.
 func mapError(ref mamori.Ref, err error) error {
 	var nf *ddbtypes.ResourceNotFoundException
 	if errors.As(err, &nf) {
-		return fmt.Errorf("dynamodb: %q not found: %w", ref.Path, mamori.ErrNotFound)
+		return fmt.Errorf("dynamodb: %q not found: %w: %w", ref.Path, mamori.ErrNotFound, err)
 	}
-	return fmt.Errorf("dynamodb: resolve %q: %w", ref.Path, err)
+	return fmt.Errorf("dynamodb: resolve %q: %w", ref.Path, classifyDynamoDB(err))
+}
+
+// classifyDynamoDB maps a DynamoDB error code onto a mamori classification
+// sentinel. Both modeled service exceptions (e.g. *ddbtypes.ResourceNotFoundException)
+// and unmodeled/generic API errors satisfy smithy.APIError, so a single
+// ErrorCode switch covers both. DynamoDB does not model AccessDeniedException,
+// UnrecognizedClientException, ExpiredTokenException, InvalidSignatureException,
+// ServiceUnavailable, or ValidationException as distinct Go types in this SDK
+// version (see the service's types/errors.go), so the code string is the only
+// way to detect them.
+//
+// Most codes below come from DynamoDB's own error reference or the AWS-wide
+// Common Errors page (MissingAuthenticationToken, IncompleteSignature,
+// Throttling, TooManyRequestsException, InternalFailure - the same AWS-wide
+// codes providers/aws's classifyAWS maps for other services, kept in the same
+// kind groupings so a shared root cause classifies identically everywhere).
+// ExpiredTokenException and InvalidSignatureException are real AWS signing and
+// credential errors that DynamoDB can return, but, to be accurate rather than
+// sweeping, neither is actually enumerated on either reference page; they are
+// kept here because a caller can still receive them.
+//
+// ResourceNotFoundException is included here as a fallback even though
+// mapError's typed-error check above already handles the modeled case: it is
+// what lets a DynamoDB-compatible backend that returns a generic error for
+// this code (rather than the typed Go shape) still yield ErrNotFound.
+//
+// Every other code documented in the DynamoDB error reference that is not
+// listed below is returned wrapped but unclassified, reporting as unknown.
+// Guessing at a code's meaning would send an operator down the wrong path,
+// which is worse than admitting mamori does not know.
+func classifyDynamoDB(err error) error {
+	if err == nil {
+		return nil
+	}
+	var api smithy.APIError
+	if !errors.As(err, &api) {
+		return err
+	}
+	var sentinel error
+	switch api.ErrorCode() {
+	case "ResourceNotFoundException":
+		sentinel = mamori.ErrNotFound
+	case "AccessDeniedException":
+		sentinel = mamori.ErrPermissionDenied
+	case "UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException",
+		"MissingAuthenticationToken", "IncompleteSignature":
+		sentinel = mamori.ErrUnauthenticated
+	case "ProvisionedThroughputExceededException", "ThrottlingException", "RequestLimitExceeded",
+		"Throttling", "TooManyRequestsException":
+		sentinel = mamori.ErrRateLimited
+	case "InternalServerError", "ServiceUnavailable", "InternalFailure":
+		sentinel = mamori.ErrUnavailable
+	case "ValidationException":
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // init registers a lazily-initialized provider so that dynamodb:// refs resolve

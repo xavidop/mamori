@@ -60,9 +60,12 @@ func init() { mamori.Register(New()) }
 // blobDownloader downloads the contents of a single blob. It returns the raw
 // bytes and a change-detection tag (the blob ETag, or its VersionID). It MUST
 // return an error satisfying errors.Is(err, mamori.ErrNotFound) when the blob or
-// its container does not exist. The production adapter wraps the azblob SDK;
-// tests inject an in-memory fake. All parameter and result types are built-in,
-// so callers outside this package can implement it too.
+// its container does not exist; implementations that have an underlying SDK
+// error to lose SHOULD double-wrap it (fmt.Errorf("%w: %w", mamori.ErrNotFound,
+// err)) so errors.As can still recover it, the way the production adapter
+// below does. The production adapter wraps the azblob SDK; tests inject an
+// in-memory fake. All parameter and result types are built-in, so callers
+// outside this package can implement it too.
 type blobDownloader interface {
 	Download(ctx context.Context, container, blob string) (data []byte, etag string, err error)
 }
@@ -188,9 +191,16 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	data, etag, err := d.Download(ctx, container, blob)
 	if err != nil {
 		if errors.Is(err, mamori.ErrNotFound) {
-			return mamori.Value{}, fmt.Errorf("azblob: blob %q in container %q not found: %w", blob, container, mamori.ErrNotFound)
+			// err already carries mamori.ErrNotFound: the downloader contract
+			// (see blobDownloader's doc) requires double-wrapping it around any
+			// SDK-specific error, so wrapping it a second time here would nest
+			// the sentinel twice and garble the message. A single %w on err
+			// preserves both errors.Is(err, mamori.ErrNotFound) and errors.As
+			// reaching the underlying SDK error (e.g. *azcore.ResponseError),
+			// exactly as the README's error table promises.
+			return mamori.Value{}, fmt.Errorf("azblob: blob %q in container %q not found: %w", blob, container, err)
 		}
-		return mamori.Value{}, err
+		return mamori.Value{}, fmt.Errorf("azblob: resolve %q: %w", ref.Path, classifyAzblob(err))
 	}
 
 	if ref.Key != "" {
@@ -266,7 +276,10 @@ func (d *sdkDownloader) Download(ctx context.Context, container, blob string) ([
 	resp, err := d.client.DownloadStream(ctx, container, blob, nil)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, "", mamori.ErrNotFound
+			// Double-wrap so the caller (Resolve) can still recover the
+			// underlying *azcore.ResponseError with errors.As instead of only
+			// seeing the bare sentinel.
+			return nil, "", fmt.Errorf("%w: %w", mamori.ErrNotFound, err)
 		}
 		return nil, "", err
 	}
@@ -299,4 +312,42 @@ func isNotFound(err error) bool {
 		return respErr.StatusCode == http.StatusNotFound
 	}
 	return false
+}
+
+// classifyAzblob maps a Blob Storage HTTP status onto a mamori classification
+// sentinel, using the identical *azcore.ResponseError status mechanism as
+// providers/azure's classifyAzure. Blob Storage returns 403 both for missing
+// data-plane RBAC and for a firewall/vnet rejection; both are correctly
+// permission_denied.
+//
+// A transport failure is not an *azcore.ResponseError at all (e.g. a DNS
+// failure or a dropped connection) and is left unclassified (KindUnknown),
+// since it could equally be a bug in this provider as a genuine backend
+// outage; mamori does not guess at that distinction.
+func classifyAzblob(err error) error {
+	if err == nil {
+		return nil
+	}
+	var respErr *azcore.ResponseError
+	if !errors.As(err, &respErr) {
+		return err
+	}
+	var sentinel error
+	switch code := respErr.StatusCode; {
+	case code == http.StatusNotFound:
+		sentinel = mamori.ErrNotFound
+	case code == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case code == http.StatusUnauthorized:
+		sentinel = mamori.ErrUnauthenticated
+	case code == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case code >= 500:
+		sentinel = mamori.ErrUnavailable
+	case code == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }

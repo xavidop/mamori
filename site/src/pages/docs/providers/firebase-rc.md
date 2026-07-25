@@ -66,3 +66,20 @@ mamori.WithProvider(rcprov.New(rcprov.WithProjectID("my-project")))
 ```
 
 Authentication uses Application Default Credentials (a service account via `GOOGLE_APPLICATION_CREDENTIALS`, or workload identity). Verified with an in-memory fake; live behavior is covered by `//go:build integration` tests.
+
+## Error classification
+
+A non-200 response from the Remote Config REST API is classified by HTTP status:
+
+| HTTP status | mamori kind |
+|---|---|
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+A missing parameter is a separate case: it is detected after a successful (200) fetch by looking the key up in the decoded template, and maps to not-found, not to one of the statuses above.
+
+Verified by unit tests (direct classification, plus a real `httptest` 403 response driven through `Resolve`) and the conformance kit against an in-memory fake; live behavior is covered by `//go:build integration` tests.

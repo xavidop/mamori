@@ -234,25 +234,68 @@ func splitBucketKey(path string) (bucket, key string, err error) {
 }
 
 // mapError maps an S3 not-found error (a missing object or bucket) to
-// mamori.ErrNotFound and otherwise annotates the error with the ref for
-// diagnostics. Typed NoSuchKey/NoSuchBucket errors are matched first; a generic
-// smithy APIError with a NotFound/404 code is also treated as not-found so that
-// S3-compatible stores (MinIO, R2) that do not return the exact typed shapes
-// still yield ErrNotFound.
+// mamori.ErrNotFound and otherwise routes the error through classifyS3 before
+// annotating it with the ref for diagnostics. Typed NoSuchKey/NoSuchBucket
+// errors are matched first, ahead of the classifier, because they are the
+// shape the real AWS SDK actually returns; the wrap is double (%w: %w) so the
+// original SDK error stays reachable with errors.As, exactly like the not-yet
+// classified errors returned below. classifyS3 separately recognizes the
+// NoSuchKey/NoSuchBucket/NoSuchVersion/NotFound codes as a fallback, so an
+// S3-compatible store (MinIO, R2) that returns a generic error carrying one of
+// those codes instead of the typed shape still yields ErrNotFound.
 func mapError(ref mamori.Ref, err error) error {
 	var noKey *s3types.NoSuchKey
 	var noBucket *s3types.NoSuchBucket
 	if errors.As(err, &noKey) || errors.As(err, &noBucket) {
-		return fmt.Errorf("s3: object %q not found: %w", ref.Path, mamori.ErrNotFound)
+		return fmt.Errorf("s3: object %q not found: %w: %w", ref.Path, mamori.ErrNotFound, err)
 	}
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		switch apiErr.ErrorCode() {
-		case "NoSuchKey", "NoSuchBucket", "NotFound":
-			return fmt.Errorf("s3: object %q not found: %w", ref.Path, mamori.ErrNotFound)
-		}
+	return fmt.Errorf("s3: resolve %q: %w", ref.Path, classifyS3(err))
+}
+
+// classifyS3 maps an S3 REST error code onto a mamori classification
+// sentinel. Both modeled service exceptions (e.g. *s3types.AccessDenied) and
+// unmodeled/generic API errors (as returned by S3-compatible stores such as
+// MinIO or Cloudflare R2) satisfy smithy.APIError, so a single ErrorCode
+// switch covers both.
+//
+// NoSuchKey/NoSuchBucket/NoSuchVersion/NotFound are included here as a
+// fallback even though mapError's typed-error check above already handles the
+// two modeled cases: it is what lets an S3-compatible store that returns a
+// generic error for one of these codes (rather than the typed Go shape) still
+// yield ErrNotFound, and it is also the only place NoSuchVersion (which the
+// SDK does not model as a distinct type) is recognized at all.
+//
+// Every other code documented in the S3 API error reference that is not
+// listed below is returned wrapped but unclassified, reporting as unknown.
+// Guessing at a code's meaning would send an operator down the wrong path,
+// which is worse than admitting mamori does not know.
+func classifyS3(err error) error {
+	if err == nil {
+		return nil
 	}
-	return fmt.Errorf("s3: resolve %q: %w", ref.Path, err)
+	var api smithy.APIError
+	if !errors.As(err, &api) {
+		return err
+	}
+	var sentinel error
+	switch api.ErrorCode() {
+	case "NoSuchKey", "NoSuchBucket", "NoSuchVersion", "NotFound":
+		sentinel = mamori.ErrNotFound
+	case "AccessDenied", "AllAccessDisabled":
+		sentinel = mamori.ErrPermissionDenied
+	case "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken",
+		"TokenRefreshRequired":
+		sentinel = mamori.ErrUnauthenticated
+	case "SlowDown":
+		sentinel = mamori.ErrRateLimited
+	case "ServiceUnavailable", "InternalError":
+		sentinel = mamori.ErrUnavailable
+	case "InvalidRequest", "InvalidArgument", "MalformedXML":
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
 // init registers a lazily-initialized provider so that s3:// refs resolve out of

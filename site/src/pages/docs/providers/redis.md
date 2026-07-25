@@ -71,4 +71,18 @@ import redisprov "github.com/xavidop/mamori/providers/redis"
 mamori.WithProvider(redisprov.New(redisprov.WithAddr("redis:6379"), redisprov.WithDB(0)))
 ```
 
-Verified with an in-memory fake; live behavior against a real Redis is covered by `//go:build integration` tests.
+## Error classification
+
+Beyond the not-found case, other `GET` failures are classified using go-redis's typed predicates so `mamori.ErrorKind` can distinguish them:
+
+| Redis condition | mamori kind |
+|---|---|
+| `NOAUTH`, `WRONGPASS` (missing/bad credentials) | `unauthenticated` |
+| `NOPERM` (ACL denies the command) | `permission_denied` |
+| `LOADING`, `CLUSTERDOWN`, `MASTERDOWN` | `unavailable` |
+| dial failure (connection refused, DNS failure, ...) | `unavailable` |
+| anything else | `unknown` |
+
+Redis has no rate-limit error on this path, so nothing maps to `rate_limited`. Unlike Postgres or MySQL, go-redis has no single error-code field to switch on, so detection uses its exported `IsAuthError`/`IsPermissionError`/`IsLoadingError`/`IsClusterDownError`/`IsMasterDownError` predicates, which recognize the underlying error even when wrapped. A raw dial failure isn't a `redis.Error` at all, so it's detected separately as a `*net.OpError` with `Op == "dial"` - the same signal go-redis's own retry logic uses internally.
+
+Verified with an in-memory fake.

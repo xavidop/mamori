@@ -42,8 +42,9 @@ Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) 
 
 1. Create `providers/<name>/` as its own module with `replace github.com/xavidop/mamori => ../..`.
 2. Implement `mamori.Provider` (`Scheme()` + `Resolve`). Add `WatchableProvider` **only** if the backend has native change notification; otherwise mamori polls. Add `BatchProvider` if the backend can resolve many refs in one call.
-3. Return an error satisfying `errors.Is(err, mamori.ErrNotFound)` for missing values. Set `Value.Version` (native revision or `mamori.VersionHash`). Set `Value.Sensitive = true` for secret managers. Never log payloads.
-4. Make the provider testable by injecting a client interface, and **pass the conformance kit**:
+3. Classify errors beyond not-found: wrap SDK errors with mamori's sentinels (`ErrPermissionDenied`, `ErrUnauthenticated`, `ErrUnavailable`, `ErrRateLimited`, `ErrInvalid`) using `%w`, not `%v`, so `errors.Is` keeps working. This is two separate requirements: passing the `ErrorClassification` conformance case (step 5) only proves your mapping is not destroyed in transit, not that it exists; you must also add a table test that maps real SDK error values to kinds. See [Classifying errors](https://mamorigo.dev/docs/writing-a-provider#classifying-errors).
+4. Return an error satisfying `errors.Is(err, mamori.ErrNotFound)` for missing values. Set `Value.Version` (native revision or `mamori.VersionHash`). Set `Value.Sensitive = true` for secret managers. Never log payloads.
+5. Make the provider testable by injecting a client interface, and **pass the conformance kit**:
 
    ```go
    func TestConformance(t *testing.T) {
@@ -52,11 +53,23 @@ Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) 
            Ref:    func(k string) string { return "myscheme://" + k },
            Seed:   func(ctx context.Context, key, val string) error { ... },
            Mutate: func(ctx context.Context, key, val string) error { ... },
+           Fail:   func(ctx context.Context, key string, err error) error { ... },
+           Clear:  func(ctx context.Context, key string) error { ... },
        })
    }
    ```
 
-5. Add a `README.md` documenting schemes, ref grammar, auth, and what is verified vs needs a live backend. A provider that passes `providertest` gets listed in the root README with a badge.
+   `Fail` and `Clear` are **required** so the `ErrorClassification` case runs; a
+   provider that supplies neither now fails `providertest.Run` outright. The
+   only exemption is a backend with no per-key error surface at all (existence
+   is a bool or a sentinel value, nothing to inject) - set
+   `NoResolveErrors: true` instead, with a comment naming why. Live-backend
+   `//go:build integration` tests, which cannot inject errors against a real
+   backend, also set `NoResolveErrors: true` (the unit-test run against the
+   fake already covers classification).
+
+6. Add a `README.md` documenting schemes, ref grammar, auth, and what is verified vs needs a live backend. A provider that passes `providertest` gets listed in the root README with a badge.
+7. If you classified errors beyond not-found (step 3), also: add an `## Error classification` section to the module's `README.md`, mirror it onto the module's docs-site page, and flip that module's row in both coverage tables (the root `README.md` and `site/src/pages/docs/providers/index.md`).
 
 ## Commit & PR
 

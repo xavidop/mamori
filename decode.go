@@ -17,7 +17,7 @@ import (
 // struct: where its value comes from and how to decode it.
 type fieldSpec struct {
 	Path       string // dotted path, e.g. "Redis.Addr"
-	Ref        Ref    // parsed source ref
+	Refs       []Ref  // parsed source refs, in precedence order (len >= 1)
 	Default    string // value used on ErrNotFound
 	HasDefault bool
 	Flatten    string       // "", "json", "yaml", or "env"
@@ -25,7 +25,27 @@ type fieldSpec struct {
 	Index      []int        // reflect field index path from the root struct
 	Type       reflect.Type // field type
 	Sensitive  bool         // field is secret.String / secret.Bytes
+	OnFail     onFailPolicy // what to do when every ref in the chain fails
 }
+
+// onFailPolicy controls what a chained source falls back to once every ref in
+// its chain has failed (parsed from the `onfail` struct tag). It is unexported
+// because it is only ever set by walkSpecs from the tag string; callers never
+// construct one directly.
+type onFailPolicy int
+
+const (
+	// onFailKeepLast retains the last known-good value, delivers the error to
+	// OnError/reporting, and continues. This reproduces today's behavior
+	// exactly and is the default when no `onfail` tag is present.
+	onFailKeepLast onFailPolicy = iota
+	// onFailUseDefault falls back to the field's `default:` tag value. Rejected
+	// at walk time if the field has no default.
+	onFailUseDefault
+	// onFailFail rejects the whole candidate snapshot rather than applying a
+	// partial or stale update.
+	onFailFail
+)
 
 var (
 	secretStringType = reflect.TypeOf(secret.String{})
@@ -62,6 +82,7 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 		flatten := f.Tag.Get("flatten")
 		def, hasDefault := f.Tag.Lookup("default")
 		optional := f.Tag.Get("optional") == "true"
+		onFailTag, hasOnFail := f.Tag.Lookup("onfail")
 
 		isSecret := f.Type == secretStringType || f.Type == secretBytesType
 		isLeafStruct := f.Type.Kind() == reflect.Struct && !isSecret
@@ -82,9 +103,26 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 			continue
 		}
 
-		ref, err := ParseRef(source)
+		refs, err := ParseRefs(source)
 		if err != nil {
 			return nil, fmt.Errorf("mamori: field %s: %w", path, err)
+		}
+
+		onFail := onFailKeepLast
+		if hasOnFail {
+			switch onFailTag {
+			case "keeplast":
+				onFail = onFailKeepLast
+			case "default":
+				if !hasDefault {
+					return nil, fmt.Errorf("mamori: field %s: onfail:\"default\" requires a default: tag", path)
+				}
+				onFail = onFailUseDefault
+			case "fail":
+				onFail = onFailFail
+			default:
+				return nil, fmt.Errorf("mamori: field %s: unknown onfail %q (want keeplast, default, or fail)", path, onFailTag)
+			}
 		}
 
 		if isLeafStruct && flatten == "" {
@@ -94,7 +132,7 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 		// Per-field debounce override travels on the ref opts (?debounce=...).
 		specs = append(specs, fieldSpec{
 			Path:       path,
-			Ref:        ref,
+			Refs:       refs,
 			Default:    def,
 			HasDefault: hasDefault,
 			Flatten:    flatten,
@@ -102,6 +140,7 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 			Index:      idx,
 			Type:       f.Type,
 			Sensitive:  isSecret,
+			OnFail:     onFail,
 		})
 	}
 	return specs, nil

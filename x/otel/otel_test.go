@@ -3,9 +3,11 @@ package mamoriotel_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/xavidop/mamori"
 	mamoriotel "github.com/xavidop/mamori/x/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -226,6 +228,97 @@ func TestTracer_StartResolveError(t *testing.T) {
 	}
 }
 
+// TestMeter_RecordResolveErrorKind confirms a failed resolve tags the
+// resolve-duration histogram with mamori.error.kind, classified via
+// mamori.ErrorKind, so a dashboard can split a denied permission from a
+// throttled request without parsing error strings.
+func TestMeter_RecordResolveErrorKind(t *testing.T) {
+	rm := collect(t, func(m interface {
+		RecordResolve(string, time.Duration, error)
+		RecordRefresh(string)
+		RecordWatchError(string)
+	}) {
+		m.RecordResolve("aws-sm", 5*time.Millisecond, fmt.Errorf("%w: denied by policy", mamori.ErrPermissionDenied))
+	})
+
+	metric := findMetric(t, rm, mamoriotel.MetricResolveDuration)
+	hist, ok := metric.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("resolve duration data has type %T, want Histogram[float64]", metric.Data)
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("resolve duration data points = %d, want 1", len(hist.DataPoints))
+	}
+
+	if got := attrString(t, hist.DataPoints[0].Attributes, "mamori.error.kind"); got != string(mamori.KindPermissionDenied) {
+		t.Errorf("mamori.error.kind = %q, want %q", got, mamori.KindPermissionDenied)
+	}
+}
+
+// TestMeter_RecordResolveOmitsErrorKindOnSuccess confirms a successful resolve
+// carries no mamori.error.kind attribute at all, rather than an empty or
+// placeholder value, so the attribute's mere presence selects failures.
+func TestMeter_RecordResolveOmitsErrorKindOnSuccess(t *testing.T) {
+	rm := collect(t, func(m interface {
+		RecordResolve(string, time.Duration, error)
+		RecordRefresh(string)
+		RecordWatchError(string)
+	}) {
+		m.RecordResolve("env", time.Millisecond, nil)
+	})
+
+	metric := findMetric(t, rm, mamoriotel.MetricResolveDuration)
+	hist, ok := metric.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("resolve duration data has type %T, want Histogram[float64]", metric.Data)
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("resolve duration data points = %d, want 1", len(hist.DataPoints))
+	}
+
+	if _, found := hist.DataPoints[0].Attributes.Value(attribute.Key("mamori.error.kind")); found {
+		t.Errorf("successful resolve carried a mamori.error.kind attribute, want it absent")
+	}
+}
+
+// TestTracer_StartResolveErrorCarriesErrorKind confirms a failed resolve span
+// carries the same mamori.error.kind classification as the histogram.
+func TestTracer_StartResolveErrorCarriesErrorKind(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	tr := mamoriotel.NewTracer(provider.Tracer("mamori-test"))
+
+	_, finish := tr.StartResolve(context.Background(), "aws-sm", "aws-sm://db/password")
+	finish(fmt.Errorf("%w: denied by policy", mamori.ErrPermissionDenied))
+
+	spans := sr.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	assertSpanAttr(t, spans[0].Attributes(), "mamori.error.kind", string(mamori.KindPermissionDenied))
+}
+
+// TestTracer_StartResolveOmitsErrorKindOnSuccess confirms a successful resolve
+// span carries no mamori.error.kind attribute.
+func TestTracer_StartResolveOmitsErrorKindOnSuccess(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	tr := mamoriotel.NewTracer(provider.Tracer("mamori-test"))
+
+	_, finish := tr.StartResolve(context.Background(), "file", "file:///etc/app.yaml#port")
+	finish(nil)
+
+	spans := sr.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	assertSpanAttrAbsent(t, spans[0].Attributes(), "mamori.error.kind")
+}
+
 func assertSpanAttr(t *testing.T, attrs []attribute.KeyValue, key, want string) {
 	t.Helper()
 	for _, kv := range attrs {
@@ -237,6 +330,19 @@ func assertSpanAttr(t *testing.T, attrs []attribute.KeyValue, key, want string) 
 		}
 	}
 	t.Errorf("span attribute %q not found", key)
+}
+
+// assertSpanAttrAbsent fails if key is present among attrs. It is the inverse
+// of assertSpanAttr, used to confirm a successful resolve carries no error
+// classification.
+func assertSpanAttrAbsent(t *testing.T, attrs []attribute.KeyValue, key string) {
+	t.Helper()
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
+			t.Errorf("span attribute %q = %q, want absent", key, kv.Value.AsString())
+			return
+		}
+	}
 }
 
 func keys[V any](m map[string]V) []string {

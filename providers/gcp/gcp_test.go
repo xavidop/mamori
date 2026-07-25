@@ -24,18 +24,41 @@ import (
 type fakeSM struct {
 	mu       sync.Mutex
 	versions map[string][][]byte // "projects/P/secrets/S" -> ordered payloads
+	fails    map[string]error    // "projects/P/secrets/S" -> injected error
 	closed   bool
 }
 
 func newFakeSM() *fakeSM {
-	return &fakeSM{versions: map[string][][]byte{}}
+	return &fakeSM{versions: map[string][][]byte{}, fails: map[string]error{}}
+}
+
+// key returns the same "projects/P/secrets/S" form used by add, so fail and
+// clear target the exact entry Seed populated.
+func (f *fakeSM) key(project, secret string) string {
+	return fmt.Sprintf("projects/%s/secrets/%s", project, secret)
 }
 
 func (f *fakeSM) add(project, secret, val string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := fmt.Sprintf("projects/%s/secrets/%s", project, secret)
+	key := f.key(project, secret)
 	f.versions[key] = append(f.versions[key], []byte(val))
+}
+
+// fail makes the next AccessSecretVersion for "project/secret" return err,
+// until clear(project, secret) is called. It powers the providertest
+// ErrorClassification case.
+func (f *fakeSM) fail(project, secret string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[f.key(project, secret)] = err
+}
+
+// clear cancels a previously injected fail(project, secret, err).
+func (f *fakeSM) clear(project, secret string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, f.key(project, secret))
 }
 
 func (f *fakeSM) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.AccessSecretVersionRequest, _ ...gax.CallOption) (*secretmanagerpb.AccessSecretVersionResponse, error) {
@@ -52,6 +75,9 @@ func (f *fakeSM) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.A
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[secretPath]; ok {
+		return nil, err
+	}
 	vers, ok := f.versions[secretPath]
 	if !ok || len(vers) == 0 {
 		return nil, status.Errorf(codes.NotFound, "secret %q not found", secretPath)
@@ -103,6 +129,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.add(project, key, val)
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(project, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(project, key)
 			return nil
 		},
 	})
@@ -201,6 +235,28 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), parse(t, "gcp-sm://proj/nope"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyGCP through
+// Resolve itself, not just as a direct function call. The conformance
+// ErrorClassification case cannot catch a regression here: it injects a
+// mamori sentinel directly (not a gRPC status), so it passes even if the
+// classifyGCP call were deleted from Resolve's fallback branch. This test
+// injects a real gRPC status through fakeSM, the same shape a live backend
+// would return, so it fails if the wiring is removed.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeSM()
+	fake.add("proj", "db", "s3cr3t")
+	fake.fail("proj", "db", status.Error(codes.PermissionDenied, "caller lacks secretmanager.versions.access"))
+	p := New(WithClient(fake))
+
+	_, err := p.Resolve(context.Background(), parse(t, "gcp-sm://proj/db"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyGCP may not be wired into Resolve", got, mamori.KindPermissionDenied)
 	}
 }
 

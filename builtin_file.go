@@ -2,7 +2,9 @@ package mamori
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -25,20 +27,32 @@ func (fileProvider) Resolve(_ context.Context, ref Ref) (Value, error) {
 	path := ref.Path
 	info, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Value{}, ErrNotFound
-		}
-		return Value{}, err
+		return Value{}, classifyFileErr(path, err)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Value{}, ErrNotFound
-		}
-		return Value{}, err
+		return Value{}, classifyFileErr(path, err)
 	}
 	ver := fmt.Sprintf("%d-%d", info.Size(), info.ModTime().UnixNano())
 	return Value{Bytes: b, Version: ver}, nil
+}
+
+// classifyFileErr maps a filesystem error onto a mamori classification sentinel.
+// A permission failure is the common real-world case: a secret mounted with
+// restrictive ownership reads as "denied", which is actionable, where the bare
+// syscall error was not.
+//
+// Both operands use %w so callers keep errors.As access to the underlying
+// *fs.PathError alongside errors.Is on the sentinel.
+func classifyFileErr(path string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ErrNotFound
+	case errors.Is(err, fs.ErrPermission):
+		return fmt.Errorf("mamori: file %q: %w: %w", path, ErrPermissionDenied, err)
+	default:
+		return fmt.Errorf("mamori: file %q: %w", path, err)
+	}
 }
 
 // Watch implements WatchableProvider using fsnotify. It watches the parent

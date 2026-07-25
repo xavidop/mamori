@@ -18,22 +18,47 @@ import (
 type fakeRedis struct {
 	mu     sync.Mutex
 	data   map[string]string
+	fails  map[string]error
 	subs   map[string][]chan *goredis.Message
 	closed bool
 }
 
 func newFakeRedis() *fakeRedis {
-	return &fakeRedis{data: map[string]string{}, subs: map[string][]chan *goredis.Message{}}
+	return &fakeRedis{
+		data:  map[string]string{},
+		fails: map[string]error{},
+		subs:  map[string][]chan *goredis.Message{},
+	}
 }
 
 func (f *fakeRedis) Get(_ context.Context, key string) *goredis.StringCmd {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fails[key]; ok {
+		return goredis.NewStringResult("", err)
+	}
 	v, ok := f.data[key]
 	if !ok {
 		return goredis.NewStringResult("", goredis.Nil)
 	}
 	return goredis.NewStringResult(v, nil)
+}
+
+// fail makes the next Get for key return err, until clear(key) is called. It
+// powers the providertest ErrorClassification case. key is the same raw
+// string Seed/set stores under, since redis keys need no path-building the
+// way, say, a GCP "projects/P/secrets/S" resource name does.
+func (f *fakeRedis) fail(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = err
+}
+
+// clear cancels a previously injected fail(key, err).
+func (f *fakeRedis) clear(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
 }
 
 func (f *fakeRedis) PSubscribe(_ context.Context, patterns ...string) subscription {
@@ -184,5 +209,13 @@ func TestConformance(t *testing.T) {
 		Ref:    func(key string) string { return "redis://" + key },
 		Seed:   func(_ context.Context, key, val string) error { f.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { f.set(key, val); return nil },
+		Fail: func(_ context.Context, key string, err error) error {
+			f.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			f.clear(key)
+			return nil
+		},
 	})
 }

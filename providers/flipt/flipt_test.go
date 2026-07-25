@@ -31,6 +31,7 @@ type fakeEval struct {
 	mu       sync.Mutex
 	booleans map[string]bool
 	variants map[string]variantEntry
+	fails    map[string]error // storeKey(namespace, flag) -> injected error, consulted before booleans/variants
 	lastReq  *evaluation.EvaluationRequest
 }
 
@@ -38,6 +39,7 @@ func newFake() *fakeEval {
 	return &fakeEval{
 		booleans: map[string]bool{},
 		variants: map[string]variantEntry{},
+		fails:    map[string]error{},
 	}
 }
 
@@ -61,6 +63,22 @@ func (f *fakeEval) record(v *evaluation.EvaluationRequest) {
 	f.mu.Unlock()
 }
 
+// fail makes the next Boolean or Variant evaluation for namespace/flag return
+// err, until clear(namespace, flag) is called. It powers the providertest
+// ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+func (f *fakeEval) fail(namespace, flag string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[storeKey(namespace, flag)] = err
+}
+
+// clear cancels a previously injected fail(namespace, flag, err).
+func (f *fakeEval) clear(namespace, flag string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, storeKey(namespace, flag))
+}
+
 func (f *fakeEval) Boolean(ctx context.Context, v *evaluation.EvaluationRequest) (*evaluation.BooleanEvaluationResponse, error) {
 	f.record(v)
 	if err := ctx.Err(); err != nil {
@@ -68,10 +86,13 @@ func (f *fakeEval) Boolean(ctx context.Context, v *evaluation.EvaluationRequest)
 	}
 	key := storeKey(v.GetNamespaceKey(), v.GetFlagKey())
 	f.mu.Lock()
+	failErr, isFail := f.fails[key]
 	enabled, isBool := f.booleans[key]
 	_, isVariant := f.variants[key]
 	f.mu.Unlock()
 	switch {
+	case isFail:
+		return nil, failErr
 	case isBool:
 		return &evaluation.BooleanEvaluationResponse{Enabled: enabled, FlagKey: v.GetFlagKey()}, nil
 	case isVariant:
@@ -88,10 +109,13 @@ func (f *fakeEval) Variant(ctx context.Context, v *evaluation.EvaluationRequest)
 	}
 	key := storeKey(v.GetNamespaceKey(), v.GetFlagKey())
 	f.mu.Lock()
+	failErr, isFail := f.fails[key]
 	entry, isVariant := f.variants[key]
 	_, isBool := f.booleans[key]
 	f.mu.Unlock()
 	switch {
+	case isFail:
+		return nil, failErr
 	case isVariant:
 		return &evaluation.VariantEvaluationResponse{
 			Match:             true,
@@ -315,8 +339,38 @@ func TestConformance(t *testing.T) {
 			f.setVariant(testNamespace, key, val, "")
 			return nil
 		},
+		Fail: func(_ context.Context, key string, err error) error {
+			f.fail(testNamespace, key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			f.clear(testNamespace, key)
+			return nil
+		},
 		SkipWatch: true, // Flipt evaluation has no native change notification.
 	})
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyFlipt through
+// Resolve itself, not just as a direct function call. The conformance
+// ErrorClassification case cannot catch a regression here: it injects a
+// mamori sentinel directly (not a gRPC status), so it passes even if the
+// classifyFlipt call were deleted from Resolve's fallback branches. This test
+// injects a real gRPC status error through fakeEval, the same shape a live
+// Flipt server would return, so it fails if the wiring is removed.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	f := newFake()
+	f.setVariant(testNamespace, "plan-tier", "enterprise", "")
+	f.fail(testNamespace, "plan-tier", status.Error(codes.PermissionDenied, "caller lacks flipt.flags.evaluate"))
+	p := newWithClient(f)
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "flipt://"+testNamespace+"/plan-tier"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyFlipt may not be wired into Resolve", got, mamori.KindPermissionDenied)
+	}
 }
 
 func mustRef(t *testing.T, raw string) mamori.Ref {

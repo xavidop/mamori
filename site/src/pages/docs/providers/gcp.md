@@ -70,4 +70,18 @@ mamori.WithProvider(gcpprov.New(gcpprov.WithClient(myClient)))
 
 Secret Manager has no native change notification, so mamori polls (`WithPollInterval` + jitter). Pub/Sub rotation notifications can drive an on-demand `Load` in your app if you need push.
 
+## Error classification
+
+| gRPC code | mamori kind |
+|---|---|
+| `NotFound` | `not_found` |
+| `PermissionDenied` | `permission_denied` |
+| `Unauthenticated` | `unauthenticated` |
+| `Unavailable`, `DeadlineExceeded` | `unavailable` |
+| `ResourceExhausted` | `rate_limited` |
+| `InvalidArgument` | `invalid` |
+| anything else | `unknown` |
+
+A malformed ref (not `<project>/<secret>`) reports `invalid` without a round trip to Secret Manager. The gRPC status stays reachable through `status.Code`.
+
 Verified by unit tests and the conformance kit against an in-memory fake; live GCP behavior is covered by `//go:build integration` tests.

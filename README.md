@@ -49,6 +49,10 @@ type Config struct {
     LogLevel   string        `source:"env:LOG_LEVEL" default:"info" validate:"oneof=debug info warn error"`
     Workers    int           `source:"env:WORKERS"   default:"4"    validate:"gte=1,lte=256"`
 
+    // A precedence chain: an environment override wins if set, otherwise a
+    // centrally managed Parameter Store value, otherwise the default.
+    Port       string        `source:"env:PORT,aws-ps://svc/port" default:"8080"`
+
     // A file-backed value, hot-reloaded via fsnotify
     TLSCert    []byte        `source:"file:///etc/tls/tls.crt"`
 
@@ -76,50 +80,60 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 ## What makes it different
 
 - **Typed & tag-driven** - one struct, multiple sources, generics API (`Load[T]` / `Watch[T]`).
+- **Precedence chains** - `source:"env:PORT,aws-ps://svc/port"` tries sources in priority order: the first to yield a value wins, not-found falls through to the next, and a real error stops the walk and applies the field's `onfail` policy instead of silently sliding to a lower-priority source. Every position is watched, so precedence is live.
 - **Reconciled at runtime** - native watch where the backend supports it (Kubernetes informers, Consul blocking queries, fsnotify), polling with jitter everywhere else, and lease-aware pre-expiry refresh for Vault.
 - **Atomic & validated** - an update that fails validation is *rejected*; `Get()` keeps returning the last good config. Config never enters a broken state mid-flight.
 - **Coalesced** - bursts of field changes within a debounce window produce a single `Change` event.
+- **Pinnable** - `WithHistory(n)` retains recent snapshots (`w.History()`); `w.PinCurrent()` / `w.Pin(version)` freeze `Get()` at one of them while you debug production, then `w.Unpin()` resumes and fires one coalesced `Change` for everything that changed in the meantime.
 - **Secret hygiene by default** - `secret.String` / `secret.Bytes` redact themselves in `String()`, `fmt`, `MarshalJSON`, and `slog`. Only the explicit, greppable `Reveal()` exposes the value. A shipped `go vet` analyzer (`reconcilevet`) flags sensitive refs assigned to plain `string` fields.
 - **Pluggable** - providers register with the `database/sql` pattern; a `providertest` conformance kit guarantees they all behave identically.
+- **Observable** - `w.Status()` reports live per-field health, `w.Health()` backs a Kubernetes readiness probe, and `mamori.Doctor[T]` checks every ref is reachable before you ever deploy.
+- **Testable** - the [`mamoritest`](mamoritest/) package gives application code a scriptable in-memory provider (`Set`/`Del`/`Fail`) plus deterministic wait helpers (`WaitForSnapshot`, `WaitForError`), so an `OnChange` handler or error path can be tested without a real backend.
 
 ## Providers
 
-| Module | Schemes | Watch |
-|---|---|---|
-| core (built-in) | `env:` · `dotenv://` · `file://` · `exec:` (opt-in) | fsnotify (file/dotenv) · poll (env/exec) |
-| `providers/aws` | `aws-sm://` · `aws-ps://` | poll |
-| `providers/gcp` | `gcp-sm://` | poll |
-| `providers/azure` | `azure-kv://` | poll |
-| `providers/vault` | `vault://` | lease-aware poll (`NotAfter`) |
-| `providers/k8s` | `k8s-secret://` · `k8s-cm://` | **native** (watch API) |
-| `providers/consul` | `consul://` | **native** (blocking queries) |
-| `providers/doppler` | `doppler://` | poll |
-| `providers/onepassword` | `op://` | poll |
-| `providers/sops` | `sops://` | fsnotify |
-| `providers/postgres` | `postgres://` | **native** (LISTEN/NOTIFY) |
-| `providers/mysql` | `mysql://` | poll |
-| `providers/sqlite` | `sqlite://` | fsnotify |
-| `providers/mongodb` | `mongodb://` | **native** (change streams) |
-| `providers/dynamodb` | `dynamodb://` | poll |
-| `providers/redis` | `redis://` | **native** (keyspace notifications) |
-| `providers/etcd` | `etcd://` | **native** (watch API) |
-| `providers/firestore` | `firestore://` | **native** (snapshot listeners) |
-| `providers/firebase-rc` | `firebase-rc://` | poll |
-| `providers/firebase-rtdb` | `firebase-rtdb://` | **native** (streaming) |
-| `providers/s3` | `s3://` | poll (ETag) |
-| `providers/gcs` | `gcs://` | poll (generation) |
-| `providers/azblob` | `azblob://` | poll (ETag) |
-| `providers/cosmos` | `cosmos://` | poll (ETag) |
-| `providers/launchdarkly` | `launchdarkly://` | **native** (streaming) |
-| `providers/unleash` | `unleash://` | poll |
-| `providers/flagsmith` | `flagsmith://` | poll |
-| `providers/configcat` | `configcat://` | poll |
-| `providers/split` | `split://` | poll |
-| `providers/growthbook` | `growthbook://` | poll |
-| `providers/flipt` | `flipt://` | poll |
-| `providers/goff` | `goff://` (GO Feature Flag) | poll |
+| Module | Schemes | Watch | Errors classified beyond not-found |
+|---|---|---|---|
+| core (built-in) | `env:` · `dotenv://` · `file://` · `exec:` (opt-in) | fsnotify (file/dotenv) · poll (env/exec) | ✅ |
+| `providers/aws` | `aws-sm://` · `aws-ps://` | poll | ✅ |
+| `providers/gcp` | `gcp-sm://` | poll | ✅ |
+| `providers/azure` | `azure-kv://` | poll | ✅ |
+| `providers/vault` | `vault://` | lease-aware poll (`NotAfter`) | ✅ |
+| `providers/k8s` | `k8s-secret://` · `k8s-cm://` | **native** (watch API) | ✅ |
+| `providers/consul` | `consul://` | **native** (blocking queries) | ✅ |
+| `providers/doppler` | `doppler://` | poll | ✅ |
+| `providers/onepassword` | `op://` | poll | ✅ |
+| `providers/sops` | `sops://` | fsnotify | ✅ |
+| `providers/postgres` | `postgres://` | **native** (LISTEN/NOTIFY) | ✅ |
+| `providers/mysql` | `mysql://` | poll | ✅ |
+| `providers/sqlite` | `sqlite://` | fsnotify | ✅ |
+| `providers/mongodb` | `mongodb://` | **native** (change streams) | ✅ |
+| `providers/dynamodb` | `dynamodb://` | poll | ✅ |
+| `providers/redis` | `redis://` | **native** (keyspace notifications) | ✅ |
+| `providers/etcd` | `etcd://` | **native** (watch API) | ✅ |
+| `providers/firestore` | `firestore://` | **native** (snapshot listeners) | ✅ |
+| `providers/firebase-rc` | `firebase-rc://` | poll | ✅ |
+| `providers/firebase-rtdb` | `firebase-rtdb://` | **native** (streaming) | no (chain preserved) |
+| `providers/s3` | `s3://` | poll (ETag) | ✅ |
+| `providers/gcs` | `gcs://` | poll (generation) | ✅ |
+| `providers/azblob` | `azblob://` | poll (ETag) | ✅ |
+| `providers/cosmos` | `cosmos://` | poll (ETag) | ✅ |
+| `providers/launchdarkly` | `launchdarkly://` | **native** (streaming) | ✅ |
+| `providers/unleash` | `unleash://` | poll | n/a (no error surface) |
+| `providers/flagsmith` | `flagsmith://` | poll | no (chain preserved) |
+| `providers/configcat` | `configcat://` | poll | n/a (no error surface) |
+| `providers/split` | `split://` | poll | n/a (no error surface) |
+| `providers/growthbook` | `growthbook://` | poll | no (chain preserved) |
+| `providers/flipt` | `flipt://` | poll | ✅ |
+| `providers/goff` | `goff://` (GO Feature Flag) | poll | ✅ |
 
 Every provider that passes the [`providertest`](providertest/) conformance kit earns a badge. See each module's README for auth and ref grammar.
+
+The error-classification sweep is complete: every one of the 35 providers now falls into exactly one of three honest states, and `not_found` itself is detected by every provider regardless of which one.
+
+- **✅ classifies** - the provider maps real backend errors onto `mamori.ErrorKind` values beyond `not_found` (`permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`, `invalid`, as the backend's own vocabulary supports): twenty-nine providers across twenty-six module rows, since core's single row covers four built-in providers (`env:`, `dotenv://`, `file://`, `exec:`).
+- **no (chain preserved)** - `providers/firebase-rtdb`, `providers/growthbook`, and `providers/flagsmith` have no backend-specific error vocabulary to map, so a non-not-found failure still reports `unknown`. Their `Resolve` wraps the underlying error with `%w` rather than flattening it, so `errors.Is`/`errors.As` and any mamori sentinel injected by a caller's own middleware still reach it - the chain is preserved even though nothing here narrows it to a more specific kind. Do not read this as classifying permission or availability errors these providers cannot see.
+- **n/a (no error surface)** - `providers/unleash`, `providers/configcat`, and `providers/split` wrap SDK client surfaces that return only `bool`/`string` values, with no per-key error at all; their `Resolve` can only ever produce `mamori.ErrNotFound` or a client-construction error, so there is nothing to classify or preserve a chain for. Each is explicitly exempted from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable declaration rather than a silent gap.
 
 ## Middleware
 
@@ -133,6 +147,12 @@ mamori.WithProvider(
 ```
 
 `Cache`, `Audit`, `Failover`, `RateLimit`, and `Prefix` (multi-tenant namespace rewriting) ship in [`middleware/`](middleware/).
+
+## Observability
+
+`w.Status()` returns a lock-free, point-in-time `Report` of every field's health (ref, staleness, last error kind), safe to log or serialize since values never appear and refs have sensitive query options redacted. `w.Health()` reduces that to a single readiness check: nil when every field is fresh and none carries a terminal error kind (`not_found`, `permission_denied`, `unauthenticated`, `invalid`), a `*HealthError` otherwise - a transient kind like `unavailable` or `rate_limited` only fails health once the field is also stale.
+
+For a pre-deploy check, `mamori.Doctor[Config](ctx, opts...)` resolves every field once without starting a watcher and reports every failure at once, not just the first - run it as a build-tagged CI test to catch a rotated-away secret or a typo'd ref before it ships. An optional HTTP endpoint - `mamori.Handler` on your own mux, or a self-hosted server via `mamori.WithAdminHTTP` - serves that same `Report` as JSON, metadata only and never a configuration value, with a pluggable `Authenticator` (`WithAuth`; basic auth, bearer token, API key, mTLS, or your own) gating access and support for live credential rotation. See [Observability](https://mamorigo.dev/docs/observability) and [Auth](https://mamorigo.dev/docs/auth) for the full picture, including the readiness-probe pattern, the `Doctor` CI test, and credential rotation.
 
 ## Documentation
 

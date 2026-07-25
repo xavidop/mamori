@@ -51,3 +51,11 @@ cfg, err := mamori.Load[Config](ctx) // env is already registered
 - Environment values are treated as non-sensitive. If a variable holds a secret, use `secret.String` for the field anyway so it stays out of logs.
 
 Environment variables rarely change in a running process, so mamori polls on `WithPollInterval`.
+
+## Error classification
+
+| Condition | mamori kind |
+|---|---|
+| Variable not set | `not_found` |
+
+`os.LookupEnv` either finds the variable or it doesn't, so not-found is the only failure `env:` can produce - there's no `permission_denied` or `invalid` case for this scheme.

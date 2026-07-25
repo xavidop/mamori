@@ -70,4 +70,18 @@ mamori.WithProvider(azureprov.New(azureprov.WithCredential(myCred)))
 
 Key Vault has no native change notification, so mamori polls (`WithPollInterval` + jitter).
 
+## Error classification
+
+| HTTP status | mamori kind |
+|---|---|
+| 404 | `not_found` |
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+A transport failure (no HTTP response at all) stays `unknown`, since it could be a client problem rather than a backend one. `*azcore.ResponseError` stays reachable with `errors.As`.
+
 Verified by unit tests and the conformance kit against an in-memory fake; live Azure behavior is covered by `//go:build integration` tests.

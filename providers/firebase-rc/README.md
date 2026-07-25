@@ -124,6 +124,26 @@ Advanced options: `WithHTTPClient` injects a pre-authenticated `*http.Client`
 (custom transport, proxy, or an emulator), and `WithBaseURL` overrides the REST
 endpoint base. `WithFetcher` replaces the template fetcher entirely.
 
+## Error classification
+
+A non-200 response from the Remote Config REST API is classified by HTTP
+status:
+
+| HTTP status | mamori kind |
+|---|---|
+| 403 | `permission_denied` |
+| 401 | `unauthenticated` |
+| 429 | `rate_limited` |
+| 5xx | `unavailable` |
+| 400 | `invalid` |
+| anything else | `unknown` |
+
+There is no 404 row here: a missing parameter is detected after a successful
+(200) template fetch, by looking the key up in the decoded template, and
+already maps to `mamori.ErrNotFound` as described above. A status this
+provider has no mapping for (e.g. 409) stays `unknown` rather than being
+guessed at.
+
 ## Verified vs. needs a live backend
 
 **Verified in unit tests (no cloud access):** scheme and registration, ref
@@ -131,10 +151,10 @@ parsing (`<parameter-key>`, `#json-key`), whole-value and JSON-field resolution,
 `Sensitive == false`, template-version reporting and change-on-mutate,
 in-app-default and unknown-parameter -> `mamori.ErrNotFound` mapping, REST
 response decoding, the real REST fetch path against an `httptest` server (URL,
-JSON decoding, non-200 error handling), missing-project-ID handling, lazy
-fetcher caching, context cancellation, concurrent resolution, and the full
-`providertest.Run` conformance suite (with `SkipWatch`, since the provider is
-non-watchable) against an in-memory fake.
+JSON decoding, non-200 error handling and its HTTP-status classification),
+missing-project-ID handling, lazy fetcher caching, context cancellation,
+concurrent resolution, and the full `providertest.Run` conformance suite (with
+`SkipWatch`, since the provider is non-watchable) against an in-memory fake.
 
 **Needs a live backend (not run in CI):** real ADC credential resolution, the
 `firebase.remoteconfig` OAuth2 scope and IAM permission behavior, real HTTPS

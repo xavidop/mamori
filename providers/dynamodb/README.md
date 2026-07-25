@@ -100,6 +100,40 @@ comparison). Configure with `mamori.WithPollInterval`.
 > Streams-backed `Watch`; today the provider stays zero-infrastructure and relies
 > on polling.
 
+## Error classification
+
+Failures are classified so `mamori.ErrorKind` can distinguish them:
+
+| DynamoDB error code | mamori kind |
+|---|---|
+| `ResourceNotFoundException` | `not_found` |
+| `AccessDeniedException` | `permission_denied` |
+| `UnrecognizedClientException`, `ExpiredTokenException`, `InvalidSignatureException`, `MissingAuthenticationToken`, `IncompleteSignature` | `unauthenticated` |
+| `ProvisionedThroughputExceededException`, `ThrottlingException`, `RequestLimitExceeded`, `Throttling`, `TooManyRequestsException` | `rate_limited` |
+| `InternalServerError`, `ServiceUnavailable`, `InternalFailure` | `unavailable` |
+| `ValidationException` | `invalid` |
+| anything else | `unknown` |
+
+Codes not listed above (including any not yet added to this table) report
+`unknown` rather than being guessed at. `ResourceNotFoundException` is matched
+first as its typed `*ddbtypes.ResourceNotFoundException` shape before
+classification runs; the classifier also recognizes the raw code, so a
+DynamoDB-compatible backend that returns an untyped error still maps to
+`not_found`. An empty `GetItem` result (no error, just a missing item) is a
+separate, already-typed `not_found` path and is unaffected by this table.
+
+Most of these codes come from DynamoDB's own error reference or the AWS-wide
+Common Errors page (`MissingAuthenticationToken`, `IncompleteSignature`,
+`Throttling`, `TooManyRequestsException`, `InternalFailure` are AWS-wide, not
+DynamoDB-specific, and are mapped the same way `providers/aws` maps them for
+other services). `ExpiredTokenException` and `InvalidSignatureException` are
+real AWS signing and credential errors DynamoDB can return, but are not
+actually enumerated on either reference page; they are kept here because a
+caller can still receive them.
+
+The original SDK error remains reachable with `errors.As`, so existing code
+matching on `*ddbtypes.ResourceNotFoundException` keeps working.
+
 ## What is verified
 
 - ✅ Unit tests against an injected in-memory fake DynamoDB client, plus the

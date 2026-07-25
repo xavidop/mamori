@@ -45,6 +45,10 @@ A feature that does not exist resolves to not-found.
 - `flagsmith://banner_text` resolves to the feature's value (a string, number, or JSON).
 - `flagsmith://new_dashboard#enabled` resolves to `true` / `false` - pair it with a `bool` field.
 
+## Error classification
+
+Flagsmith's SDK exposes no structured error vocabulary beyond feature-not-found, so this provider does not classify errors into finer kinds: `mamori.ErrorKind` reports `unknown` for anything other than `not_found`. `Resolve` propagates a backend error unchanged (never flattened with `%v`), so `errors.Is` / `errors.As` and any wrapped mamori sentinel survive the chain intact.
+
 ## Watch
 
 mamori polls (`WithPollInterval` + jitter); the Flagsmith client also refreshes internally.

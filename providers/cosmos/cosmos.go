@@ -73,7 +73,10 @@ func init() { mamori.Register(New()) }
 // itemReader reads a single item from a Cosmos container by id and partition
 // key. It returns the raw document bytes and a change-detection tag (the
 // response ETag). It MUST return an error satisfying
-// errors.Is(err, mamori.ErrNotFound) when the item does not exist. The
+// errors.Is(err, mamori.ErrNotFound) when the item does not exist;
+// implementations that have an underlying SDK error to lose SHOULD
+// double-wrap it (fmt.Errorf("%w: %w", mamori.ErrNotFound, err)) so errors.As
+// can still recover it, the way the production adapter below does. The
 // production adapter wraps the azcosmos SDK; tests inject an in-memory fake.
 // All parameter and result types are built-in, so callers outside this package
 // can implement it too.
@@ -218,9 +221,16 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	doc, etag, err := r.ReadItem(ctx, database, container, id, pk)
 	if err != nil {
 		if errors.Is(err, mamori.ErrNotFound) {
-			return mamori.Value{}, fmt.Errorf("cosmos: item %q in %s/%s not found: %w", id, database, container, mamori.ErrNotFound)
+			// err already carries mamori.ErrNotFound: the itemReader contract
+			// (see itemReader's doc above) requires double-wrapping it around
+			// any underlying SDK error, so wrapping it a second time here would
+			// nest the sentinel twice and garble the message. A single %w on
+			// err preserves both errors.Is(err, mamori.ErrNotFound) and
+			// errors.As reaching the underlying SDK error (e.g.
+			// *azcore.ResponseError), matching providers/azblob's Resolve.
+			return mamori.Value{}, fmt.Errorf("cosmos: item %q in %s/%s not found: %w", id, database, container, err)
 		}
-		return mamori.Value{}, fmt.Errorf("cosmos: reading item %q in %s/%s: %w", id, database, container, err)
+		return mamori.Value{}, fmt.Errorf("cosmos: reading item %q in %s/%s: %w", id, database, container, classifyCosmos(err))
 	}
 
 	// The Version reflects the whole-document revision (the ETag is a document
@@ -321,7 +331,11 @@ func (r *sdkReader) ReadItem(ctx context.Context, database, container, id, parti
 	resp, err := cc.ReadItem(ctx, azcosmos.NewPartitionKeyString(partitionKey), id, nil)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, "", mamori.ErrNotFound
+			// Double-wrap so the caller (Resolve) can still recover the
+			// underlying *azcore.ResponseError with errors.As instead of only
+			// seeing the bare sentinel, matching providers/azblob's
+			// sdkDownloader.
+			return nil, "", fmt.Errorf("%w: %w", mamori.ErrNotFound, err)
 		}
 		return nil, "", err
 	}
@@ -336,4 +350,44 @@ func isNotFound(err error) bool {
 		return respErr.StatusCode == http.StatusNotFound
 	}
 	return false
+}
+
+// classifyCosmos maps a Cosmos DB HTTP status onto a mamori classification
+// sentinel, using the identical *azcore.ResponseError status mechanism as
+// providers/azure's classifyAzure and providers/azblob's classifyAzblob.
+//
+// Cosmos DB returns 429 for request-unit (RU/s) throttling, its most common
+// operational failure, alongside any other rate limiting; both map to
+// rate_limited (see the README for the operational note on provisioned RU/s).
+//
+// A transport failure is not an *azcore.ResponseError at all (e.g. a DNS
+// failure or a dropped connection) and is left unclassified (KindUnknown),
+// since it could equally be a bug in this provider as a genuine backend
+// outage; mamori does not guess at that distinction.
+func classifyCosmos(err error) error {
+	if err == nil {
+		return nil
+	}
+	var respErr *azcore.ResponseError
+	if !errors.As(err, &respErr) {
+		return err
+	}
+	var sentinel error
+	switch code := respErr.StatusCode; {
+	case code == http.StatusNotFound:
+		sentinel = mamori.ErrNotFound
+	case code == http.StatusForbidden:
+		sentinel = mamori.ErrPermissionDenied
+	case code == http.StatusUnauthorized:
+		sentinel = mamori.ErrUnauthenticated
+	case code == http.StatusTooManyRequests:
+		sentinel = mamori.ErrRateLimited
+	case code >= 500:
+		sentinel = mamori.ErrUnavailable
+	case code == http.StatusBadRequest:
+		sentinel = mamori.ErrInvalid
+	default:
+		return err
+	}
+	return fmt.Errorf("%w: %w", sentinel, err)
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/providertest"
@@ -25,13 +26,31 @@ type fakeBackend struct {
 	mu       sync.Mutex
 	colls    map[string]map[string]bson.M
 	watchers map[*fakeWatch]struct{}
+	fails    map[string]error // id (as passed to Seed/put) -> injected error, consulted before colls
 }
 
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		colls:    map[string]map[string]bson.M{},
 		watchers: map[*fakeWatch]struct{}{},
+		fails:    map[string]error{},
 	}
+}
+
+// fail makes the next FindDoc for id (keyed identically to put/Seed) return err
+// instead of looking up the document, until clear(id) is called. It powers the
+// providertest ErrorClassification case and TestResolveClassifiesNonNotFoundError.
+func (f *fakeBackend) fail(id string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[id] = err
+}
+
+// clear cancels a previously injected fail(id, err).
+func (f *fakeBackend) clear(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, id)
 }
 
 // put writes doc (keyed by id) into collection and wakes every watcher whose
@@ -81,14 +100,25 @@ func (f *fakeBackend) FindDoc(ctx context.Context, collection, keyField, keyValu
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if keyField == "" {
+		// Route an injected failure through the same findErr helper
+		// mongoBackend.FindDoc uses for a real server error: the fake models
+		// MongoDB's observable behavior (see the type doc comment above), and
+		// that now shares production's classification code instead of
+		// hand-mirroring it, so a test running through the fake genuinely
+		// exercises the production error path.
+		if err, ok := f.fails[keyValue]; ok {
+			return nil, findErr(collection, keyValue, err)
+		}
+	}
 	m := f.colls[collection]
 	if m == nil {
-		return nil, notFound(collection, keyValue)
+		return nil, findErr(collection, keyValue, mongo.ErrNoDocuments)
 	}
 	if keyField == "" {
 		doc, ok := m[keyValue]
 		if !ok {
-			return nil, notFound(collection, keyValue)
+			return nil, findErr(collection, keyValue, mongo.ErrNoDocuments)
 		}
 		return cloneDoc(doc), nil
 	}
@@ -97,7 +127,7 @@ func (f *fakeBackend) FindDoc(ctx context.Context, collection, keyField, keyValu
 			return cloneDoc(doc), nil
 		}
 	}
-	return nil, notFound(collection, keyValue)
+	return nil, findErr(collection, keyValue, mongo.ErrNoDocuments)
 }
 
 func (f *fakeBackend) WatchDoc(_ context.Context, collection, keyField, keyValue string) (changeCursor, error) {
@@ -162,10 +192,6 @@ func cloneDoc(doc bson.M) bson.M {
 	return cp
 }
 
-func notFound(collection, keyValue string) error {
-	return fmt.Errorf("mongodb: document %q not found in collection %q: %w", keyValue, collection, mamori.ErrNotFound)
-}
-
 var _ backend = (*fakeBackend)(nil)
 
 // --- conformance ---------------------------------------------------------------
@@ -183,6 +209,14 @@ func TestConformance(t *testing.T) {
 		},
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.put("conformance", key, bson.M{"_id": key, "value": val})
+			return nil
+		},
+		Fail: func(_ context.Context, key string, err error) error {
+			fake.fail(key, err)
+			return nil
+		},
+		Clear: func(_ context.Context, key string) error {
+			fake.clear(key)
 			return nil
 		},
 		EventuallyTimeout: 3 * time.Second,
@@ -294,6 +328,32 @@ func TestResolveNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), mustRef(t, "mongodb://users/missing"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveClassifiesNonNotFoundError exercises classifyMongo through
+// Resolve itself, not just as a direct function call. Neither existing kind
+// of test catches a regression here: TestClassifyMongo calls classifyMongo
+// directly, so it passes whether or not any FindDoc actually calls it, and
+// the providertest ErrorClassification case injects a mamori sentinel (not a
+// mongo.CommandError), which classifyMongo returns unchanged either way - it
+// would pass even with every classifyMongo call deleted. This test injects a
+// real mongo.CommandError through fakeBackend.fail, the same shape a live
+// MongoDB server would return, so it fails if fakeBackend.FindDoc's fail
+// branch (which mirrors mongoBackend.FindDoc's production call at the same
+// site) stops routing through classifyMongo.
+func TestResolveClassifiesNonNotFoundError(t *testing.T) {
+	fake := newFakeBackend()
+	fake.put("secrets", "db_password", bson.M{"_id": "db_password", "value": "s3cr3t"})
+	fake.fail("db_password", mongo.CommandError{Code: 13, Name: "Unauthorized", Message: "not authorized on secrets"})
+	p := New(withBackend(fake))
+
+	_, err := p.Resolve(context.Background(), mustRef(t, "mongodb://secrets/db_password"))
+	if err == nil {
+		t.Fatal("Resolve returned a nil error while the backend was failing")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyMongo may not be wired into FindDoc", got, mamori.KindPermissionDenied)
 	}
 }
 
