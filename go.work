@@ -22,6 +22,7 @@ use (
 	./providers/growthbook
 	./providers/k8s
 	./providers/launchdarkly
+	./providers/mamori
 	./providers/mongodb
 	./providers/mysql
 	./providers/onepassword
@@ -33,6 +34,7 @@ use (
 	./providers/sqlite
 	./providers/unleash
 	./providers/vault
+	./server
 	./tools/reconcilevet
 	./x/otel
 )

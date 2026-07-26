@@ -346,18 +346,13 @@ func (e *engine[T]) start(ctx context.Context) {
 				// the same situation on the live-resolve path.
 				continue
 			}
-			var src <-chan Update
-			if wp, isW := p.(WatchableProvider); isW {
-				ch, werr := wp.Watch(ctx, ref)
-				if werr != nil {
-					// Fall back to polling if native watch cannot start.
-					src = pollWatch(ctx, p, ref, e.o)
-				} else {
-					src = ch
-				}
-			} else {
-				src = pollWatch(ctx, p, ref, e.o)
-			}
+			// watchRef (watchref.go) is the extracted native-watch-or-poll
+			// selection this loop used to inline directly; it is called here
+			// with e.o, the engine's own already-built *options, so this
+			// remains byte-identical to the pre-extraction behavior - see
+			// watchRef's doc comment for why that is the form start uses
+			// rather than the public, ...Option-taking WatchRef.
+			src := watchRef(ctx, p, ref, e.o)
 
 			fwd.Add(1)
 			specIdx, refPos := i, pos

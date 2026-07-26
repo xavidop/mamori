@@ -20,11 +20,11 @@ A `nil` error allows the request; any other error denies it.
 ```go
 type Identity struct {
 	Subject string
-	Attrs   map[string]string
+	Attrs   map[string][]string
 }
 ```
 
-`Subject` is a stable principal name; `Attrs` carries scheme-specific detail (certificate SANs, token claims, a peer uid). Both may be empty for a scheme that authenticates without naming a principal, such as a shared bearer token. The admin endpoint ignores the returned `Identity` - it only ever serves metadata, so there is nothing to authorize per-principal yet. The config server, a later addition, will use it to decide what a given caller may see. Because both surfaces share one interface, an `Authenticator` written today keeps working unchanged once the config server exists.
+`Subject` is a stable principal name; `Attrs` carries scheme-specific detail (certificate SANs, token claims, a peer uid/gid/pid). `Attrs` is multi-valued because authorization commonly needs multi-valued claims - groups, scopes, token audiences, multiple certificate SANs - and a single string per key would force a scheme to join-encode them. Both may be empty for a scheme that authenticates without naming a principal, such as a shared bearer token. The admin endpoint ignores the returned `Identity` - it only ever serves metadata, so there is nothing to authorize per-principal there. The [config server](../server) uses it: its `Policy` (`server.WithPolicy`) decides what a given caller may see based on the `Identity` an `Authenticator` returns. Because both surfaces share one interface, an `Authenticator` written for the admin endpoint works unchanged on the config server too.
 
 Two more small pieces complete the interface:
 
@@ -123,6 +123,34 @@ auth := mamori.MTLS(mamori.MTLSOptions{
 
 Authenticates by the client's already-verified TLS certificate; it requires the server be configured with `tls.RequireAndVerifyClientCert` (via `WithAdminTLS`), since `MTLS` only checks *which* verified identity is allowed, not whether the certificate chain is trustworthy - the Go TLS stack has already done that. `AllowedCNs`/`AllowedDNSNames` are optional allowlists checked against the leaf certificate's `CommonName` and DNS SANs; if both are empty, any verified certificate is accepted, on the theory that verification itself is the security boundary. On a non-TLS connection, or a TLS connection with no client certificate, `MTLS` denies every request - there is no fallback and no separate secret.
 
+### PeerCred
+
+```go
+func PeerCred(opts PeerCredOptions) Authenticator
+
+type PeerCredOptions struct {
+	UIDs []int
+	GIDs []int
+}
+```
+
+```go
+auth := mamori.PeerCred(mamori.PeerCredOptions{
+	UIDs: []int{1000, 1001},
+})
+```
+
+Authenticates a Unix-domain-socket peer by the uid/gid the kernel itself reports at accept time - `SO_PEERCRED` on Linux, `LOCAL_PEERCRED` (via `GetsockoptXucred`) on Darwin - never anything the client presents in the request. Because the identity comes from the kernel rather than from request content, it **cannot be spoofed by a client that can merely connect to the socket**: there is no header, token, or certificate to forge, only a real process identity the OS itself vouches for.
+
+`UIDs`/`GIDs` are both optional allowlists, ORed together (a peer is permitted if its uid is in `UIDs` *or* its gid is in `GIDs`; they are not ANDed). If both are empty, any peer whose credentials were successfully read is permitted - the same "verification itself is the security boundary" default `MTLSOptions`' empty allowlist documents. On success, `Identity.Subject` is `"uid:<uid>"` and `Identity.Attrs` carries `"uid"`, `"gid"`, and `"pid"` (Darwin's `Xucred` carries no pid, so `Attrs["pid"]` is always `["0"]` there).
+
+`PeerCred` denies outright, never a silent allow, in two situations:
+
+- **No peer credentials were ever available for this request** - a non-Unix connection, or a Unix connection whose kernel credentials were never plumbed into the request context in the first place.
+- **The platform is not Linux or Darwin.** mamori has no way to read kernel-verified peer credentials anywhere else, so `PeerCred.Authenticate` returns a hard, unconditional deny with a clear error on every other platform - never a fallthrough to "no restriction configured" just because the check could not be performed.
+
+Reading a connection's peer credentials requires cooperation from whatever accepted that connection: by the time `Authenticate` runs, only the `*http.Request` and its context are in scope, and `net/http` gives no path from a request back to the `net.Conn` it arrived on. mamori bridges this with a small seam split across the core module and the [config server](../server): core exports `Ucred`, `ContextWithPeerCred`, and, per supported platform, `PeerCredFromConn`; a Unix-socket listener calls `PeerCredFromConn` once per accepted connection and stashes the result via `http.Server.ConnContext` and `ContextWithPeerCred`, so every request on that connection carries the same peer identity the kernel reported at accept time. **`WithAdminHTTP` does not wire up this seam** - it only ever listens on TCP, where there is no Unix-socket peer to read credentials from in the first place. `PeerCred` therefore requires the [config server](../server)'s `Unix(...)` transport specifically; mounting `PeerCred` on any other listener denies every request, since nothing will ever have stashed peer credentials into the context for it to find.
+
 ### AnyOf and AllOf
 
 ```go
@@ -210,4 +238,4 @@ Implement `Authenticator` (and optionally `Challenger`) on a named type when the
 
 ## Not yet available
 
-`PeerCred` (authenticating a Unix-socket peer by its kernel-reported credentials) and JWT auth (a planned `x/authjwt` module) are **not** part of this release. `WithAdminHTTP` today only listens on TCP - there is no Unix-socket admin listener to authenticate against. Both land alongside the config server, mamori's later addition.
+JWT auth (a planned `x/authjwt` module) is **not** part of this release.

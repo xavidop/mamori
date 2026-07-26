@@ -15,7 +15,7 @@ Every provider that ships in this repo passes the conformance kit (see **Write a
 
 The **Errors** column shows which providers classify a failure beyond `not_found`, mapping backend-specific errors onto `mamori.ErrorKind` values like `permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`, and `invalid`. The classification sweep across the whole catalog is now complete, and every provider falls into exactly one of three honest states:
 
-- **✅** - classifies real backend errors beyond `not_found`: twenty-nine providers across twenty-six modules (the `env:` / `dotenv://` / `file://` / `exec:` rows are one core module, counted as four providers).
+- **✅** - classifies real backend errors beyond `not_found`: thirty providers across twenty-seven modules (the `env:` / `dotenv://` / `file://` / `exec:` rows are one core module, counted as four providers).
 - **no (chain preserved)** - `firebase-rtdb`, `growthbook`, and `flagsmith` have no backend-specific error vocabulary to map, so a non-not-found failure still reports `unknown`, but `Resolve` wraps the underlying error with `%w` rather than flattening it, so `errors.Is`/`errors.As` still reach it. This is not classification; it is proof that the chain survives even where there is nothing more specific to name.
 - **n/a (no error surface)** - `unleash`, `configcat`, and `split` wrap client surfaces that return only `bool`/`string`, with no per-key error at all, so `Resolve` can only ever produce `not_found` or a client-construction error. Each is explicitly exempt from the conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable opt-out rather than a silent gap.
 
@@ -27,6 +27,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `dotenv://` | dotenv | no | fsnotify | ✅ |
 | `file://` | file | no | fsnotify | ✅ |
 | `exec:` | exec | yes | poll | ✅ |
+| `mamori://` | mamori (client) | passthrough | **native** (SSE) | ✅ |
 | `aws-sm://` `aws-ps://` | AWS | yes / secure | poll | ✅ |
 | `vault://` | Vault | yes | lease-aware poll | ✅ |
 | `gcp-sm://` | GCP | yes | poll | ✅ |
@@ -73,9 +74,11 @@ cfg, err := mamori.Load[Config](ctx,
 
 `WithProvider` takes precedence over the registry for that scheme, for that call only.
 
+The [mamori (client)](../providers/mamori) provider is the one shipped provider with no zero-config default at all: a `mamori://` binding name only means something relative to one specific config server, so it is always constructed explicitly with `mamoriprov.New(mamoriprov.Config{Endpoint: ...})` and passed via `WithProvider`, never registered from a blank import. It is also structurally different from every other row in the table above: it is not itself a secret manager, database, or flag service, it is a client for the [config server](../server), a fan-out process that fronts one of those backends and re-serves it to many callers. `Sensitive` and error classification are marked "passthrough" for it because both are whatever its upstream backend reports, carried through the hop unchanged, rather than a property fixed by this provider itself.
+
 ## Watch behavior
 
-- **native** - the backend pushes changes (Kubernetes watch API, Consul blocking queries). mamori subscribes directly.
+- **native** - the backend pushes changes (Kubernetes watch API, Consul blocking queries, a mamori config server's `/v1/watch` Server-Sent Events stream). mamori subscribes directly.
 - **fsnotify** - a local file is watched for writes (built-in `file://`, `sops://`).
 - **lease-aware poll** - polling, but `Value.NotAfter` from a Vault lease triggers a refresh before expiry.
 - **poll** - mamori polls on `WithPollInterval` with jitter, using `Value.Version` to detect change.

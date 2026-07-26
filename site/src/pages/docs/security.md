@@ -30,14 +30,14 @@ The core module has minimal dependencies; each provider module isolates its SDK 
 
 Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/xavidop/mamori/security/advisories/new) - never in a public issue.
 
-## Two HTTP surfaces: metadata now, values later
+## Two HTTP surfaces: metadata, and values
 
-mamori exposes, or will expose, exactly two things over HTTP, and they sit on opposite sides of a hard line:
+mamori exposes exactly two things over HTTP, and they sit on opposite sides of a hard line:
 
-- **The admin endpoint** (`Handler`, `WithAdminHTTP` - see [HTTP exposure](../observability#http-exposure)) serves operational metadata only: a `Report` of field paths, provider schemes, refs with sensitive query options redacted, staleness, and error kinds. It **cannot serve a configuration value.** There is no route, under any option, that returns one - the response body is always `w.Status()`, which never carries a resolved value by construction, not by a check the handler could forget to make.
-- **The config server**, a later addition, will serve resolved values, gated by an authorization policy expressed in terms of the `Identity` an `Authenticator` returns (see [Auth](../auth)). It does not exist yet - nothing shipped today can hand a caller a secret over HTTP.
+- **The admin endpoint** (`Handler`, `WithAdminHTTP` - see [HTTP exposure](../observability#http-exposure)), part of the core module, serves operational metadata only: a `Report` of field paths, provider schemes, refs with sensitive query options redacted, staleness, and error kinds. It **cannot serve a configuration value.** There is no route, under any option, that returns one - the response body is always `w.Status()`, which never carries a resolved value by construction, not by a check the handler could forget to make.
+- **The [config server](../server)** (the separate `server/` module) serves resolved values - the actual secret bytes - gated by a mandatory authorization `Policy` expressed in terms of the `Identity` an `Authenticator` returns (see [Auth](../auth)). It concentrates every backend credential its bindings touch into one process, which makes it the highest-blast-radius component in mamori: compromising it is worse than compromising any single consumer that would otherwise hold its own slice of those credentials. See the config server page's [Blast radius](../server#blast-radius) section for the full accounting of that tradeoff and its structural mitigations (no client-supplied refs, mandatory policy, mandatory auth and TLS over the network, no values in the audit log).
 
-Keep the two apart when reasoning about exposure: pointing an unauthenticated admin endpoint at the public internet is a metadata leak, not a secret leak, but it is still a leak worth avoiding, and it stops being true the day the config server ships against the same host.
+Keep the two apart when reasoning about exposure: pointing an unauthenticated admin endpoint at the public internet is a metadata leak, not a secret leak - but it is still a leak worth avoiding, and it is a categorically different mistake from misconfiguring the config server, which leaks the values themselves.
 
 ### `WithAdminHTTP` is unauthenticated by default
 
@@ -55,7 +55,7 @@ Every `Report.Fields[i].Ref`, wherever it surfaces - `Status()`, `Doctor`, or th
 
 ## Out of scope
 
-`mamori` is not a secrets store and provides no encryption at rest. Its only server component is the optional, metadata-only admin HTTP endpoint described above - it exposes no way to serve a configuration value. Protecting the backends it reads from (IAM policies, Vault ACLs, KMS keys) is your infrastructure's responsibility.
+`mamori` is not a secrets store and provides no encryption at rest. The core module's only server component is the optional, metadata-only admin HTTP endpoint described above - it exposes no way to serve a configuration value. The separate [config server](../server) module does serve values, deliberately and behind mandatory auth/authz, as described above; it is opt-in (a distinct module you must import and deploy) rather than something the core library does on your behalf. Protecting the backends it reads from (IAM policies, Vault ACLs, KMS keys) is your infrastructure's responsibility either way.
 
 ## Releases and versioning
 

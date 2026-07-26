@@ -154,6 +154,10 @@ mamori.WithProvider(
 
 For a pre-deploy check, `mamori.Doctor[Config](ctx, opts...)` resolves every field once without starting a watcher and reports every failure at once, not just the first - run it as a build-tagged CI test to catch a rotated-away secret or a typo'd ref before it ships. An optional HTTP endpoint - `mamori.Handler` on your own mux, or a self-hosted server via `mamori.WithAdminHTTP` - serves that same `Report` as JSON, metadata only and never a configuration value, with a pluggable `Authenticator` (`WithAuth`; basic auth, bearer token, API key, mTLS, or your own) gating access and support for live credential rotation. See [Observability](https://mamorigo.dev/docs/observability) and [Auth](https://mamorigo.dev/docs/auth) for the full picture, including the readiness-probe pattern, the `Doctor` CI test, and credential rotation.
 
+## Config server
+
+[`server/`](server/) is a separate module: a standalone process that fronts a fixed, operator-declared table of name-to-ref bindings (`server.Bind`/`server.BindFile` - never a client-supplied ref) and serves resolved values to authenticated, authorized callers over Unix sockets and TLS TCP, under a mandatory `Policy` and `Authenticator`. It reuses the same `Authenticator`/`Identity` as the admin endpoint above, plus a Unix-socket-only `PeerCred` scheme authenticated by kernel-verified uid/gid. It is deliberately the highest-blast-radius component in this project - it concentrates every backend credential its bindings touch into one process - so read [the docs](https://mamorigo.dev/docs/server) before deploying one, not just the quick start.
+
 ## Documentation
 
 - 📖 **Docs site:** https://mamorigo.dev
