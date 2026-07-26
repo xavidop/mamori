@@ -96,7 +96,14 @@ func (s *Server) logAudit(o requestOutcome) {
 	if s.audit == nil {
 		return
 	}
-	s.audit.Info("mamori/server: request",
+	// node is what makes an aggregated audit stream from several replicas
+	// attributable to the replica that actually served each request. It is
+	// omitted when unset (see NodeID) rather than logged empty.
+	attrs := make([]any, 0, 18)
+	if s.nodeID != "" {
+		attrs = append(attrs, "node", s.nodeID)
+	}
+	attrs = append(attrs,
 		"subject", o.subject,
 		"name", o.name,
 		"decision", o.decision,
@@ -106,6 +113,7 @@ func (s *Server) logAudit(o requestOutcome) {
 		"path", o.path,
 		"latency_ms", o.latency.Milliseconds(),
 	)
+	s.audit.Info("mamori/server: request", attrs...)
 }
 
 // authenticate runs the configured Authenticator and reports whether the
@@ -182,6 +190,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/values", s.handleBatch)
 	mux.HandleFunc("GET /v1/watch", s.handleWatch)
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
+	mux.HandleFunc("GET /v1/readyz", s.handleReadyz)
 	return mux
 }
 
@@ -214,7 +223,7 @@ func (s *Server) handleValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	v, k, hasValue, found := s.lookup(name)
+	v, f, k, hasValue, found := s.lookupFresh(name)
 	o.decision = "allow"
 	switch {
 	case !found:
@@ -225,7 +234,7 @@ func (s *Server) handleValue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, st, k, "binding resolve failed")
 		o.kind, o.status = k, st
 	default:
-		writeJSON(w, http.StatusOK, newValueBody(name, v, k))
+		writeJSON(w, http.StatusOK, newValueBody(name, v, k, f))
 		o.kind, o.status = k, http.StatusOK
 	}
 }
@@ -280,7 +289,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		v, k, hasValue, found := s.lookup(name)
+		v, f, k, hasValue, found := s.lookupFresh(name)
 		o.decision = "allow"
 		switch {
 		case !found:
@@ -291,7 +300,7 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 			entries = append(entries, newErrorValueBody(name, k, "binding resolve failed"))
 			o.kind, o.status = k, st
 		default:
-			entries = append(entries, newValueBody(name, v, k))
+			entries = append(entries, newValueBody(name, v, k, f))
 			o.kind, o.status = k, http.StatusOK
 		}
 		o.latency = time.Since(entryStart)
@@ -378,8 +387,8 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		v, k, hasValue, found := s.lookup(name)
-		sendWatchSnapshot(w, flush, name, v, k, hasValue, found)
+		v, f, k, hasValue, found := s.lookupFresh(name)
+		sendWatchSnapshot(w, flush, name, v, k, hasValue, found, f)
 		o.decision = "allow"
 		switch {
 		case !found:
@@ -418,12 +427,12 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-poll.C:
 			for i := range subs {
-				v, k, hasValue, found := s.lookup(subs[i].name)
+				v, f, k, hasValue, found := s.lookupFresh(subs[i].name)
 				if !snapshotChanged(subs[i].value, subs[i].kind, subs[i].found, v, k, found) {
 					continue
 				}
 				subs[i].value, subs[i].kind, subs[i].found = v, k, found
-				if !sendWatchSnapshot(w, flush, subs[i].name, v, k, hasValue, found) {
+				if !sendWatchSnapshot(w, flush, subs[i].name, v, k, hasValue, found, f) {
 					return
 				}
 			}
@@ -441,4 +450,35 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 // unauthenticated endpoint into a way to enumerate what this server serves.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthzBody{Status: "ok"})
+}
+
+// handleReadyz answers GET /v1/readyz: readiness, as distinct from
+// handleHealthz's liveness. Liveness asks "is this process alive", and the
+// answer is unconditionally yes for as long as it can answer at all.
+// Readiness asks "should a load balancer send this replica traffic", and the
+// answer is no while its cache is still cold and no once it is draining. That
+// distinction is what makes running several replicas safe: without it, a
+// replica that has not yet resolved a single binding still reports 200 and
+// gets sent requests it can only fail. See Server.readiness for the rule.
+//
+// It is unauthenticated, like handleHealthz, because a probe has no
+// credential to offer. It therefore observes the same discipline: the
+// response carries a single state string and nothing else. No binding names,
+// no counts, no node identity, nothing that would let an unauthenticated
+// caller learn the shape of this deployment or what it serves. Do not extend
+// it with detail; per-binding health belongs behind the authenticated admin
+// surface.
+//
+// A not-ready replica answers 503, the status every load balancer and
+// orchestrator already reads as "take this one out of rotation".
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	state, ready := s.readiness()
+	status := http.StatusServiceUnavailable
+	if ready {
+		status = http.StatusOK
+	}
+	// A readiness answer is a point-in-time fact about one replica, so it
+	// must never be cached by anything between here and the prober.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, status, readyzBody{Status: state})
 }

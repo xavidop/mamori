@@ -777,3 +777,111 @@ func TestCloseTerminatesActiveSSEConnectionPromptly(t *testing.T) {
 		t.Fatalf("Close took %s against a live SSE connection (shutdownGrace is %s); want it to return promptly because the serving context is canceled at the START of shutdown, not after connections happen to close", elapsed, shutdownGrace)
 	}
 }
+
+// TestRestartOnSamePathKeepsSuccessorSocket pins the socket-ownership guard
+// in closeTransports (see removeOwnedSocket).
+//
+// Restarting a server on a fixed socket path overlaps the two processes:
+// binding removes whatever is at the path, so the incoming server replaces
+// the outgoing server's socket file while the outgoing one is still draining.
+// Before the guard, the outgoing server's cleanup then deleted the incoming
+// server's socket, leaving a healthy server bound to a path nothing could
+// dial and clients permanently unable to reconnect. Closing the old server
+// must leave the new server's socket, and the new server, reachable.
+func TestRestartOnSamePathKeepsSuccessorSocket(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	p := mamoritest.NewProvider("udsrestart")
+	p.Set("k", "v1")
+
+	sockPath := shortSocketPath(t)
+
+	newServer := func() *Server {
+		t.Helper()
+		s, err := New(
+			WithPolicy(AllowAll()),
+			NoAuth(),
+			Bind("b", "udsrestart://k"),
+			WithProvider(p),
+			Unix(sockPath, 0o600),
+		)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return s
+	}
+
+	// The outgoing server.
+	oldSrv := newServer()
+	oldCtx, oldCancel := context.WithCancel(context.Background())
+	defer oldCancel()
+	go func() { _ = oldSrv.Serve(oldCtx) }()
+	waitForAddrs(t, oldSrv, 1)
+
+	// The incoming server takes the path over, exactly as a restart does.
+	newSrv := newServer()
+	newCtx, newCancel := context.WithCancel(context.Background())
+	defer newCancel()
+	go func() { _ = newSrv.Serve(newCtx) }()
+	defer func() { newCancel(); _ = newSrv.Close() }()
+	waitForAddrs(t, newSrv, 1)
+	waitForLookup(t, newSrv, "b", func(v mamori.Value, k mamori.Kind, hasValue, found bool) bool {
+		return found && k == "" && string(v.Bytes) == "v1"
+	})
+
+	// Now retire the outgoing server. Its cleanup must not touch the socket
+	// file, which now belongs to the incoming server.
+	oldCancel()
+	if err := oldSrv.Close(); err != nil {
+		t.Fatalf("closing the outgoing server: %v", err)
+	}
+
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("the outgoing server deleted its successor's socket at %s: %v", sockPath, err)
+	}
+
+	// The file surviving is not enough: the successor must still serve on it.
+	client := unixHTTPClient(sockPath)
+	defer client.CloseIdleConnections()
+	vb := getJSON(t, client, "http://unix/v1/values/b")
+	if vb.Name != "b" || string(vb.Bytes) != "v1" {
+		t.Fatalf("valueBody = %+v, want Name=b Bytes=v1 from the surviving server", vb)
+	}
+}
+
+// TestCloseRemovesItsOwnSocket is the other half of the guard: when no one
+// took the path over, a closing server must still clean its socket file up
+// rather than leaving it behind.
+func TestCloseRemovesItsOwnSocket(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	p := mamoritest.NewProvider("udscleanup")
+	p.Set("k", "v1")
+
+	sockPath := shortSocketPath(t)
+
+	s, err := New(
+		WithPolicy(AllowAll()),
+		NoAuth(),
+		Bind("b", "udscleanup://k"),
+		WithProvider(p),
+		Unix(sockPath, 0o600),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = s.Serve(ctx) }()
+	waitForAddrs(t, s, 1)
+
+	cancel()
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Errorf("socket file still present at %s after Close (err=%v), want it unlinked", sockPath, err)
+	}
+}

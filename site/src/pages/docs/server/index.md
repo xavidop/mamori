@@ -111,6 +111,7 @@ These mitigations narrow how the concentration can be abused, not the concentrat
 - [Server bindings](/docs/server/bindings/) - `Bind`/`BindFile`, the operator-declared-only model, and the `exec:`/`mamori:` gates.
 - [Deploy and expose](/docs/server/transports/) - Unix sockets, TLS TCP, running both, and the audit log.
 - [Server auth and policy](/docs/server/authorization/) - `WithAuth`, the shipped schemes, and the `Policy` model.
+- [High availability](/docs/server/ha/) - running several replicas: readiness gating, draining, freshness, and client failover.
 - [Server wire protocol](/docs/server/wire-protocol/) - v1 routes, response shapes, the fresh-vs-stale `kind`, watch (SSE), and healthz.
 
 ## See also

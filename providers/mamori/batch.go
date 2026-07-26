@@ -47,6 +47,13 @@ type batchResponse struct {
 // dropping it would let a consumer apply a default in place of a secret it
 // is not allowed to read, or one that is genuinely unavailable, which is not
 // what a per-ref Resolve of that same name would do.
+//
+// With several replicas configured (Config.Endpoints), the whole batch is
+// retried against the next replica when one fails in a way another could
+// plausibly answer differently; see tryEndpoints and shouldFailover. A
+// per-name hard failure such as a permission denial is authoritative, so it
+// ends the call outright instead of being replayed against every replica,
+// exactly as a single-ref Resolve of that name would.
 func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[string]mamori.Value, error) {
 	names := make([]string, len(refs))
 	// keyByName maps a requested binding name back to its input ref's
@@ -66,7 +73,23 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 		return nil, fmt.Errorf("%w: encoding mamori batch request: %s", mamori.ErrInvalid, err)
 	}
 
-	resp, err := p.do(ctx, http.MethodPost, "/v1/values", bytes.NewReader(reqBody))
+	return tryEndpoints(ctx, p, func(ctx context.Context, ep endpoint) (map[string]mamori.Value, error) {
+		return p.resolveBatchOnce(ctx, ep, reqBody, keyByName)
+	})
+}
+
+// resolveBatchOnce is one POST /v1/values against one endpoint: the whole of
+// ResolveBatch's wire handling, minus the choice of which replica to ask (see
+// resolveOnce's doc comment for why that split exists).
+//
+// It takes the encoded request as raw bytes rather than an io.Reader on
+// purpose: a reader handed to one attempt is drained by it, so a retry
+// against the next endpoint would POST an empty body. Wrapping the same bytes
+// in a fresh bytes.Reader here makes every attempt send the identical
+// request, and re-encoding per attempt is avoided since the names cannot
+// change between them.
+func (p *Provider) resolveBatchOnce(ctx context.Context, ep endpoint, reqBody []byte, keyByName map[string]string) (map[string]mamori.Value, error) {
+	resp, err := p.do(ctx, ep, http.MethodPost, "/v1/values", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +112,7 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 		return nil, fmt.Errorf("%w: decoding mamori batch response: %s", mamori.ErrInvalid, err)
 	}
 
-	result := make(map[string]mamori.Value, len(refs))
+	result := make(map[string]mamori.Value, len(keyByName))
 	for _, entry := range br.Values {
 		key, known := keyByName[entry.Name]
 		if !known {

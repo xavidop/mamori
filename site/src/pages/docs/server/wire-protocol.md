@@ -5,7 +5,7 @@ title: Server wire protocol
 
 # Server wire protocol
 
-The handler `Handler()` returns (and `Serve` mounts on every transport) exposes four v1 routes. This is a versioned wire protocol, not an internal detail: once an external client depends on today's routes and JSON fields, they are a stable contract. Every value-bearing response carries `Cache-Control: no-store`.
+The handler `Handler()` returns (and `Serve` mounts on every transport) exposes five v1 routes. This is a versioned wire protocol, not an internal detail: once an external client depends on today's routes and JSON fields, they are a stable contract. Every value-bearing response carries `Cache-Control: no-store`.
 
 | Route | Purpose |
 | --- | --- |
@@ -13,16 +13,17 @@ The handler `Handler()` returns (and `Serve` mounts on every transport) exposes 
 | `POST /v1/values` | Resolve a batch: body `{"names":[...]}` |
 | `GET /v1/watch` | Subscribe to one or more bindings over Server-Sent Events |
 | `GET /v1/healthz` | Bare liveness check |
+| `GET /v1/readyz` | Readiness: should a load balancer route here |
 
 ## Request ordering
 
-Every route except `/v1/healthz` runs, in this exact order, on every request:
+Every value-bearing route runs, in this exact order, on every request. The two probe routes (`/v1/healthz` and `/v1/readyz`) are exempt:
 
 1. **Authenticate** (`mamori.Authenticator.Authenticate`, or skipped in `NoAuth` mode). Failure is `401`, with `WWW-Authenticate` set if the `Authenticator` implements `Challenger`.
 2. **Authorize the specific name** (`Policy.Allow`), separately for every name in a batch or watch subscription. Failure is `403`.
 3. **Only then** read the binding.
 
-A denied caller gets `403` for a name whether or not it is a real binding: authorization runs and fails closed before the binding table is consulted. `GET /v1/healthz` is the one exception; it never authenticates, authorizes, or names a binding.
+A denied caller gets `403` for a name whether or not it is a real binding: authorization runs and fails closed before the binding table is consulted. The probe routes are the exception; neither authenticates, authorizes, nor names a binding.
 
 ## Response shapes
 
@@ -36,12 +37,15 @@ A successful single value, one entry of a batch response, or one SSE update fram
   "sensitive": true,
   "not_after": "2026-08-01T00:00:00Z",
   "metadata": {},
-  "kind": ""
+  "kind": "",
+  "resolved_at": "2026-07-26T21:04:11Z",
+  "stale": false
 }
 ```
 
 - **`bytes`** is base64-encoded (`encoding/json`'s standard `[]byte` handling).
-- **`version`**, **`sensitive`**, **`not_after`**, **`bytes`**, and **`kind`** are all `omitempty`; `metadata` is never omitted (a `nil` map becomes `{}`, never `null`).
+- **`version`**, **`sensitive`**, **`not_after`**, **`bytes`**, **`kind`**, **`resolved_at`**, and **`stale`** are all `omitempty`; `metadata` is never omitted (a `nil` map becomes `{}`, never `null`).
+- **`resolved_at`** is when the replica answering you last fetched these bytes from upstream, and **`stale`** says it is serving them as last-known-good while upstream currently fails. They exist for [multi-replica deployments](/docs/server/ha/), where each replica watches on its own schedule: comparing `resolved_at` is how a client notices it reached a replica that is behind one it already spoke to. `resolved_at` dates the value, not the last attempt, so a failed refresh carries it forward unchanged.
 
 A whole-request failure (auth failure, a malformed batch body, `GET /v1/values/{name}` for an unbound or unresolvable name) is:
 
@@ -124,10 +128,21 @@ GET /v1/watch?name=db-password&name=api-key
 {"status": "ok"}
 ```
 
-A fixed, unconditional `200`, never any binding detail. It is the one route exempt from authentication and authorization, so a liveness/readiness probe with no credential still works, and it can never become a way to learn what the server holds.
+A fixed, unconditional `200`, never any binding detail. It is exempt from authentication and authorization, so a probe with no credential still works, and it can never become a way to learn what the server holds.
+
+## Probe readiness with `GET /v1/readyz`
+
+```json
+{"status": "ready"}
+```
+
+Liveness says the process is alive; readiness says whether it should be sent traffic. Route your load balancer on this one. It answers `200` with `ready`, or `503` with `priming` (bindings still resolving, so the cache is cold) or `draining` (shutting down). Like `healthz` it is unauthenticated and therefore reports a bare status with no binding names, counts, or node identity.
+
+See [High availability](/docs/server/ha/) for how to use it when running several replicas.
 
 ## Next
 
 - [Server auth and policy](/docs/server/authorization/) - the authenticate-then-authorize gates these routes enforce.
+- [High availability](/docs/server/ha/) - `readyz`, draining, and the freshness fields across replicas.
 - [Providers: mamori](/docs/providers/mamori/) - the `mamori://` client that speaks this protocol.
 - [Config server overview](/docs/server/) - the fan-out model and blast radius.

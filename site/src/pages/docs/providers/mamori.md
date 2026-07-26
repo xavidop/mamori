@@ -82,6 +82,30 @@ mamoriprov.New(mamoriprov.Config{
 
 `New` never fails outright, matching how every other provider registers a zero-config default from `init`: a malformed or empty `Endpoint` is recorded on the returned `*Provider` and surfaced (wrapped as `mamori.ErrInvalid`) from the first `Resolve`, `ResolveBatch`, or `Watch` call instead.
 
+### Several replicas
+
+When the config server runs as [several replicas](/docs/server/ha/), give the client the list instead of a single endpoint. `Config.Endpoints` replaces `Config.Endpoint` and takes the same three forms, in failover order:
+
+```go
+prov, err := mamoriprov.New(mamoriprov.Config{
+	Endpoints: []string{
+		"https://mamori-0.internal:8443",
+		"https://mamori-1.internal:8443",
+		"https://mamori-2.internal:8443",
+	},
+})
+```
+
+Each entry gets its own transport, so the list may mix forms, for example a local `unix://` replica tried first with TCP replicas behind it.
+
+**When it fails over.** `Resolve` and `ResolveBatch` walk the list until a replica answers, moving on only when a replica is unreachable or broken: a refused dial, a TLS failure, a timeout, `unavailable`, or an unclassifiable `5xx`.
+
+**When it does not.** An *authoritative* answer, one every replica would give alike, is returned immediately rather than replayed against the rest: `not_found`, `permission_denied`, `unauthenticated`, `invalid`, and `rate_limited`. Retrying those would turn one clean `403` into one request per replica, and in the `rate_limited` case would amplify exactly the load a throttle exists to shed. If every replica fails, the last error is returned with its kind intact, so `errors.Is(err, mamori.ErrUnavailable)` still holds.
+
+**Watch** rotates to the next endpoint on each reconnect, so a replica that dies mid-stream cannot black-hole the watch. The backoff sleep applies only after a full cycle through the list, never between one replica and the next, so a three-replica deployment fails over in three quick dials rather than sleeping in between.
+
+Setting both `Endpoint` and `Endpoints`, or a malformed entry anywhere in the list, is a configuration error surfaced from every call. Neither is quietly ignored: an operator who mistyped one of three replicas should find out, not run on two believing they have three. A single-element `Endpoints` behaves exactly like the equivalent `Endpoint`, one request and no retries.
+
 ### Client credentials
 
 The config server authenticates inbound requests with a `mamori.Authenticator` (see [Auth](/docs/auth/)), which is a server-side concept: it authenticates a request that has already arrived. This provider does not reuse `mamori.Authenticator` for the reverse direction, because attaching a credential to an outbound request is a different shape entirely. Instead:
@@ -115,5 +139,7 @@ Classification is a full passthrough, not just a "some backend, some error" mapp
 - `mamori.Value.Sensitive` survives the hop unchanged: a binding backed by a secret-manager ref that sets `Sensitive` keeps it set on this side, so `secret.String`/`secret.Bytes` redaction, audit logging, and every other sensitivity-aware behavior downstream of `Load`/`Watch` keeps working exactly as if the field had resolved directly against the upstream provider.
 
 A batch (`ResolveBatch`) treats a hard per-name classified error (anything other than `not_found`) as a whole-call failure rather than silently dropping that one entry, since dropping it would let a struct field fall back to its zero value in place of a secret the caller was denied, or one that is genuinely unavailable - not something a per-ref `Resolve` of that same name would ever do either.
+
+Across replicas, a value response also carries `resolved_at` (when that replica last fetched the bytes from upstream) and `stale` (it is serving last-known-good while upstream fails). Because each replica watches on its own schedule, comparing `resolved_at` is how a client notices it reached a replica that is behind one it already spoke to. See [High availability](/docs/server/ha/).
 
 See the config server's page for the full [`kind` field semantics](/docs/server/wire-protocol/#read-kind-on-a-success-fresh-vs-stale-but-serving), including the distinction between a failure `kind` and a successful-but-stale `kind` on a value that is still being served while its upstream is currently failing (this provider returns that stale value with a nil error, exactly as the server intends).

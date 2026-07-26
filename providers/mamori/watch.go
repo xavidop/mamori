@@ -59,6 +59,10 @@ const (
 // This makes mamori:// a NATIVE watch: mamori must never wrap this Provider
 // in its own polling adapter.
 //
+// With several replicas configured (Config.Endpoints), each reconnect moves
+// on to the next endpoint in the list rather than redialing the one that just
+// dropped; see watchLoop for the rotation and how it interacts with backoff.
+//
 // The binding name is ref.Path, exactly as for Resolve and ResolveBatch (see
 // Resolve's doc comment for why a mamori:// ref's path is always a binding
 // name). An empty name is rejected synchronously, before any goroutine
@@ -97,22 +101,59 @@ func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Upd
 // ended: a connection that stayed up for an hour and then dropped deserves a
 // fast retry, not a wait grown from a run of earlier failures that have
 // nothing to do with the server's current health.
+//
+// Every reconnect ROTATES to the next configured endpoint, round-robin, so a
+// replica that dies mid-watch cannot black-hole the watch by being the only
+// address this loop ever dials again.
+//
+// The backoff sleep happens only when that rotation WRAPS, i.e. after a full
+// cycle through the list, not between one endpoint and the next. Backoff
+// exists to stop a client hammering a server that is struggling, and a
+// replica this loop has not tried yet is a different machine that the
+// previous one's failure says nothing about; sleeping before dialing it would
+// delay failover by (N-1) waits purely to protect a server that was never the
+// problem. A 3-replica deployment therefore fails over in three quick dials
+// and only then starts backing off, while the single-endpoint case wraps on
+// every iteration and so behaves exactly as it always has: connect, sleep,
+// grow the backoff, repeat.
 func (p *Provider) watchLoop(ctx context.Context, name string, ch chan mamori.Update) {
 	defer close(ch)
 
+	// A configuration error leaves p.endpoints empty. The loop still has to
+	// run in that case: do reports p.endpointErr from every attempt (it checks
+	// that before it so much as looks at the endpoint it is handed), so a
+	// misconfigured Watch keeps reporting the error as a transient failure on
+	// ch with backoff, exactly as it did before failover existed, instead of
+	// silently closing the channel. Hence the single placeholder endpoint,
+	// which is never actually dialed.
+	endpoints := p.endpoints
+	if len(endpoints) == 0 {
+		endpoints = []endpoint{{}}
+	}
+
 	backoff := watchBackoffFloor
+	// current indexes the endpoint this iteration dials; it advances by one,
+	// wrapping, after every attempt.
+	current := 0
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		established := p.watchOnce(ctx, name, ch)
+		established := p.watchOnce(ctx, endpoints[current], name, ch)
 		if ctx.Err() != nil {
 			return
 		}
 
 		if established {
 			backoff = watchBackoffFloor
+		}
+
+		current = (current + 1) % len(endpoints)
+		if current != 0 {
+			// Mid-cycle: there is an untried replica left, so dial it now
+			// rather than sleeping first. See this function's doc comment.
+			continue
 		}
 
 		select {
@@ -124,7 +165,8 @@ func (p *Provider) watchLoop(ctx context.Context, name string, ch chan mamori.Up
 	}
 }
 
-// watchOnce owns one HTTP connection attempt and, if it succeeds, the
+// watchOnce owns one HTTP connection attempt against ONE endpoint (which one
+// is watchLoop's rotation decision, not watchOnce's) and, if it succeeds, the
 // resulting SSE stream: it issues GET /v1/watch?name=<name>, classifies a
 // failure to even establish the stream (a do error, meaning the server could
 // not be reached at all, or a non-200 status, meaning the server answered
@@ -132,16 +174,22 @@ func (p *Provider) watchLoop(ctx context.Context, name string, ch chan mamori.Up
 // otherwise reads frames until the connection ends for any reason (EOF, a
 // read error, or ctx cancellation).
 //
+// Note that a failed attempt is reported on ch here even when another
+// endpoint is about to be tried: unlike Resolve, a watch has no single return
+// value to hold back until the fleet has been exhausted, and hiding "replica
+// A is refusing connections" from the caller would cost them the only signal
+// they get that their deployment is degraded.
+//
 // It returns established = true once the server has answered 200 and the
 // SSE stream has actually started being read, regardless of how that stream
 // later ends. A post-connect disconnect (EOF, a read error) is NOT itself
 // reported as an Update - see readSSE's doc comment for why - it only ends
-// this call so watchLoop can back off and reconnect.
-func (p *Provider) watchOnce(ctx context.Context, name string, ch chan<- mamori.Update) (established bool) {
+// this call so watchLoop can rotate on, back off, and reconnect.
+func (p *Provider) watchOnce(ctx context.Context, ep endpoint, name string, ch chan<- mamori.Update) (established bool) {
 	q := url.Values{}
 	q.Set("name", name)
 
-	resp, err := p.do(ctx, http.MethodGet, "/v1/watch?"+q.Encode(), nil, func(req *http.Request) {
+	resp, err := p.do(ctx, ep, http.MethodGet, "/v1/watch?"+q.Encode(), nil, func(req *http.Request) {
 		req.Header.Set("Accept", "text/event-stream")
 	})
 	if err != nil {

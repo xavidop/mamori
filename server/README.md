@@ -75,11 +75,13 @@ curl --unix-socket /run/mamori/server.sock \
 - Bindings are **fixed and operator-declared**. `server.Bind`/`server.BindFile` are the only way a binding is created; a client names a binding, never a ref, so it can never make this process resolve `file:///etc/shadow` or a ref of its own choosing.
 - `exec:` and `mamori:` (chaining) refs are rejected at construction unless the operator explicitly opts in with `server.AllowExec()` / `server.AllowChaining()`.
 - A `Policy` (authorization) and an `Authenticator`-or-`NoAuth()` (authentication) decision are both **mandatory**; `server.New` refuses to construct a `*Server` without them.
-- The audit log (`server.WithAudit`), when enabled, records identity, binding name, allow/deny decision, error kind, and latency - structurally never the resolved value's bytes.
+- The audit log (`server.WithAudit`), when enabled, records identity, binding name, allow/deny decision, error kind, latency, and the `server.NodeID` of the replica that served the request - structurally never the resolved value's bytes.
+- It **scales horizontally** without a coordination layer: it caches upstream rather than owning state, so several replicas run independently behind one address. Route on `GET /v1/readyz` (not `/v1/healthz`, which is liveness only) so a replica with a cold cache is never sent traffic, and use `server.DrainGrace` to leave rotation cleanly on shutdown.
 
 ## Documentation
 
 - 📖 **Full docs, including the wire protocol reference and the blast-radius discussion:** https://mamorigo.dev/docs/server
+- 🔁 **Running several replicas (readiness, draining, freshness, failover):** https://mamorigo.dev/docs/server/ha
 - 🔑 **Authentication schemes** (`BasicAuth`, `BearerToken`, `APIKey`, `MTLS`, `PeerCred`, `AnyOf`/`AllOf`): https://mamorigo.dev/docs/auth
 - 📦 **API reference:** https://pkg.go.dev/github.com/xavidop/mamori/server
 

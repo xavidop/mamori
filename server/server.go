@@ -31,7 +31,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/xavidop/mamori"
 )
@@ -199,6 +202,26 @@ type Server struct {
 	entries   []*listenerEntry
 	entriesMu sync.Mutex
 	listenWG  sync.WaitGroup
+
+	// nodeID names this process in audit records, so a deployment running
+	// several replicas can attribute a logged request to the replica that
+	// served it. It defaults to the hostname (see New) and is never put on
+	// the wire: it appears in this server's own logs only.
+	nodeID string
+
+	// draining is flipped by Close before any listener stops accepting, and
+	// makes GET /v1/readyz answer 503 (see Server.readiness). It is an atomic
+	// rather than a plain bool guarded by resolveMu because every readyz
+	// request reads it, and those run concurrently with the Close that writes
+	// it, by construction.
+	draining atomic.Bool
+
+	// drainGrace is how long Close waits after flipping draining before it
+	// begins shutting listeners down, giving a load balancer time to observe
+	// the failing readiness probe and stop sending new requests. Zero (the
+	// default) skips the wait entirely, preserving the immediate-shutdown
+	// behaviour of every caller that has not opted in. See DrainGrace.
+	drainGrace time.Duration
 }
 
 // Option configures New.
@@ -323,6 +346,41 @@ func AllowChaining() Option {
 	return func(s *Server) { s.allowChaining = true }
 }
 
+// NodeID names this process in its own audit records, so that when several
+// replicas serve the same bindings behind one address, an aggregated audit
+// stream still says which replica served a given request. Without it, "which
+// replica returned that stale value" is unanswerable after the fact.
+//
+// It defaults to the OS hostname, which is already the right answer under
+// most schedulers (a Kubernetes pod's hostname is its pod name). Set it
+// explicitly when the hostname is not meaningful, for example several
+// replicas sharing a host.
+//
+// The node ID is never written to a response. It appears only in this
+// server's own logs, so it cannot be used by a client to discover the shape
+// of the deployment.
+func NodeID(id string) Option {
+	return func(s *Server) { s.nodeID = id }
+}
+
+// DrainGrace makes Close wait d after marking this replica not-ready (see
+// GET /v1/readyz) before it begins shutting listeners down.
+//
+// This is the difference between a rolling restart that drops requests and
+// one that does not. A load balancer only stops sending new requests once it
+// has observed a failing readiness probe, which takes up to its own probe
+// interval; without a grace window, Close stops accepting immediately and
+// everything the balancer sends in that gap is refused. Set d to at least the
+// balancer's probe interval times its unhealthy threshold.
+//
+// The default is zero: Close tears down immediately, exactly as it always
+// has, so no existing caller changes behaviour by upgrading. Note the wait
+// happens on the Close path, so a caller that cancels Serve's context instead
+// of calling Close does not get it.
+func DrainGrace(d time.Duration) Option {
+	return func(s *Server) { s.drainGrace = d }
+}
+
 // withTCPListener marks that the option list requested a TCP listener, for
 // New's NoAuth+TCP gate. It is unexported and unused outside this package's
 // own tests in Task 2, which need to exercise that gate before Task 5 adds
@@ -370,6 +428,16 @@ func New(opts ...Option) (*Server, error) {
 	for _, spec := range s.tcpSpecs {
 		if spec.tlsConfig == nil && !spec.insecureNoTLS {
 			return nil, errTCPRequiresTLS
+		}
+	}
+
+	// Default the node ID to the hostname (see NodeID). A hostname lookup can
+	// fail on an unconfigured host, which is not a reason to refuse to build
+	// a Server: the node ID is a log annotation, so an empty one costs an
+	// operator some clarity in an aggregated audit stream and nothing else.
+	if s.nodeID == "" {
+		if host, hostErr := os.Hostname(); hostErr == nil {
+			s.nodeID = host
 		}
 	}
 

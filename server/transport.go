@@ -176,6 +176,13 @@ type listenerEntry struct {
 	ln       net.Listener
 	srv      *http.Server
 	unixPath string // "" for a TCP listener
+
+	// unixFile identifies the socket file bindUnix created at unixPath, so
+	// shutdown can verify the file still at that path is the same one before
+	// unlinking it (see closeTransports). Nil for a TCP listener, and also
+	// nil when the post-bind stat failed, which is read as "cannot prove
+	// ownership" and leaves the file alone.
+	unixFile os.FileInfo
 }
 
 // newHTTPServer builds the http.Server that serves handler on one listener,
@@ -233,19 +240,45 @@ func (s *Server) newHTTPServer(handler http.Handler, capturePeerCred bool) *http
 // os.Chmod after Listen is required to actually get the requested bits; a
 // Chmod failure closes the listener it just opened rather than leaving an
 // unreachable-by-design socket bound with the wrong permissions.
-func bindUnix(spec unixSpec) (net.Listener, error) {
+// It also returns an os.FileInfo identifying the socket file it created, so
+// shutdown can tell that file apart from a DIFFERENT socket that later came
+// to occupy the same path. That matters because binding here starts by
+// removing whatever is already at the path: during a restart on a fixed
+// socket path, the incoming process removes and replaces the outgoing
+// process's socket while the outgoing one is still draining. Without an
+// identity to compare against, the outgoing process's own cleanup would then
+// delete the incoming process's socket and leave it bound to a path no
+// client can reach. See closeTransports.
+func bindUnix(spec unixSpec) (net.Listener, os.FileInfo, error) {
 	if err := os.Remove(spec.path); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("mamori/server: unix: remove stale socket %s: %w", spec.path, err)
+		return nil, nil, fmt.Errorf("mamori/server: unix: remove stale socket %s: %w", spec.path, err)
 	}
 	ln, err := net.Listen("unix", spec.path)
 	if err != nil {
-		return nil, fmt.Errorf("mamori/server: unix: listen on %s: %w", spec.path, err)
+		return nil, nil, fmt.Errorf("mamori/server: unix: listen on %s: %w", spec.path, err)
 	}
 	if err := os.Chmod(spec.path, spec.mode); err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("mamori/server: unix: chmod %s: %w", spec.path, err)
+		return nil, nil, fmt.Errorf("mamori/server: unix: chmod %s: %w", spec.path, err)
 	}
-	return ln, nil
+
+	// Take ownership of the unlink. net.UnixListener removes the socket file
+	// on Close by default, with no check that the file still belongs to it,
+	// which is the very deletion described above. Turning that off and doing
+	// the removal in closeTransports lets it be guarded by the identity
+	// captured here.
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+
+	// A stat failure is not fatal: it only costs the guard its reference
+	// point, and closeTransports treats a nil FileInfo as "cannot prove this
+	// socket is still mine", which errs toward leaving the file in place.
+	fi, err := os.Stat(spec.path)
+	if err != nil {
+		return ln, nil, nil
+	}
+	return ln, fi, nil
 }
 
 // bindTCP listens on spec.addr, wrapping the listener with tls.NewListener
@@ -355,11 +388,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	handler := s.Handler()
 
 	for _, spec := range s.unixSpecs {
-		ln, err := bindUnix(spec)
+		ln, fi, err := bindUnix(spec)
 		if err != nil {
 			return err
 		}
-		s.addEntry(&listenerEntry{ln: ln, srv: s.newHTTPServer(handler, true), unixPath: spec.path})
+		s.addEntry(&listenerEntry{ln: ln, srv: s.newHTTPServer(handler, true), unixPath: spec.path, unixFile: fi})
 	}
 
 	for _, spec := range s.tcpSpecs {
@@ -494,7 +527,39 @@ func (s *Server) closeTransports() {
 
 	for _, e := range entries {
 		if e.unixPath != "" {
-			_ = os.Remove(e.unixPath)
+			removeOwnedSocket(e.unixPath, e.unixFile)
 		}
 	}
+}
+
+// removeOwnedSocket unlinks path only if the file there is still the very one
+// this listener created (identified by owned, captured in bindUnix).
+//
+// The guard exists because a socket path is a rendezvous point that another
+// process can take over. Binding removes whatever is already at the path, so
+// restarting a server on a fixed path means the incoming process replaces the
+// outgoing process's socket file while the outgoing one is still draining,
+// which can take up to shutdownGrace when a long-lived watch stream is open.
+// An unguarded unlink here would then delete the INCOMING server's socket,
+// leaving it listening on a path nothing can dial and every client
+// permanently unable to reconnect. The failure is worse than a leaked file
+// because it strands a healthy server.
+//
+// Every uncertain case leaves the file in place. A leftover socket is
+// harmless (the next bind removes it), whereas deleting a live server's
+// socket is not, so this is deliberately biased toward doing nothing.
+func removeOwnedSocket(path string, owned os.FileInfo) {
+	if owned == nil {
+		return
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		// Already gone, or unreadable. Nothing to do either way.
+		return
+	}
+	if !os.SameFile(current, owned) {
+		// A newer listener owns this path now. Leave it alone.
+		return
+	}
+	_ = os.Remove(path)
 }

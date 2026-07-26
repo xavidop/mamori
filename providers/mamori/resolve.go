@@ -83,13 +83,31 @@ func sentinelForKind(kind string) error { return wireKindSentinel[mamori.Kind(ki
 // binding to its own upstream provider and returns only the resulting value,
 // so Resolve cannot tell (and does not need to know) what kind of provider
 // backs the binding on the other end.
+//
+// With several replicas configured (Config.Endpoints), the request is tried
+// against each in turn until one answers or one answers authoritatively; see
+// tryEndpoints and shouldFailover. With a single endpoint the walk is one
+// attempt and nothing else changes.
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
 	name := ref.Path
 	if name == "" {
 		return mamori.Value{}, fmt.Errorf("%w: mamori:// ref %q has no binding name", mamori.ErrInvalid, ref.Raw)
 	}
 
-	resp, err := p.do(ctx, http.MethodGet, "/v1/values/"+url.PathEscape(name), nil)
+	return tryEndpoints(ctx, p, func(ctx context.Context, ep endpoint) (mamori.Value, error) {
+		return p.resolveOnce(ctx, ep, name)
+	})
+}
+
+// resolveOnce is one GET /v1/values/{name} against one endpoint: the whole of
+// Resolve's wire handling, minus the choice of which replica to ask.
+//
+// It is split out so tryEndpoints can call it once per endpoint, and so the
+// error it returns is the fully classified, sentinel-carrying error that
+// shouldFailover needs in order to tell "this replica is broken" apart from
+// "this is the answer, and every replica would give it".
+func (p *Provider) resolveOnce(ctx context.Context, ep endpoint, name string) (mamori.Value, error) {
+	resp, err := p.do(ctx, ep, http.MethodGet, "/v1/values/"+url.PathEscape(name), nil)
 	if err != nil {
 		return mamori.Value{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/xavidop/mamori"
 )
@@ -58,6 +59,25 @@ type bindingSnapshot struct {
 	// err's chain.
 	err  error
 	kind mamori.Kind
+
+	// resolvedAt is when value was last replaced by a SUCCESSFUL resolve. It
+	// is carried forward untouched by a failing update, exactly as value is,
+	// so it always dates the bytes actually being served rather than the last
+	// attempt to fetch them. It is surfaced on the wire (see newValueBody)
+	// because with several replicas each watching upstream on its own
+	// schedule, "when did this value last come from upstream" is the only way
+	// a client can tell that the replica it just reached is behind one it
+	// already spoke to.
+	resolvedAt time.Time
+
+	// settled is false only for the initial errPendingResolve placeholder and
+	// true once any real outcome has landed, success or failure. It backs
+	// readiness (see Server.readiness): a replica whose bindings are still
+	// unsettled has a cold cache and must not be sent traffic, while a
+	// binding that settled on an ERROR is not a reason to hold the replica
+	// out of rotation, since every other replica would report that same
+	// upstream error.
+	settled bool
 }
 
 // resolverState is start's per-binding runtime record: the parsed Binding it
@@ -77,13 +97,21 @@ type resolverState struct {
 // update.
 func (rs *resolverState) apply(up mamori.Update) {
 	if up.Err == nil {
-		rs.snapshot.Store(&bindingSnapshot{hasValue: true, value: up.Value})
+		rs.snapshot.Store(&bindingSnapshot{
+			hasValue:   true,
+			value:      up.Value,
+			resolvedAt: time.Now(),
+			settled:    true,
+		})
 		return
 	}
-	next := &bindingSnapshot{err: up.Err, kind: mamori.ErrorKind(up.Err)}
+	next := &bindingSnapshot{err: up.Err, kind: mamori.ErrorKind(up.Err), settled: true}
 	if prev := rs.snapshot.Load(); prev != nil && prev.hasValue {
 		next.hasValue = true
 		next.value = prev.value
+		// resolvedAt travels with the value it dates, so a stale-but-served
+		// value keeps reporting when it was actually fetched, not now.
+		next.resolvedAt = prev.resolvedAt
 	}
 	rs.snapshot.Store(next)
 }
@@ -204,7 +232,17 @@ func (s *Server) start(ctx context.Context) error {
 
 		p, ok := s.providers[b.Ref.Scheme]
 		if !ok {
-			rs.snapshot.Store(&bindingSnapshot{err: errNoProvider(b.Ref.Scheme), kind: mamori.ErrorKind(errNoProvider(b.Ref.Scheme))})
+			// settled: this binding has no watch goroutine and can never
+			// resolve, so it is already in its final state. Leaving it
+			// unsettled would keep readiness at "priming" forever and hold
+			// the whole replica out of rotation for one binding, which is
+			// precisely what the surrounding not-a-construction-error
+			// decision exists to avoid.
+			rs.snapshot.Store(&bindingSnapshot{
+				err:     errNoProvider(b.Ref.Scheme),
+				kind:    mamori.ErrorKind(errNoProvider(b.Ref.Scheme)),
+				settled: true,
+			})
 			continue
 		}
 
@@ -257,9 +295,26 @@ func (s *Server) start(ctx context.Context) error {
 // using kind (and, via a later plumbing task, the underlying error) to
 // explain why, rather than returning the zero value as if it were real.
 func (s *Server) lookup(name string) (value mamori.Value, kind mamori.Kind, hasValue bool, found bool) {
+	v, _, k, has, ok := s.lookupFresh(name)
+	return v, k, has, ok
+}
+
+// freshness dates a served value and says whether it is being served from
+// last-known-good while upstream is currently failing. It is what the wire's
+// resolved_at / stale fields are built from; see bindingSnapshot.resolvedAt
+// for why a multi-replica deployment needs it.
+type freshness struct {
+	resolvedAt time.Time
+	stale      bool
+}
+
+// lookupFresh is lookup plus the freshness metadata. The two are separate
+// entry points so the many call sites that only need the value keep reading
+// as they did, while the handlers that serialize a response can date it.
+func (s *Server) lookupFresh(name string) (value mamori.Value, f freshness, kind mamori.Kind, hasValue bool, found bool) {
 	rs, ok := s.resolved[name]
 	if !ok {
-		return mamori.Value{}, "", false, false
+		return mamori.Value{}, freshness{}, "", false, false
 	}
 	snap := rs.snapshot.Load()
 	if snap == nil {
@@ -267,12 +322,46 @@ func (s *Server) lookup(name string) (value mamori.Value, kind mamori.Kind, hasV
 		// returning - but reported the same way an unresolved binding with an
 		// active error would be, rather than panicking on a nil dereference,
 		// should that invariant ever slip.
-		return mamori.Value{}, mamori.ErrorKind(errPendingResolve), false, true
+		return mamori.Value{}, freshness{}, mamori.ErrorKind(errPendingResolve), false, true
 	}
 	if !snap.hasValue {
-		return mamori.Value{}, snap.kind, false, true
+		return mamori.Value{}, freshness{}, snap.kind, false, true
 	}
-	return snap.value, snap.kind, true, true
+	// A value present alongside a live error is by definition last-known-good:
+	// apply carried it forward past a failing update.
+	f = freshness{resolvedAt: snap.resolvedAt, stale: snap.err != nil}
+	return snap.value, f, snap.kind, true, true
+}
+
+// readiness reports whether this replica is fit to receive traffic, and is
+// the whole of what GET /v1/readyz answers.
+//
+// Draining wins over everything: Close flips it before any listener stops
+// accepting, which is what gives a load balancer a window to take this
+// replica out of rotation before its connections start failing.
+//
+// Otherwise a replica is ready once every binding has SETTLED (see
+// bindingSnapshot.settled): it has a cold cache until then, and answering
+// requests from a cold cache is exactly the failure mode that makes naive
+// horizontal scaling unsafe. Note the deliberate asymmetry: a binding that
+// settled on an error still counts as ready, because that error is upstream's
+// answer and every other replica would give it too. Holding the whole replica
+// out for it would turn one broken binding into a total outage, the same
+// reasoning start applies when it refuses to let one unresolvable binding
+// fail the whole server.
+func (s *Server) readiness() (state string, ready bool) {
+	if s.draining.Load() {
+		return readyStateDraining, false
+	}
+	// resolved is written once by start and only read afterward, so the
+	// per-binding atomic snapshots are the only shared state to load here.
+	for _, rs := range s.resolved {
+		snap := rs.snapshot.Load()
+		if snap == nil || !snap.settled {
+			return readyStatePriming, false
+		}
+	}
+	return readyStateReady, true
 }
 
 // Close shuts this Server down completely: every listener Serve bound
@@ -324,6 +413,18 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	s.resolveMu.Unlock()
+
+	// Announce the shutdown before causing it. Flipping draining makes
+	// GET /v1/readyz answer 503 while every listener is still accepting
+	// normally, which is the signal a load balancer needs to stop routing
+	// here; DrainGrace (opt-in, zero by default) then holds this replica in
+	// that state long enough for the balancer to actually notice. Without the
+	// wait, teardown stops accepting immediately and whatever the balancer
+	// sends in the interim is refused rather than drained.
+	s.draining.Store(true)
+	if s.drainGrace > 0 {
+		time.Sleep(s.drainGrace)
+	}
 
 	s.teardown()
 	return nil

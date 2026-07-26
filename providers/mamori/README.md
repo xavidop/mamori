@@ -31,6 +31,28 @@ There is no zero-config default to register with a blank import: a binding name 
 - `https://host:port` - standard TLS; set `Config.TLSConfig.Certificates` for mTLS.
 - `http://host:port` - refused unless `Config.InsecureNoTLS` is `true`, named to be uncomfortable on purpose (mirrors the server's own `InsecureNoTLS` option).
 
+## Several replicas (HA)
+
+A config server running as N replicas is configured with `Config.Endpoints` **instead of** `Config.Endpoint`, an ordered list of those same three forms:
+
+```go
+mamoriprov.New(mamoriprov.Config{
+	Endpoints: []string{
+		"https://mamori-0.internal:8443",
+		"https://mamori-1.internal:8443",
+		"https://mamori-2.internal:8443",
+	},
+})
+```
+
+The order is the failover order, and each entry gets its own transport, so the list may mix forms (a local `unix://` replica first, TCP replicas behind it).
+
+- `Resolve` and `ResolveBatch` walk the list until a replica answers. They move on only when a replica is **unreachable or broken** (refused dial, TLS failure, timeout, `unavailable`, or an unclassifiable 5xx). An **authoritative** answer that every replica would give alike (`not_found`, `permission_denied`, `unauthenticated`, `invalid`, `rate_limited`) is returned immediately, so one clean 403 stays one request rather than becoming one per replica. When every replica fails, the last error is returned with its kind intact, so `errors.Is(err, mamori.ErrUnavailable)` still holds.
+- `Watch` rotates to the next endpoint on every reconnect, so a replica that dies mid-watch cannot black-hole the stream. The backoff sleep is applied only after a full cycle through the list, never between one replica and the next: a 3-replica deployment fails over in three quick dials instead of sleeping in between.
+- Setting **both** `Endpoint` and `Endpoints` is a configuration error surfaced from every call, as is a malformed entry anywhere in the list. Neither is quietly ignored: an operator who typo'd one of three replicas must find out rather than run on two while believing they have three.
+
+Setting a single-element `Endpoints` behaves exactly like the equivalent `Endpoint`: one request, no retries.
+
 ## What this provider is (and is not)
 
 - It implements `mamori.Provider`, `mamori.BatchProvider` (one `POST /v1/values` request for a struct with several `mamori://` fields, not one per field), and `mamori.WatchableProvider` as a **native** watch: a persistent `GET /v1/watch` Server-Sent Events stream, with automatic reconnect, resubscription, and backoff-with-jitter if the connection drops.
@@ -42,6 +64,7 @@ There is no zero-config default to register with a blank import: a binding name 
 
 - 📖 **Full docs for this provider:** https://mamorigo.dev/docs/providers/mamori
 - 🖧 **The config server this client talks to:** https://mamorigo.dev/docs/server
+- 🔁 **Running that server as several replicas** (readiness gating, draining, and the `resolved_at`/`stale` freshness fields this client can compare): https://mamorigo.dev/docs/server/ha
 
 ## Development
 

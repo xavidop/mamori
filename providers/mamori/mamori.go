@@ -29,6 +29,17 @@
 //	https://host:port      standard TLS, optionally with Config.TLSConfig
 //	http://host:port       refused unless Config.InsecureNoTLS is true
 //
+// # High availability
+//
+// A config server running as several replicas is configured with
+// Config.Endpoints, an ordered list of those same three forms, INSTEAD of
+// Config.Endpoint. The order is the failover order: Resolve and ResolveBatch
+// walk the list until a replica answers, and Watch rotates to the next
+// endpoint on every reconnect so a dead replica cannot black-hole a watch.
+// Only a failure another replica could plausibly answer differently moves on
+// to the next endpoint; see Config.Endpoints for the exact rule and why an
+// authoritative answer such as a permission denial is never retried.
+//
 // # Authentication
 //
 // The server authenticates inbound requests with a mamori.Authenticator,
@@ -69,8 +80,37 @@ const dummyUnixHost = "unix"
 // Config configures a Provider.
 type Config struct {
 	// Endpoint is the mamori config server address. See the package doc for
-	// the three accepted forms (unix://, https://, http://).
+	// the three accepted forms (unix://, https://, http://). Point at several
+	// replicas with Endpoints instead; setting both fields is a configuration
+	// error.
 	Endpoint string
+	// Endpoints is an ordered list of mamori config server addresses, for a
+	// config server run in HA mode with N replicas. Every entry takes exactly
+	// the same three forms as Endpoint and is parsed by the same rules, and
+	// every entry gets its OWN base URL and transport: a unix:// replica and
+	// an https:// replica cannot share one, since a unix transport dials one
+	// fixed socket path and ignores the request URL's host entirely. (A
+	// caller-supplied HTTPClient still overrides all of them; see New.)
+	//
+	// Order is meaningful: it is the failover order. Resolve and ResolveBatch
+	// try entries in order, moving on to the next ONLY when the current one
+	// failed in a way another replica could plausibly answer differently - it
+	// was unreachable, it timed out, or it reported mamori.ErrUnavailable. An
+	// authoritative answer, one every replica of the same server would give
+	// alike (not found, permission denied, unauthenticated, invalid, rate
+	// limited), is returned immediately: see authoritativeKinds for the full
+	// rule. Watch instead rotates to the next entry on every reconnect.
+	//
+	// Exactly one of Endpoint and Endpoints may be set. Setting both is a
+	// configuration error surfaced from every call, rather than a silent
+	// preference for one of them, because quietly ignoring a field hides a
+	// deployment mistake: an operator adding Endpoints while an old Endpoint
+	// is still set would keep talking to a single replica and never find out.
+	// A parse failure in ANY entry is likewise a configuration error for the
+	// whole provider, never a dropped entry, for the same reason: an operator
+	// who typo'd one of three replicas must be told, not left running on two
+	// while believing they have three.
+	Endpoints []string
 	// TLSConfig is used for https:// endpoints. Set TLSConfig.Certificates to
 	// present a client certificate for mTLS. Ignored for unix:// and http://
 	// endpoints.
@@ -80,27 +120,47 @@ type Config struct {
 	// InsecureNoTLS field: both exist so an operator has to opt into
 	// unencrypted traffic explicitly rather than falling into it by default.
 	InsecureNoTLS bool
-	// HTTPClient, when set, is used verbatim for every request instead of the
-	// client New would otherwise build from the parsed Endpoint's transport.
-	// See New's doc comment for the precedence this implies.
+	// HTTPClient, when set, is used verbatim for every request to EVERY
+	// endpoint, instead of the per-endpoint clients New would otherwise build
+	// from each parsed endpoint's transport. See New's doc comment for the
+	// precedence this implies.
 	HTTPClient *http.Client
+}
+
+// endpoint is one config server replica: the base URL every request path is
+// appended to, plus the HTTP client that can actually reach it. The two are
+// paired rather than kept in parallel lists because a client is NOT
+// interchangeable between endpoints: a unix:// endpoint's client dials one
+// fixed socket path and ignores the request URL's host entirely (see
+// parseEndpoint), so sending an https:// endpoint's request through it would
+// quietly hit the wrong server.
+type endpoint struct {
+	baseURL string
+	client  *http.Client
 }
 
 // Provider resolves mamori:// refs against a mamori config server. It is
 // safe for concurrent use. Construct one with New.
 type Provider struct {
-	baseURL        string
-	httpClient     *http.Client
+	// endpoints is the ordered failover list built from Config.Endpoint or
+	// Config.Endpoints (see newEndpoints). A single-endpoint provider is
+	// simply the one-element case: nothing downstream special-cases it, so
+	// there is only one code path to reason about. It is empty exactly when
+	// endpointErr is set.
+	endpoints      []endpoint
 	requestEditors []func(*http.Request)
 
-	// endpointErr holds any error from parsing Config.Endpoint. New never
-	// fails outright (it returns only *Provider, to match the package-level
-	// registration pattern used by every provider's init function), so a
-	// misconfigured endpoint is instead recorded here and returned by every
-	// method (do, and therefore Resolve/ResolveBatch/Watch) on first use.
-	// This makes a bad endpoint fail loudly the first time the provider is
-	// actually asked to do something, rather than panicking during New or
-	// silently registering a provider that can never work.
+	// endpointErr holds any error from turning Config.Endpoint /
+	// Config.Endpoints into that list: a malformed entry, a plaintext
+	// endpoint without InsecureNoTLS, or both fields being set at once. New
+	// never fails outright (it returns only *Provider, to match the
+	// package-level registration pattern used by every provider's init
+	// function), so a misconfigured endpoint is instead recorded here and
+	// returned by every method (do and tryEndpoints, and therefore
+	// Resolve/ResolveBatch/Watch) on first use. This makes a bad endpoint
+	// fail loudly the first time the provider is actually asked to do
+	// something, rather than panicking during New or silently registering a
+	// provider that can never work.
 	endpointErr error
 }
 
@@ -129,58 +189,112 @@ func WithHeader(key, value string) Option {
 }
 
 // WithHTTPClient injects a custom *http.Client, taking full precedence over
-// the client New would otherwise build from the parsed Endpoint's transport;
-// see New's doc comment. If c is nil the option is a no-op.
+// the clients New would otherwise build from each parsed endpoint's
+// transport; see New's doc comment. With several endpoints configured, c is
+// used for ALL of them, so a caller who mixes a unix:// entry into
+// Config.Endpoints must make c able to dial it. If c is nil the option is a
+// no-op.
 func WithHTTPClient(c *http.Client) Option {
 	return func(p *Provider) {
-		if c != nil {
-			p.httpClient = c
+		if c == nil {
+			return
+		}
+		for i := range p.endpoints {
+			p.endpoints[i].client = c
 		}
 	}
 }
 
 // New constructs a mamori provider from cfg, applying opts afterward.
 //
-// New never fails: a malformed or empty Config.Endpoint is recorded on the
+// New never fails: a malformed or empty Config.Endpoint, a bad entry in
+// Config.Endpoints, or both fields being set at once is recorded on the
 // returned Provider and surfaced (wrapped as mamori.ErrInvalid) from the
 // first call to Resolve, ResolveBatch, or Watch, rather than panicking or
 // changing New's signature to return an error. This matches how a provider
 // registers a zero-config default from init.
 //
 // HTTPClient-vs-transport precedence: if cfg.HTTPClient is set, it is used
-// verbatim and the transport parsed from cfg.Endpoint (the Unix socket
-// dialer, or the TLS config) is discarded entirely; a caller supplying their
-// own client takes on full responsibility for wiring it correctly,
-// including dialing a unix:// endpoint themselves if that is what
-// Config.Endpoint names. Otherwise New builds
-// &http.Client{Timeout: 30 * time.Second, Transport: transport} from the
-// parsed endpoint, with cfg.TLSConfig applied to that transport when set.
+// verbatim for every endpoint and the transports parsed from the endpoints
+// (the Unix socket dialer, or the TLS config) are discarded entirely; a
+// caller supplying their own client takes on full responsibility for wiring
+// it correctly, including dialing a unix:// endpoint themselves if that is
+// what the configuration names. Otherwise New builds one
+// &http.Client{Timeout: 30 * time.Second, Transport: transport} PER endpoint
+// from that endpoint's own parsed transport, with cfg.TLSConfig applied to
+// each transport when set.
 func New(cfg Config, opts ...Option) *Provider {
 	p := &Provider{}
 
-	baseURL, transport, err := parseEndpoint(cfg.Endpoint, cfg.InsecureNoTLS)
+	endpoints, err := newEndpoints(cfg)
 	if err != nil {
 		p.endpointErr = err
 	}
-	p.baseURL = baseURL
-
-	if transport != nil && cfg.TLSConfig != nil {
-		transport.TLSClientConfig = cfg.TLSConfig
-	}
-
-	if cfg.HTTPClient != nil {
-		p.httpClient = cfg.HTTPClient
-	} else {
-		p.httpClient = &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: transport,
-		}
-	}
+	p.endpoints = endpoints
 
 	for _, o := range opts {
 		o(p)
 	}
 	return p
+}
+
+// newEndpoints turns cfg's endpoint configuration into the ordered failover
+// list, one entry per replica, each with its own base URL and HTTP client.
+//
+// It is all-or-nothing: the first entry that fails to parse aborts the whole
+// list and the error becomes Provider.endpointErr, so a typo in one of three
+// replicas is reported instead of leaving the caller silently running against
+// two. See Config.Endpoints for why that is the right trade.
+func newEndpoints(cfg Config) ([]endpoint, error) {
+	addrs, err := configuredEndpoints(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	endpoints := make([]endpoint, 0, len(addrs))
+	for _, addr := range addrs {
+		baseURL, transport, err := parseEndpoint(addr, cfg.InsecureNoTLS)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.TLSConfig != nil {
+			transport.TLSClientConfig = cfg.TLSConfig
+		}
+
+		// Each endpoint gets its own client (and therefore its own connection
+		// pool) built from its own transport, since the transports are not
+		// interchangeable; see the endpoint type's doc comment. A
+		// caller-supplied HTTPClient overrides all of them, per New's
+		// documented precedence.
+		client := cfg.HTTPClient
+		if client == nil {
+			client = &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: transport,
+			}
+		}
+		endpoints = append(endpoints, endpoint{baseURL: baseURL, client: client})
+	}
+	return endpoints, nil
+}
+
+// configuredEndpoints returns the endpoint addresses cfg names, in failover
+// order, enforcing that exactly one of Config.Endpoint and Config.Endpoints
+// is set.
+//
+// An empty Config.Endpoint with no Config.Endpoints falls through to the
+// single-element case on purpose, so the resulting "empty mamori endpoint"
+// error comes from parseEndpoint exactly as it did before Endpoints existed,
+// rather than from a second, differently-worded check here.
+func configuredEndpoints(cfg Config) ([]string, error) {
+	switch {
+	case cfg.Endpoint != "" && len(cfg.Endpoints) > 0:
+		return nil, fmt.Errorf("%w: Config.Endpoint (%q) and Config.Endpoints (%d entries) are both set; set exactly one", mamori.ErrInvalid, cfg.Endpoint, len(cfg.Endpoints))
+	case len(cfg.Endpoints) > 0:
+		return cfg.Endpoints, nil
+	default:
+		return []string{cfg.Endpoint}, nil
+	}
 }
 
 func init() { mamori.Register(New(Config{})) }
@@ -244,12 +358,22 @@ func parseEndpoint(endpoint string, insecure bool) (baseURL string, transport *h
 	}
 }
 
-// do builds a request against the provider's base URL and path, applies any
+// do builds a request against ONE endpoint's base URL and path, applies any
 // call-specific edits (e.g. Watch's Accept: text/event-stream header) and
-// then every registered request editor, and sends it with the provider's
-// HTTP client. Tasks 2-4 (Resolve, ResolveBatch, Watch) build on this. It
-// returns the stored endpoint error first, if Config.Endpoint failed to
+// then every registered request editor, and sends it with that endpoint's
+// HTTP client. Resolve, ResolveBatch and Watch all build on this. It returns
+// the stored endpoint error first, if the endpoint configuration failed to
 // parse during New.
+//
+// Which endpoint to use is the CALLER's decision, not do's: Resolve and
+// ResolveBatch let tryEndpoints walk the failover list for them, and Watch
+// rotates through it on reconnect (see watchLoop). Keeping that choice out of
+// do is what lets one request-building path serve both policies.
+//
+// The endpointErr check stays here, rather than only in tryEndpoints, because
+// watchLoop does not go through tryEndpoints: a misconfigured provider has no
+// endpoints at all, and do must report why before it ever touches the (then
+// zero-valued) endpoint it was handed.
 //
 // edits is variadic and almost always empty (Resolve and ResolveBatch pass
 // none), so it adds no burden on those existing call sites; it exists solely
@@ -257,12 +381,12 @@ func parseEndpoint(endpoint string, insecure bool) (baseURL string, transport *h
 // to know anything about SSE. edits run before p.requestEditors so a
 // registered credential editor always has the final say if the two ever
 // conflict.
-func (p *Provider) do(ctx context.Context, method, path string, body io.Reader, edits ...func(*http.Request)) (*http.Response, error) {
+func (p *Provider) do(ctx context.Context, ep endpoint, method, path string, body io.Reader, edits ...func(*http.Request)) (*http.Response, error) {
 	if p.endpointErr != nil {
 		return nil, p.endpointErr
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, ep.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("%w: building request %s %s: %s", mamori.ErrInvalid, method, path, err)
 	}
@@ -273,7 +397,7 @@ func (p *Provider) do(ctx context.Context, method, path string, body io.Reader, 
 		edit(req)
 	}
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := ep.client.Do(req)
 	if err != nil {
 		return nil, err
 	}

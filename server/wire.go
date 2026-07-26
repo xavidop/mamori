@@ -94,6 +94,24 @@ type valueBody struct {
 	Metadata  map[string]string `json:"metadata"`
 	Kind      string            `json:"kind,omitempty"`
 	Error     *errorDetail      `json:"error,omitempty"`
+
+	// ResolvedAt is when the replica answering this request last fetched
+	// these bytes from upstream, and Stale says it is serving them as
+	// last-known-good while upstream is currently failing.
+	//
+	// Both exist for deployments running several replicas. Each replica
+	// watches upstream on its own independent schedule, so two replicas
+	// behind one address routinely hold the same binding at different ages.
+	// Nothing else on this wire lets a client notice that the answer it just
+	// received is older than one it already has: Version is provider-supplied
+	// and frequently absent, and the bytes alone cannot be ordered in time.
+	// A client that reconnects and lands on a laggier replica would otherwise
+	// apply a stale value as though it were a fresh change.
+	//
+	// Both are omitempty, so a single-replica deployment that ignores them
+	// sees the same wire shape it always did.
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	Stale      bool       `json:"stale,omitempty"`
 }
 
 // newValueBody builds the success wire shape for a resolved binding. kind is
@@ -108,7 +126,11 @@ type valueBody struct {
 // `"metadata":{}`, and a client deserializing straight into a
 // map[string]string would rather see an empty map than have to nil-check
 // before every read, so a nil Metadata is normalized to an empty map here.
-func newValueBody(name string, v mamori.Value, kind mamori.Kind) valueBody {
+// f dates the value and flags a last-known-good one; see valueBody's
+// ResolvedAt/Stale fields for why a multi-replica deployment needs it. A zero
+// freshness (the resolvedAt clock never having been stamped) simply omits
+// both fields rather than sending a meaningless zero time.
+func newValueBody(name string, v mamori.Value, kind mamori.Kind, f freshness) valueBody {
 	md := v.Metadata
 	if md == nil {
 		md = map[string]string{}
@@ -120,10 +142,15 @@ func newValueBody(name string, v mamori.Value, kind mamori.Kind) valueBody {
 		Sensitive: v.Sensitive,
 		Metadata:  md,
 		Kind:      string(kind),
+		Stale:     f.stale,
 	}
 	if !v.NotAfter.IsZero() {
 		t := v.NotAfter
 		vb.NotAfter = &t
+	}
+	if !f.resolvedAt.IsZero() {
+		t := f.resolvedAt
+		vb.ResolvedAt = &t
 	}
 	return vb
 }
@@ -249,7 +276,7 @@ func writeSSEError(w io.Writer, flush func(), name string, kind mamori.Kind, mes
 // unsound. It applies the exact same found/kind/hasValue classification
 // handleValue and handleBatch use, so a client sees the same state shape
 // regardless of which route it reached a binding through.
-func sendWatchSnapshot(w io.Writer, flush func(), name string, v mamori.Value, kind mamori.Kind, hasValue, found bool) bool {
+func sendWatchSnapshot(w io.Writer, flush func(), name string, v mamori.Value, kind mamori.Kind, hasValue, found bool, f freshness) bool {
 	var err error
 	switch {
 	case !found:
@@ -257,7 +284,7 @@ func sendWatchSnapshot(w io.Writer, flush func(), name string, v mamori.Value, k
 	case kind != "" && !hasValue:
 		err = writeSSEError(w, flush, name, kind, "binding resolve failed")
 	default:
-		err = writeSSEValue(w, flush, newValueBody(name, v, kind))
+		err = writeSSEValue(w, flush, newValueBody(name, v, kind, f))
 	}
 	return err == nil
 }
@@ -266,6 +293,25 @@ func sendWatchSnapshot(w io.Writer, flush func(), name string, v mamori.Value, k
 // deliberately with no other field. See handleHealthz's doc comment in
 // handler.go for why this must never grow a binding-detail field.
 type healthzBody struct {
+	Status string `json:"status"`
+}
+
+// The three readiness states GET /v1/readyz reports. Only readyStateReady is
+// served with a 200; the other two carry 503. They are a closed set of
+// strings rather than a bool so an operator reading a probe log can tell a
+// replica that has not finished starting from one that is on its way out,
+// which are the same "not ready" to a load balancer but very different to a
+// human debugging a rollout.
+const (
+	readyStateReady    = "ready"
+	readyStatePriming  = "priming"
+	readyStateDraining = "draining"
+)
+
+// readyzBody is GET /v1/readyz's response shape. Like healthzBody it carries
+// exactly one field: the endpoint is unauthenticated, so it must not report
+// binding names, binding counts, or node identity. See handleReadyz.
+type readyzBody struct {
 	Status string `json:"status"`
 }
 
