@@ -151,6 +151,67 @@ Authenticates a Unix-domain-socket peer by the uid/gid the kernel itself reports
 
 Reading a connection's peer credentials requires cooperation from whatever accepted that connection: by the time `Authenticate` runs, only the `*http.Request` and its context are in scope, and `net/http` gives no path from a request back to the `net.Conn` it arrived on. mamori bridges this with a small seam split across the core module and the [config server](../server): core exports `Ucred`, `ContextWithPeerCred`, and, per supported platform, `PeerCredFromConn`; a Unix-socket listener calls `PeerCredFromConn` once per accepted connection and stashes the result via `http.Server.ConnContext` and `ContextWithPeerCred`, so every request on that connection carries the same peer identity the kernel reported at accept time. **`WithAdminHTTP` does not wire up this seam** - it only ever listens on TCP, where there is no Unix-socket peer to read credentials from in the first place. `PeerCred` therefore requires the [config server](../server)'s `Unix(...)` transport specifically; mounting `PeerCred` on any other listener denies every request, since nothing will ever have stashed peer credentials into the context for it to find.
 
+### JWT (`x/authjwt`)
+
+JWT support ships as a separate module, `github.com/xavidop/mamori/x/authjwt`, rather than in core - it depends on a JWT library (`github.com/golang-jwt/jwt/v5`), and core takes no non-stdlib dependencies. It is a `mamori.Authenticator` like any other, so it works unchanged on both the admin endpoint and the [config server](../server).
+
+```go
+import "github.com/xavidop/mamori/x/authjwt"
+
+auth, err := authjwt.New(authjwt.Config{
+	Key:       authjwt.HMAC(secretBytes),
+	Issuer:    "https://issuer.example.com/",
+	Audiences: []string{"mamori-admin"},
+	Claims:    []string{"groups", "scope"},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+w, err := mamori.Watch[Config](ctx,
+	mamori.WithAdminHTTP("127.0.0.1:9090", mamori.WithAuth(auth)),
+)
+```
+
+`authjwt.New` validates its `Config` up front and returns an error for a nonsensical configuration - a missing key source, or an unrestricted algorithm set - rather than deferring that failure to the first request.
+
+**Key material** comes from exactly one of two places:
+
+```go
+type Config struct {
+	Key        authjwt.KeyOption
+	Keyfunc    jwt.Keyfunc
+	Algorithms []string
+	// ...
+}
+```
+
+- `Key`, built from one of the helpers below, is the normal path. Each constructor supplies both the key *and* the algorithms it is valid for, so the two can never drift apart - a caller cannot accidentally leave the algorithm set open:
+
+  ```go
+  func HMAC(secret []byte) KeyOption          // HS256, HS384, HS512
+  func RSAPublicKey(key *rsa.PublicKey) KeyOption      // RS256/384/512, PS256/384/512
+  func ECDSAPublicKey(key *ecdsa.PublicKey) KeyOption  // ES256, ES384, ES512
+  func EdDSAPublicKey(key ed25519.PublicKey) KeyOption // EdDSA
+  ```
+
+- `Keyfunc` is the escape hatch for cases the helpers don't cover, most commonly a JWKS endpoint with key rotation (pick a key by the token's `kid` header). Because a raw `Keyfunc` can return key material for any algorithm the function is willing to produce, `Algorithms` **must** also be set explicitly whenever `Keyfunc` is used - leaving it empty is a `Config` error, not a permissive default, since an unrestricted algorithm set reopens the alg-confusion vulnerability the `Key` helpers exist to close.
+
+`Issuer`, when set, must match the token's `iss` claim exactly; `Audiences`, when non-empty, requires the token's `aud` claim to contain at least one listed value. `SubjectClaim` (default `"sub"`) names the claim copied into `Identity.Subject`. `Claims` lists additional claim names copied into `Identity.Attrs`: a string-valued claim becomes a single-element slice, a `[]string` (or JSON array of strings) becomes a multi-element slice, and the `scope`/`scp` claims are special-cased even when string-valued - they're split on spaces into multiple values, matching how OAuth2/OIDC encode a space-delimited scope list as one string claim. A claim listed but absent from the token, or with an unrecognized shape, is simply absent from `Attrs`, never an error. `Realm`, if set, appears in the `WWW-Authenticate: Bearer realm="..."` challenge.
+
+**Security posture**, enforced on every request, not just at setup:
+
+- **Algorithm allow-listing.** Parsing is restricted with `jwt.WithValidMethods` to exactly the algorithms implied by the configured key (or the explicit `Algorithms`). A token signed with `alg: none` is rejected outright, and so is a token signed with, say, HS256 when an RSA public key is configured - the classic RSA/HMAC key-confusion attack, where an attacker signs a forged token with HS256 using the server's own (public) RSA key as the HMAC secret.
+- **Expiration is mandatory.** `jwt.WithExpirationRequired` rejects both an expired token and a token with no `exp` claim at all.
+- **Issuer and audience** are validated whenever configured, and a mismatch is rejected.
+- **Extraction is strict.** The token is read only from the `Authorization` header with a case-insensitive `Bearer ` scheme prefix; a missing header, a different scheme, or an empty token is rejected.
+
+A missing, malformed, expired, or otherwise invalid token is unauthenticated: `Authenticate` returns a plain error, never `mamori.ErrForbidden`, so it's a `401`. The returned authenticator implements `Challenger`, sending `WWW-Authenticate: Bearer` (with a realm, if configured).
+
+```sh
+go get github.com/xavidop/mamori/x/authjwt
+```
+
 ### AnyOf and AllOf
 
 ```go
@@ -235,7 +296,3 @@ auth := mamori.AuthFunc(func(r *http.Request) (mamori.Identity, error) {
 ```
 
 Implement `Authenticator` (and optionally `Challenger`) on a named type when the check needs its own state or its own `WWW-Authenticate` value. Whichever shape you pick, keep the two properties the shipped schemes share: compare any caller-supplied secret material with `crypto/subtle.ConstantTimeCompare` rather than `==`, and fail closed - deny the request outright - whenever the expected credential is unset or not yet populated, rather than treating "not configured" as "no credential required."
-
-## Not yet available
-
-JWT auth (a planned `x/authjwt` module) is **not** part of this release.

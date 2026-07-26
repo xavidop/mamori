@@ -38,5 +38,6 @@ use (
 	./server
 	./tools/reconcilevet
 	./tools/sourcetag
+	./x/authjwt
 	./x/otel
 )
