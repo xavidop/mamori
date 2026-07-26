@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -64,6 +65,12 @@ func (p fileProvider) Watch(ctx context.Context, ref Ref) (<-chan Update, error)
 	})
 }
 
+// watchDebounce is the delay after the last relevant fsnotify event before the
+// file is re-read. This collapses rapid sequences of events (e.g. the truncate
+// followed by the write that os.WriteFile produces) into a single read, so the
+// watcher never observes a partially-written file.
+const watchDebounce = 20 * time.Millisecond
+
 // watchFilePath is the shared fsnotify watch loop used by the built-in file:// and
 // dotenv: providers. It watches the parent directory of path (so atomic replace
 // via rename is detected), emits a baseline immediately, and re-runs resolve on
@@ -95,6 +102,10 @@ func watchFilePath(ctx context.Context, path string, resolve func(context.Contex
 		}
 		emit() // baseline
 
+		// debounce is a nil channel until an event for the target file arrives;
+		// once set it fires after watchDebounce, collapsing any rapid sequence
+		// of events (e.g. truncate + write from os.WriteFile) into one read.
+		var debounce <-chan time.Time
 		for {
 			select {
 			case <-ctx.Done():
@@ -104,8 +115,11 @@ func watchFilePath(ctx context.Context, path string, resolve func(context.Contex
 					return
 				}
 				if filepath.Clean(ev.Name) == target {
-					emit()
+					debounce = time.After(watchDebounce)
 				}
+			case <-debounce:
+				debounce = nil
+				emit()
 			case werr, ok := <-w.Errors:
 				if !ok {
 					return

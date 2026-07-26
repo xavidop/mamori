@@ -70,7 +70,7 @@ jobs:
       - name: golangci-lint
         # v8 supports golangci-lint v2; the version is pinned for reproducibility
         # and the timeout lives in .golangci.yml (run.timeout).
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           working-directory: ${{ matrix.dir }}
