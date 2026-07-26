@@ -104,7 +104,7 @@ func TestPolicyExternalSecret(t *testing.T) {
 		t.Errorf("stderr = %q, want empty (Config has aws-sm/aws-ps/gcp-sm refs)", stderr)
 	}
 
-	if !strings.HasPrefix(stdout, "apiVersion: external-secrets.io/v1beta1\n") {
+	if !strings.HasPrefix(stdout, "apiVersion: external-secrets.io/v1\n") {
 		t.Errorf("stdout missing apiVersion header:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "kind: ExternalSecret\n") {

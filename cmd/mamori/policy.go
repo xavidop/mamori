@@ -411,17 +411,15 @@ func writeGCPPolicy(stdout, stderr io.Writer, refs policyRefs) int {
 
 // --- external-secret ---
 //
-// esAPIVersion/esKind were verified against the ExternalSecrets CRD (see
-// task report): external-secrets.io/v1beta1 / ExternalSecret is a real,
-// valid apiVersion+kind for the ExternalSecret custom resource (the
-// operator's own docs note v1beta1 is deprecated as of ExternalSecrets
-// Operator v0.17.0 in favor of external-secrets.io/v1, but v1beta1 remains
-// a real, non-fabricated API version, and the task brief calls for it
-// specifically). spec.secretStoreRef.{name,kind}, spec.target.name,
-// spec.data[].secretKey, and spec.data[].remoteRef.key are likewise real,
-// verified field names on that CRD; no field name here is guessed.
+// esAPIVersion/esKind were verified against the ExternalSecrets CRD:
+// external-secrets.io/v1 / ExternalSecret is the current stable apiVersion+kind
+// for the ExternalSecret custom resource (v1 became stable in ExternalSecrets
+// Operator v0.17.0, superseding the now-deprecated v1beta1).
+// spec.secretStoreRef.{name,kind}, spec.target.name, spec.data[].secretKey, and
+// spec.data[].remoteRef.key are likewise real, verified field names on that CRD;
+// no field name here is guessed.
 const (
-	esAPIVersion = "external-secrets.io/v1beta1"
+	esAPIVersion = "external-secrets.io/v1"
 	esKind       = "ExternalSecret"
 
 	// esManifestName is used for both metadata.name and spec.target.name:
