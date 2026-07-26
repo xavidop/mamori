@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/gcp
 go 1.26.0
 
 require (
-	cloud.google.com/go/secretmanager v1.20.0
+	cloud.google.com/go/secretmanager v1.21.0
 	github.com/googleapis/gax-go/v2 v2.23.0
 	github.com/xavidop/mamori v0.1.0
 	google.golang.org/grpc v1.82.1
