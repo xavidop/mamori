@@ -72,6 +72,35 @@ const categories = [
   },
 ];
 const totalProviders = categories.reduce((n, c) => n + c.count, 0);
+
+// The operational layer beyond loading: serve, inspect, observe, and hand to an
+// agent. Each card links to its docs.
+const operational = [
+  {
+    t: "Config server",
+    d: "A read-through fan-out: one process holds the credentials and watches each upstream once, while every other service reads values by name over a Unix socket or TLS, behind mandatory policy and audit.",
+    href: `${base}docs/server`,
+    cta: "Config server",
+  },
+  {
+    t: "A real CLI",
+    d: "explain, schema, and policy read your source statically; doctor and status probe a running process with distinct exit codes, so a script can tell a broken config from one it cannot reach.",
+    href: `${base}docs/cli`,
+    cta: "CLI",
+  },
+  {
+    t: "Observability",
+    d: "Status and Health expose per-field health live, Doctor runs the same check in CI before a deploy, and an opt-in admin endpoint serves the report as metadata, never a value.",
+    href: `${base}docs/observability`,
+    cta: "Observability",
+  },
+  {
+    t: "Built for agents",
+    d: "An installable agent skill and an llms.txt, so your coding agent can wire mamori and load the whole documentation from a single URL.",
+    href: `${base}docs/skill`,
+    cta: "Agent skill",
+  },
+];
 ---
 
 <Layout>
@@ -87,12 +116,41 @@ const totalProviders = categories.reduce((n, c) => n + c.count, 0);
           validated Go structs - then watches every source and reconciles changes at runtime.
           Rotate a database password upstream; your pool rotates too. <em>No restart.</em>
         </p>
+
         <div class="hero__cta">
           <a class="btn btn--primary" href={docs}>Read the docs →</a>
           <a class="btn btn--ghost" href={repo} target="_blank" rel="noopener">GitHub ↗</a>
         </div>
-        <div class="hero__install">
-          <code>go get github.com/xavidop/mamori</code>
+
+        <div class="aud" role="tablist" aria-label="Audience">
+          <button class="aud__btn aud__btn--on" data-aud-btn="humans" role="tab" aria-selected="true">For humans</button>
+          <button class="aud__btn" data-aud-btn="agents" role="tab" aria-selected="false">For agents</button>
+        </div>
+
+        <div data-aud-panel="humans">
+          <div class="hero__install">
+            <code>go get github.com/xavidop/mamori</code>
+          </div>
+        </div>
+
+        <div data-aud-panel="agents" hidden>
+          <p class="hero__aud-intro">
+            Point your coding agent at mamori - install the skill, or hand it the whole
+            documentation as one file. Works with Claude Code, Cursor, Copilot, and more.
+          </p>
+          <div class="agent-card card">
+            <p class="agent-card__label">Add the agent skill</p>
+            <div class="hero__install"><code>npx skills add xavidop/mamori</code></div>
+            <p class="agent-card__label">Or paste this prompt</p>
+            <div class="hero__install hero__install--prompt">
+              <code>Add mamori to my Go project. Docs: https://mamorigo.dev/llms.txt</code>
+            </div>
+            <div class="agent-card__links">
+              <a href={`${base}llms.txt`}>llms.txt</a>
+              <a href={`${base}llms-full.txt`}>llms-full.txt</a>
+              <a href={`${base}docs/skill`}>Agent skill guide →</a>
+            </div>
+          </div>
         </div>
       </div>
       <div class="hero__demo">
@@ -222,6 +280,31 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     </div>
   </section>
 
+  <!-- ░░ OPERATIONAL LAYER ░░ -->
+  <section class="section" id="operate">
+    <div class="wrap">
+      <div class="section__head">
+        <span class="eyebrow">beyond loading</span>
+        <h2>An operational layer, not just a loader.</h2>
+        <p>
+          Serve config to other services, inspect it from the CLI, probe its health in CI and
+          at runtime, and hand it to your coding agent.
+        </p>
+      </div>
+      <div class="features">
+        {
+          operational.map((o) => (
+            <a class="card feature feature--link" href={o.href}>
+              <h3>{o.t}</h3>
+              <p>{o.d}</p>
+              <span class="feature__cta">{o.cta} →</span>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
   <!-- ░░ SECURITY ░░ -->
   <section class="section" id="security">
     <div class="wrap">
@@ -231,7 +314,7 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
       </div>
       <div class="sec">
         <article class="card"><h3>Redacted everywhere</h3><p><code>secret.String</code> and <code>secret.Bytes</code> render as <code>[REDACTED]</code> in <code>String()</code>, <code>fmt</code>, JSON, and <code>slog</code>. Only <code>Reveal()</code> exposes the value - and it's greppable in review.</p></article>
-        <article class="card"><h3>A vet analyzer</h3><p><code>reconcilevet</code> flags any secret-bearing ref assigned to a plain <code>string</code> or <code>[]byte</code>, so a leak can't slip past code review.</p></article>
+        <article class="card"><h3>A vet analyzer</h3><p><code>mamori vet</code> flags any secret-bearing ref assigned to a plain <code>string</code> or <code>[]byte</code>, so a leak can't slip past code review.</p></article>
         <article class="card"><h3>No injection chains</h3><p>The <code>exec:</code> provider is off by default. Refs are never interpolated from other resolved values - one secret can't build another's command.</p></article>
         <article class="card"><h3>Honest about limits</h3><p><code>Zero()</code> is best-effort and documented as such - no false promises about Go's GC. No payloads are ever logged; the conformance kit asserts it.</p></article>
       </div>
@@ -313,6 +396,98 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
   .hero__install code::before {
     content: "$ ";
     color: var(--shu);
+  }
+  /* For humans / For agents toggle - sits below the lede so it never
+     swaps the page title, only the action area beneath it. */
+  .aud {
+    display: inline-flex;
+    gap: 0.2rem;
+    padding: 0.25rem;
+    margin: 2rem 0 0.4rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+  }
+  .hero__aud-intro {
+    color: var(--mist);
+    font-size: var(--step-0);
+    max-width: 44ch;
+    margin-top: 1.4rem;
+  }
+  .aud__btn {
+    padding: 0.4rem 1.05rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--mist);
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition:
+      background 0.2s var(--ease),
+      color 0.2s var(--ease);
+  }
+  .aud__btn--on {
+    background: var(--shu);
+    color: #fff;
+  }
+  .agent-card {
+    margin-top: 1.6rem;
+    padding: 1.4rem 1.5rem;
+  }
+  .agent-card__label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--mist-dim);
+    margin: 0 0 0.5rem;
+  }
+  .agent-card .hero__install {
+    margin: 0 0 1.1rem;
+  }
+  .agent-card .hero__install:last-of-type {
+    margin-bottom: 1.2rem;
+  }
+  .agent-card .hero__install code {
+    display: block;
+  }
+  .hero__install--prompt code::before {
+    content: "";
+  }
+  .hero__install--prompt code {
+    white-space: normal;
+    font-size: 0.92rem;
+    color: var(--kinari);
+  }
+  .agent-card__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.1rem;
+    font-size: 0.9rem;
+  }
+  .agent-card__links a {
+    color: var(--green-deep);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .feature--link {
+    display: flex;
+    flex-direction: column;
+    text-decoration: none;
+    transition:
+      border-color 0.2s var(--ease),
+      transform 0.2s var(--ease);
+  }
+  .feature--link:hover {
+    border-color: var(--green);
+    transform: translateY(-2px);
+  }
+  .feature__cta {
+    margin-top: auto;
+    padding-top: 0.9rem;
+    color: var(--green-deep);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
   }
   /* Collapse to one column before the two-column layout gets too cramped for the
      demo card (its min-content is ~430px). Below this the demo follows the copy:
@@ -490,3 +665,22 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     justify-content: center;
   }
 </style>
+
+<script>
+  // Hero "For humans / For agents" toggle: swap the copy panel, no navigation.
+  const audBtns = document.querySelectorAll("[data-aud-btn]");
+  const audPanels = document.querySelectorAll<HTMLElement>("[data-aud-panel]");
+  audBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const which = btn.getAttribute("data-aud-btn");
+      audBtns.forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("aud__btn--on", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      audPanels.forEach((p) => {
+        p.hidden = p.getAttribute("data-aud-panel") !== which;
+      });
+    });
+  });
+</script>

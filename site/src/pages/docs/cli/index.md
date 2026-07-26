@@ -7,13 +7,13 @@ title: CLI
 
 `mamori` (import path `github.com/xavidop/mamori/cmd/mamori`) is a standalone CLI built around the same `source:` tag conventions and `Report` shape the library uses. It has two halves that never mix:
 
-- **Static commands** ([`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), [`policy`](/docs/cli/policy/)) read your Go source and never resolve anything.
+- **Static commands** ([`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), [`policy`](/docs/cli/policy/), [`vet`](/docs/cli/vet/)) read your Go source and never resolve anything.
 - **Live commands** ([`doctor` and `status`](/docs/cli/doctor-status/)) query a running process's admin endpoint and set an exit code.
 
 ```mermaid
 flowchart TD
   CLI[mamori CLI]
-  CLI --> S["Static: explain, schema, policy"]
+  CLI --> S["Static: explain, schema, policy, vet"]
   CLI --> L["Live: doctor, status"]
   S -->|"read Go source, never resolve"| Src[("your config structs")]
   L -->|"GET / on the admin endpoint"| Proc[("a running process")]
@@ -57,6 +57,7 @@ $ echo $?
 - [`mamori explain`](/docs/cli/explain/) - list every config struct and its `source:` refs.
 - [`mamori schema`](/docs/cli/schema/) - emit a JSON Schema for a config struct.
 - [`mamori policy`](/docs/cli/policy/) - emit a least-privilege access artifact.
+- [`mamori vet`](/docs/cli/vet/) - flag secret-bearing sources stored in plain `string`/`[]byte`.
 - [`mamori doctor` and `status`](/docs/cli/doctor-status/) - check a running process, with exit codes.
 
 ## See also

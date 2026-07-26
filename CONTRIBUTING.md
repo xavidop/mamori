@@ -15,7 +15,7 @@ This is a **multi-module monorepo** unified by a `go.work` file:
 - Root module `github.com/xavidop/mamori` - core: `Load`/`Watch`, the reconciler, secret types, built-in providers (`env`/`file`/`exec`), `middleware/`, and the `providertest/` conformance kit. Its dependencies are deliberately minimal (validator, mapstructure, fsnotify).
 - `providers/<name>` - each provider is its **own module** so cloud SDKs never reach core consumers.
 - `x/otel` - the OpenTelemetry bridge.
-- `tools/reconcilevet` - the `go vet` analyzer.
+- `cmd/mamori` - the `mamori` CLI. It also ships the `mamori vet` `go vet` analyzer (`internal/vetcheck`) and the stdlib-only `source:` tag parsing they share (`internal/sourcetag`).
 - `site/` - the Astro documentation site.
 
 ## Development
@@ -85,6 +85,6 @@ Core releases are automated from [Conventional Commits](https://www.conventional
 - `fix:` -> patch release, `feat:` -> minor, `feat!:` / `BREAKING CHANGE:` -> major.
 - `docs:`, `chore:`, `test:`, `refactor:` do not trigger a release on their own.
 
-When such commits land on `main`, [`semantic-release`](https://semantic-release.gitbook.io/) determines the next version, updates `CHANGELOG.md`, and creates + pushes the `vX.Y.Z` tag. [GoReleaser](https://goreleaser.com/) then builds the `reconcilevet` binary and publishes the GitHub Release (artifacts, checksums, SBOM), and SLSA provenance is generated. See [`.releaserc.json`](.releaserc.json), [`.goreleaser.yaml`](.goreleaser.yaml), and [`.github/workflows/release.yml`](.github/workflows/release.yml).
+When such commits land on `main`, [`semantic-release`](https://semantic-release.gitbook.io/) determines the next version, updates `CHANGELOG.md`, and creates + pushes the `vX.Y.Z` tag. [GoReleaser](https://goreleaser.com/) then builds the `mamori` CLI binary and publishes the GitHub Release (artifacts, checksums, SBOM), and SLSA provenance is generated. See [`.releaserc.json`](.releaserc.json), [`.goreleaser.yaml`](.goreleaser.yaml), and [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 Provider submodules keep their own tags (`providers/aws/v0.1.0`, `x/otel/v0.1.0`, ...) and are released separately, so a breaking change in one SDK never forces a core release.

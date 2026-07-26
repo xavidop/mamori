@@ -126,7 +126,7 @@
         "Default": "",
         "HasDefault": false,
         "Optional": false,
-        "Sensitive": false,
+        "Sensitive": true,
         "OnFail": "",
         "Validate": ""
       },

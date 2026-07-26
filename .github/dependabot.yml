@@ -140,9 +140,9 @@ updates:
     schedule: { interval: weekly }
     labels: [dependencies, go, otel]
   - package-ecosystem: gomod
-    directory: "/tools/reconcilevet"
+    directory: "/cmd/mamori"
     schedule: { interval: weekly }
-    labels: [dependencies, go, tooling]
+    labels: [dependencies, go, cli]
 
   # GitHub Actions
   - package-ecosystem: github-actions

@@ -36,7 +36,20 @@ Other agents use their own location (for example a project-level `.cursor/` or `
 - Defining and loading a config struct, with validation.
 - Watching for live changes and reacting per field.
 - Choosing a provider, with a full scheme cheat-sheet in the skill's `references/providers.md`.
-- The `mamori` CLI (`explain`, `schema`, `policy`, `doctor`, `status`) and its exit codes.
+- The `mamori` CLI (`explain`, `schema`, `policy`, `vet`, `doctor`, `status`) and its exit codes.
+
+## llms.txt
+
+If your agent does not use skills, point it at the documentation directly. This site publishes the [llms.txt convention](https://llmstxt.org/):
+
+- [`/llms.txt`](https://mamorigo.dev/llms.txt) - a short index of the docs with links, for an agent to navigate.
+- [`/llms-full.txt`](https://mamorigo.dev/llms-full.txt) - the entire documentation as one Markdown file, for an agent to load in a single fetch.
+
+A prompt that works in most coding agents:
+
+```text
+Add mamori to my Go project. Docs: https://mamorigo.dev/llms.txt
+```
 
 ## See also
 

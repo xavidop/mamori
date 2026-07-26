@@ -1,6 +1,6 @@
 ---
 name: mamori
-description: Use when writing Go code that loads configuration or secrets, wiring providers (env, files, AWS, Vault, GCP, Azure, Kubernetes, Consul, databases, feature flags), watching config for live changes without a restart, validating config structs, keeping secrets redacted, or using the mamori CLI (explain, schema, policy, doctor, status). Covers github.com/xavidop/mamori.
+description: Use when writing Go code that loads configuration or secrets, wiring providers (env, files, AWS, Vault, GCP, Azure, Kubernetes, Consul, databases, feature flags), watching config for live changes without a restart, validating config structs, keeping secrets redacted, or using the mamori CLI (explain, schema, policy, vet, doctor, status). Covers github.com/xavidop/mamori.
 ---
 
 # mamori: typed, validated, watchable config and secrets for Go
@@ -42,7 +42,7 @@ cfg, err := mamori.Load[Config](ctx) // returns *Config, or an error and no part
 
 Rules to hold onto:
 - Use `secret.String` / `secret.Bytes` for anything sensitive. Never a plain
-  `string` for a secret (the `reconcilevet` analyzer flags that).
+  `string` for a secret (`mamori vet` flags that).
 - `default:` applies only to genuine absence (not-found), never to a real error.
 - `validate:` uses go-playground/validator/v10 syntax and runs on load AND on
   every reconciled update; an invalid update is rejected atomically.
@@ -86,11 +86,12 @@ Precedence chains: a `source:` tag may list several refs comma-separated
 - `mamori explain ./...` - list every `source:` ref in a package's config structs.
 - `mamori schema ./...` - emit JSON Schema from field types and `validate:` tags.
 - `mamori policy ./... --format=aws-iam|gcp|external-secret` - least-privilege access artifact.
+- `mamori vet ./...` - flag secret-bearing sources stored in a plain `string`/`[]byte`. Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`. For a custom provider's scheme, add it: `mamori vet --secret-schemes=mysecrets ./...`.
 - `mamori doctor --endpoint <ep>` / `mamori status` - probe a running process's admin endpoint; exit codes 0 healthy, 1 unhealthy, 2 admin off, 3 unreachable, 4 auth failed.
 
 ## When helping a user
 
-- Suggest `secret.String` for secrets and confirm `reconcilevet` would pass.
+- Suggest `secret.String` for secrets and confirm `mamori vet` would pass.
 - Prefer `Watch` when the program is long-running and should pick up rotations;
   `Load` for one-shot / CLI programs.
 - For CI, recommend `mamori.Doctor` (library) as a pre-deploy check.

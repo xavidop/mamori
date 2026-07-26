@@ -111,3 +111,5 @@ go get github.com/xavidop/mamori/providers/<name>
 - [Watch and batch](/docs/writing-a-provider/capabilities/) - the optional `WatchableProvider` and `BatchProvider`.
 - [Conformance](/docs/writing-a-provider/conformance/) - the required `providertest.Run` case and the acceptance checklist.
 - [Providers](/docs/providers/) - the built-in provider catalog.
+
+If your provider resolves secrets, tell the analyzer about its scheme so a plain `string` holding one still gets flagged: [`mamori vet --secret-schemes=<yours>`](/docs/cli/vet/).

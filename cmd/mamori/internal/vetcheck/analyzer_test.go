@@ -1,4 +1,4 @@
-package reconcilevet
+package vetcheck
 
 import (
 	"testing"
@@ -6,6 +6,6 @@ import (
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 
-func TestReconcilevet(t *testing.T) {
+func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "a")
 }

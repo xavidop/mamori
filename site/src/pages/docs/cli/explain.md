@@ -39,6 +39,16 @@ Timeout         int            env://TIMEOUT           30       false     false
 | `OPTIONAL` | Whether the field carries `optional:"true"` |
 | `SENSITIVE` | Whether the field is `secret.String`/`secret.Bytes`, or any ref in its chain uses a secret-bearing scheme |
 
+## Custom provider schemes
+
+`SENSITIVE` is computed from the same [built-in scheme set `mamori vet` uses](/docs/cli/vet/#what-it-flags), which only knows the providers mamori ships. If you [wrote your own provider](/docs/writing-a-provider/), name its scheme so its fields report as sensitive:
+
+```bash
+mamori explain --secret-schemes=mysecrets ./...
+```
+
+Pass several as a comma-separated list. The flag adds to the built-in set rather than replacing it, and takes a bare scheme token (`mysecrets`), not a full ref.
+
 ## See also
 
 [`mamori schema`](/docs/cli/schema/) turns the same structs into a JSON Schema; [`mamori policy`](/docs/cli/policy/) turns their refs into an access artifact. [CLI overview](/docs/cli/).

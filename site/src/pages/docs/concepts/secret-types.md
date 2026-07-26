@@ -33,7 +33,7 @@ s.Zero()        // best-effort wipe of the backing bytes
 
 `secret.String.Reveal()` returns a `string` (`RevealBytes()` returns the raw `[]byte`); `secret.Bytes.Reveal()` returns `[]byte`. `IsZero()` reports whether the backing bytes are empty.
 
-`Zero()` is best-effort: Go's GC may already have copied the value, and mamori documents that honestly rather than promise memory safety it cannot deliver. The `reconcilevet` analyzer flags a secret-bearing ref stored in a plain `string`.
+`Zero()` is best-effort: Go's GC may already have copied the value, and mamori documents that honestly rather than promise memory safety it cannot deliver. [`mamori vet`](/docs/cli/vet/) flags a secret-bearing ref stored in a plain `string`.
 
 ## See also
 

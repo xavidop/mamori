@@ -7,19 +7,32 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
-const explainUsage = `usage: mamori explain [patterns...] [--type=Name] [--json]
+// explainUsage renders the built-in scheme list from the set itself, so the
+// help text cannot drift from what the SENSITIVE column actually reports.
+var explainUsage = `usage: mamori explain [patterns...] [--type=Name] [--json] [--secret-schemes=list]
 
 Explain reads Go source (via golang.org/x/tools/go/packages) and prints
 every struct type with at least one source: tagged field: its field paths,
 Go types, source chains, defaults, and which fields are sensitive. It never
 resolves anything (no network calls, no secret managers contacted).
 
-  patterns   Go package patterns to load (default: the current directory,
-             same as omitting a pattern to "go build"). Example: ./...
-  --type     only explain the struct type with this name
-  --json     emit the result as JSON instead of a text table
+  patterns          Go package patterns to load (default: the current
+                    directory, same as omitting a pattern to "go build").
+  --type            only explain the struct type with this name
+  --json            emit the result as JSON instead of a text table
+  --secret-schemes  comma-separated extra schemes to count as secret-bearing
+                    in the SENSITIVE column, added to the built-in set. Use
+                    this for a custom provider, e.g.
+                    --secret-schemes=mysecrets,corp-kv
+
+A field is SENSITIVE when its type is secret.String / secret.Bytes, or when
+any ref in its chain uses a secret-bearing scheme. Built-in secret-bearing
+schemes:
+  ` + strings.Join(sourcetag.DefaultSecretSchemes().Sorted(), ", ") + `
 `
 
 // explainCmd is the mamori explain subcommand. It writes its output to
@@ -29,14 +42,14 @@ resolves anything (no network calls, no secret managers contacted).
 // reserved for doctor/status, which classify a running process's health,
 // not a static-analysis failure).
 func explainCmd(args []string, stdout, stderr io.Writer) int {
-	patterns, typeName, jsonOut, err := parseExplainArgs(args)
+	patterns, typeName, jsonOut, schemes, err := parseExplainArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		_, _ = fmt.Fprint(stderr, explainUsage)
 		return 1
 	}
 
-	structs, err := Extract(patterns, typeName)
+	structs, err := Extract(patterns, typeName, schemes)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori explain: %v\n", err)
 		return 1
@@ -54,7 +67,10 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 // so patterns and flags may appear in either order (e.g. both
 // "explain ./... --json" and "explain --json ./..." work), matching how
 // this command is documented.
-func parseExplainArgs(args []string) (patterns []string, typeName string, jsonOut bool, err error) {
+// The returned schemes is nil unless --secret-schemes was given, so the
+// common case keeps using the shared built-in set (see Extract).
+func parseExplainArgs(args []string) (patterns []string, typeName string, jsonOut bool, schemes sourcetag.SchemeSet, err error) {
+	var extra string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -63,20 +79,39 @@ func parseExplainArgs(args []string) (patterns []string, typeName string, jsonOu
 		case a == "--type" || a == "-type":
 			i++
 			if i >= len(args) {
-				return nil, "", false, fmt.Errorf("mamori explain: %s requires a value", a)
+				return nil, "", false, nil, fmt.Errorf("mamori explain: %s requires a value", a)
 			}
 			typeName = args[i]
 		case strings.HasPrefix(a, "--type="):
 			typeName = strings.TrimPrefix(a, "--type=")
 		case strings.HasPrefix(a, "-type="):
 			typeName = strings.TrimPrefix(a, "-type=")
+		case a == "--secret-schemes" || a == "-secret-schemes":
+			i++
+			if i >= len(args) {
+				return nil, "", false, nil, fmt.Errorf("mamori explain: %s requires a value", a)
+			}
+			extra = args[i]
+		case strings.HasPrefix(a, "--secret-schemes="):
+			extra = strings.TrimPrefix(a, "--secret-schemes=")
+		case strings.HasPrefix(a, "-secret-schemes="):
+			extra = strings.TrimPrefix(a, "-secret-schemes=")
 		case strings.HasPrefix(a, "-"):
-			return nil, "", false, fmt.Errorf("mamori explain: unknown flag %q", a)
+			return nil, "", false, nil, fmt.Errorf("mamori explain: unknown flag %q", a)
 		default:
 			patterns = append(patterns, a)
 		}
 	}
-	return patterns, typeName, jsonOut, nil
+
+	if extra != "" {
+		parsed, perr := sourcetag.ParseSchemeList(extra)
+		if perr != nil {
+			return nil, "", false, nil, fmt.Errorf("mamori explain: --secret-schemes: %w", perr)
+		}
+		schemes = sourcetag.DefaultSecretSchemes()
+		schemes.Add(parsed...)
+	}
+	return patterns, typeName, jsonOut, schemes, nil
 }
 
 // writeExplainJSON encodes structs as indented JSON. It returns 1 (and

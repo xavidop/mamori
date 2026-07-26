@@ -7,26 +7,39 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"golang.org/x/tools/go/analysis/unitchecker"
+
+	"github.com/xavidop/mamori/cmd/mamori/internal/vetcheck"
 )
 
-// version is stamped by ldflags at release build time (see .goreleaser.yaml,
-// added in a later task). "dev" is what a plain `go build` produces.
+// version is stamped by ldflags at release build time (see .goreleaser.yaml).
+// "dev" is what a plain `go build` produces.
 //
 // .goreleaser.yaml's mamori build also passes -X main.commit=... and
-// -X main.date=..., mirroring the reconcilevet build's ldflags exactly
-// (see that build's own entry): neither commit nor date has a matching
-// package-level var here, the same as reconcilevet's main.go, so both -X
-// flags are silently no-ops (confirmed: `go build -ldflags "-X
-// main.commit=..."` against a package with no such var succeeds with no
-// warning). They were deliberately not added as unused vars: cmd/mamori's
-// go.mod is linted by golangci-lint's "unused" check (.golangci.yml,
-// standard linter set), which flags an unexported package-level var with
-// no reader, so `var commit, date string` with nothing printing them would
-// fail CI lint. Wire them up together with whatever future command first
-// has a real use for them (e.g. printing build provenance).
+// -X main.date=..., but neither commit nor date has a matching package-level
+// var here, so both -X flags are silently no-ops (confirmed: `go build
+// -ldflags "-X main.commit=..."` against a package with no such var succeeds
+// with no warning). They were deliberately not added as unused vars:
+// cmd/mamori is linted by golangci-lint's "unused" check (.golangci.yml,
+// standard linter set), which flags an unexported package-level var with no
+// reader, so `var commit, date string` with nothing printing them would fail
+// CI lint. Wire them up together with whatever future command first has a
+// real use for them (e.g. printing build provenance).
 var version = "dev"
 
 func main() {
+	// Dual-mode seam: this one binary is both the mamori CLI and a `go vet`
+	// tool. When the go vet driver runs us (via `go vet -vettool=mamori`), it
+	// speaks the unitchecker protocol, not the CLI's subcommand grammar, so we
+	// detect that invocation and hand off to unitchecker.Main before the normal
+	// CLI dispatch ever sees the args. Everything else (including the standalone
+	// `mamori vet ./...` subcommand) flows through run(). See isVetToolInvocation
+	// in vet.go for exactly which arg shapes the go vet driver uses.
+	if isVetToolInvocation(os.Args[1:]) {
+		unitchecker.Main(vetcheck.Analyzer)
+		return
+	}
 	os.Exit(run(os.Args[1:]))
 }
 
@@ -39,6 +52,7 @@ Static commands (read source, never resolve):
   explain    Explain the config structs and source: refs found in a package
   schema     Emit a JSON Schema for a config struct
   policy     Emit a least-privilege access policy derived from source: refs
+  vet        Report config fields that pull a secret into a plain string/[]byte
 
 Live commands (thin clients of a running process's admin endpoint):
   doctor     Diagnose a running process's config health
@@ -74,6 +88,8 @@ func run(args []string) int {
 		return schemaCmd(args[1:], os.Stdout, os.Stderr)
 	case "policy":
 		return policyCmd(args[1:], os.Stdout, os.Stderr)
+	case "vet":
+		return vetCmd(args[1:], os.Stdout, os.Stderr)
 	case "doctor":
 		return doctorCmd(args[1:], os.Stdout, os.Stderr)
 	case "status":

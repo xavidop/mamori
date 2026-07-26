@@ -51,7 +51,7 @@ func schemaCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	structs, err := Extract(patterns, typeName)
+	structs, err := Extract(patterns, typeName, nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori schema: %v\n", err)
 		return 1

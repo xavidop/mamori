@@ -30,3 +30,4 @@ site/.astro/
 .playwright-mcp/
 *.screenshot.png
 
+cmd/mamori/mamori

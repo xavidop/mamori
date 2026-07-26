@@ -3,7 +3,7 @@ name: Release
 # Releases are driven by Conventional Commits:
 #   1. semantic-release analyzes commits on main, decides the next version,
 #      updates CHANGELOG.md, and creates + pushes the git tag (vX.Y.Z).
-#   2. GoReleaser builds the reconcilevet binary and creates the GitHub Release
+#   2. GoReleaser builds the mamori CLI binary and creates the GitHub Release
 #      with the artifacts, checksums, and SBOM for that tag.
 #   3. SLSA provenance is generated for the released artifacts.
 #

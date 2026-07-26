@@ -28,7 +28,9 @@ function remarkMermaid() {
 }
 
 export default defineConfig({
-  site: "https://xavidop.github.io",
+  // The custom domain (CNAME) the site is actually served from, so the sitemap
+  // and the /llms.txt endpoints emit canonical absolute URLs.
+  site: "https://mamorigo.dev",
   base,
   // Internal doc links are root-relative (/docs/...), so they resolve the same
   // with or without a trailing slash; "ignore" lets the dev server serve both
@@ -36,6 +38,9 @@ export default defineConfig({
   trailingSlash: "ignore",
   devToolbar: { enabled: false },
   build: { format: "directory" },
+  // /llms.txt (index) and /llms-full.txt (all docs as one Markdown file) are
+  // native static endpoints under src/pages, so they render in dev and build
+  // alike. See src/lib/docs-content.ts.
   integrations: [sitemap()],
   markdown: {
     remarkPlugins: [remarkMermaid],

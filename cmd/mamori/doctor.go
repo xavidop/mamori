@@ -151,7 +151,7 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 // reports what it can, rather than silently doing nothing just because the
 // live half of the comparison came back empty.
 func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report) {
-	structs, err := Extract(patterns, "")
+	structs, err := Extract(patterns, "", nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori doctor --compare: %v\n", err)
 		return

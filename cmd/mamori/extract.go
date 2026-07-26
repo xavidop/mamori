@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/xavidop/mamori/tools/sourcetag"
+	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
 // Field describes one configurable leaf field discovered while walking a
@@ -60,7 +60,20 @@ type StructInfo struct {
 //
 // When typeName is non-empty, only the struct named typeName is returned
 // (still recursing into any nested, source-less struct fields it has).
-func Extract(patterns []string, typeName string) ([]StructInfo, error) {
+// Extract loads the packages matching patterns and returns every struct with
+// at least one source-tagged field (or just typeName, when non-empty).
+//
+// schemes is the set of source schemes to treat as secret-bearing when
+// deciding a field's Sensitive flag. Pass nil for mamori's built-in set;
+// commands that accept --secret-schemes pass an extended one.
+func Extract(patterns []string, typeName string, schemes sourcetag.SchemeSet) ([]StructInfo, error) {
+	// A nil set means the built-ins, resolved to the shared package-level set
+	// rather than a freshly built map per call.
+	firstSensitive := sourcetag.FirstSensitiveScheme
+	if schemes != nil {
+		firstSensitive = schemes.FirstSensitiveScheme
+	}
+
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax |
 			packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
@@ -86,7 +99,7 @@ func Extract(patterns []string, typeName string) ([]StructInfo, error) {
 			out = append(out, StructInfo{
 				Package:  pkg.PkgPath,
 				TypeName: s.name,
-				Fields:   walkFields(pkg.Types, s.typ, ""),
+				Fields:   walkFields(pkg.Types, s.typ, "", firstSensitive),
 			})
 		}
 	}
@@ -166,7 +179,11 @@ func hasSourceTaggedField(st *types.Struct) bool {
 // secret.String/secret.Bytes) is a container and is recursed into,
 // contributing dotted paths under prefix; any other source-less field is
 // skipped.
-func walkFields(pkg *types.Package, st *types.Struct, prefix string) []Field {
+//
+// firstSensitive reports the first secret-bearing scheme in a source tag; it
+// is threaded down from Extract so a caller-extended scheme set (see
+// --secret-schemes) reaches nested fields too.
+func walkFields(pkg *types.Package, st *types.Struct, prefix string, firstSensitive func(string) (string, bool)) []Field {
 	var fields []Field
 	for i := 0; i < st.NumFields(); i++ {
 		v := st.Field(i)
@@ -190,7 +207,7 @@ func walkFields(pkg *types.Package, st *types.Struct, prefix string) []Field {
 		switch {
 		case hasSource:
 			refs := sourcetag.SplitChain(source)
-			_, schemeSensitive := sourcetag.FirstSensitiveScheme(source)
+			_, schemeSensitive := firstSensitive(source)
 			fields = append(fields, Field{
 				Path:       path,
 				GoType:     types.TypeString(v.Type(), shortQualifier(pkg)),
@@ -205,7 +222,7 @@ func walkFields(pkg *types.Package, st *types.Struct, prefix string) []Field {
 			})
 		default:
 			if nested, ok := v.Type().Underlying().(*types.Struct); ok && !sensitiveType {
-				fields = append(fields, walkFields(pkg, nested, path)...)
+				fields = append(fields, walkFields(pkg, nested, path, firstSensitive)...)
 			}
 			// No source tag and not a source-less container struct: skip
 			// (decode.go leaves this to its zero value / manual population).

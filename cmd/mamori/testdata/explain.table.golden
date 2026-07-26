@@ -8,7 +8,7 @@ Workers         int            env:WORKERS                         4        fals
 Level           string         env:LEVEL                           -        false     false
 Region          string         env:REGION                          -        false     false
 ServiceName     string         env:SERVICE_NAME                    -        false     false
-RequestTimeout  string         aws-ps://prod/app/config#timeout    -        false     false
+RequestTimeout  string         aws-ps://prod/app/config#timeout    -        false     true
 GCPSecret       string         gcp-sm://acme-prod/db-password      -        false     true
 Redis.Addr      string         env:REDIS_ADDR                      -        false     false
 Redis.Password  secret.String  vault://kv/redis#password           -        false     true

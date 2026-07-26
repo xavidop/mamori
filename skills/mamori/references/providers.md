@@ -49,10 +49,17 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 
 ## Secret-bearing schemes
 
-`aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `doppler`, `op`, and similar resolve to
-secrets: store them in `secret.String` / `secret.Bytes`, never a plain `string`.
-The `reconcilevet` analyzer (or `mamori vet`-style checks) flags a secret scheme
-stored in a plain type.
+Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
+
+- Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
+  `doppler`, `k8s-secret`.
+- Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
+  (mamori marks all command output secret), `mamori` (relays whatever the
+  server marks).
+
+`mamori vet` flags a secret scheme stored in a plain type. `k8s-cm` (ConfigMap)
+and config schemes (`env`, `file`, `consul`, ...) are not secret-bearing. For a
+custom provider, add its scheme: `mamori vet --secret-schemes=mysecrets ./...`.
 
 ## Composition
 

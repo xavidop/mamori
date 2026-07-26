@@ -88,7 +88,7 @@ func TestDoctorCompareDetectsDrift(t *testing.T) {
 	fixtureDir := filepath.Join(root, "testdata", "example")
 	t.Chdir(fixtureDir)
 
-	structs, err := Extract([]string{"./..."}, "")
+	structs, err := Extract([]string{"./..."}, "", nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestDoctorCompareNoDriftReportsMatch(t *testing.T) {
 	fixtureDir := filepath.Join(root, "testdata", "example")
 	t.Chdir(fixtureDir)
 
-	structs, err := Extract([]string{"./..."}, "")
+	structs, err := Extract([]string{"./..."}, "", nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}

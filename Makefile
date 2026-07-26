@@ -42,9 +42,10 @@ fmt: ## gofmt -w the whole tree
 tidy: ## go mod tidy every module
 	@for m in $(MODULES); do echo "==> tidy $$m"; (cd $$m && $(GO) mod tidy) || exit 1; done
 
-vet-analyzer: ## Build reconcilevet and run it over core + examples
-	@cd tools/reconcilevet && $(GO) build -o /tmp/reconcilevet ./cmd/reconcilevet
-	@$(GO) vet -vettool=/tmp/reconcilevet ./... ./examples/...
+vet-analyzer: ## Build the mamori CLI and run the mamori vet analyzer over core + examples (both modes)
+	@cd cmd/mamori && $(GO) build -o /tmp/mamori .
+	@/tmp/mamori vet ./... ./examples/...
+	@$(GO) vet -vettool=/tmp/mamori ./... ./examples/...
 
 work-sync: ## Regenerate the go.work workspace (then re-tidy modules)
 	@GOWORK= $(GO) work sync
@@ -60,4 +61,4 @@ site-linkcheck: ## Build the docs site and check for broken internal links
 	@cd site && npm install && npm run build && npm run linkcheck
 
 clean: ## Remove build artifacts
-	@rm -rf dist site/dist site/.astro /tmp/reconcilevet
+	@rm -rf dist site/dist site/.astro /tmp/mamori

@@ -28,14 +28,14 @@ mamori is a multi-module monorepo: the core module and each provider module are 
 | Module | Supported |
 | --- | --- |
 | core (`github.com/xavidop/mamori`) | latest release |
-| `providers/*`, `x/otel`, `tools/reconcilevet` | latest release |
+| `providers/*`, `x/otel`, `cmd/mamori` (incl. `mamori vet`) | latest release |
 
 ## Scope
 
 In scope:
 
 - The core library and the provider / tooling modules in this repository.
-- Secret handling: unintended exposure of secret values (through logs, errors, or serialization), the redaction contract of `secret.String` / `secret.Bytes`, and the `reconcilevet` analyzer.
+- Secret handling: unintended exposure of secret values (through logs, errors, or serialization), the redaction contract of `secret.String` / `secret.Bytes`, and the `mamori vet` analyzer.
 - The `exec:` provider's command handling and injection surface.
 
 Out of scope:
@@ -48,7 +48,7 @@ Out of scope:
 mamori is designed to keep secrets out of logs and errors by default:
 
 - `secret.String` / `secret.Bytes` render as `[REDACTED]` in `String()`, `fmt`, `encoding/json`, and `log/slog`; only the explicit, greppable `Reveal()` exposes the value.
-- The shipped `reconcilevet` analyzer flags secret-bearing refs assigned to plain `string` / `[]byte` fields.
+- The shipped `mamori vet` analyzer flags secret-bearing refs assigned to plain `string` / `[]byte` fields.
 - Providers must never log ref payloads; the `providertest` conformance kit asserts this.
 - The `exec:` provider is disabled by default, and refs are never interpolated from other resolved values (no injection chains).
 - `Zero()` is best-effort; Go's garbage collector may retain copies, and this is documented honestly rather than promised.

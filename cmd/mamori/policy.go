@@ -18,7 +18,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xavidop/mamori/tools/sourcetag"
+	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
 const policyUsage = `usage: mamori policy [patterns...] [--type=Name] --format=<f>
@@ -96,7 +96,7 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	structs, err := Extract(patterns, typeName)
+	structs, err := Extract(patterns, typeName, nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori policy: %v\n", err)
 		return 1
@@ -208,7 +208,7 @@ func collectPolicyRefs(structs []StructInfo) policyRefs {
 // would assign to Ref.Path. This is duplicated here by hand (rather than
 // importing github.com/xavidop/mamori's Ref/ParseRef, which cmd/mamori is
 // allowed to depend on per the CLI plan's import constraint) for the same
-// reason tools/sourcetag's own SplitChain/SchemeOf duplicate ref.go's
+// reason internal/sourcetag's own SplitChain/SchemeOf duplicate ref.go's
 // chain-split/scheme rules instead of importing core: extracting one path
 // substring needs none of core's decode/validate machinery, so taking on
 // core's dependency graph (mapstructure, go-playground/validator,

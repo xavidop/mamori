@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"github.com/xavidop/mamori/secret"
 )
 
 func TestEnvProvider(t *testing.T) {
@@ -181,8 +183,11 @@ func TestExecProviderMissingBinaryStaysUnknown(t *testing.T) {
 // never fall back to a field's default:. If exec.ErrNotFound is ever remapped
 // to mamori.ErrNotFound again, this test must fail.
 func TestExecProviderMissingBinaryDoesNotTriggerDefault(t *testing.T) {
+	// exec output is Sensitive (see builtin_exec.go), so it is held in a
+	// secret.String here rather than a plain string, the same shape `mamori
+	// vet` steers callers toward.
 	type cfg struct {
-		Out string `source:"exec:mamori-no-such-binary-exists-anywhere" default:"FALLBACK"`
+		Out secret.String `source:"exec:mamori-no-such-binary-exists-anywhere" default:"FALLBACK"`
 	}
 	_, err := Load[cfg](context.Background(), WithExecProvider())
 	if err == nil {
@@ -229,8 +234,9 @@ func TestExecProviderOptIn(t *testing.T) {
 		t.Fatal("exec provider should NOT be auto-registered")
 	}
 
+	// exec output is Sensitive (see builtin_exec.go), hence secret.String.
 	type cfg struct {
-		Out string `source:"exec:echo hello"`
+		Out secret.String `source:"exec:echo hello"`
 	}
 	// Without WithExecProvider -> no provider for scheme.
 	if _, err := Load[cfg](context.Background()); err == nil {
@@ -241,7 +247,7 @@ func TestExecProviderOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with exec: %v", err)
 	}
-	if c.Out != "hello\n" && c.Out != "hello" {
-		t.Fatalf("exec out = %q, want hello", c.Out)
+	if out := c.Out.Reveal(); out != "hello\n" && out != "hello" {
+		t.Fatalf("exec out = %q, want hello", out)
 	}
 }

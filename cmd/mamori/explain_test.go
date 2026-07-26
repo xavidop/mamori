@@ -107,3 +107,95 @@ func TestExplainTypeFilter(t *testing.T) {
 		t.Errorf("stdout missing Config's nested Redis.Addr field:\n%s", stdout)
 	}
 }
+
+// sensitiveCell returns the SENSITIVE column of the row for field in a
+// `mamori explain` table, so a test can assert on one field's sensitivity
+// without depending on the rest of the table's layout.
+func sensitiveCell(t *testing.T, table, field string) string {
+	t.Helper()
+	for _, line := range strings.Split(table, "\n") {
+		cols := strings.Fields(line)
+		if len(cols) > 0 && cols[0] == field {
+			return cols[len(cols)-1]
+		}
+	}
+	t.Fatalf("no row for field %q in:\n%s", field, table)
+	return ""
+}
+
+// TestExplainSecretSchemes checks that --secret-schemes extends the set the
+// SENSITIVE column is computed from, so a custom provider's scheme can be
+// reported as sensitive. The fixture's LogLevel field uses env:, which is not
+// secret-bearing by default, making it a clean before/after subject.
+// Each case runs in its own subtest because runExplain changes the working
+// directory, which t.Chdir only restores when that (sub)test ends.
+func TestExplainSecretSchemes(t *testing.T) {
+	t.Run("env is not sensitive by default", func(t *testing.T) {
+		stdout, stderr, code := runExplain(t, "--type=Config")
+		if code != 0 {
+			t.Fatalf("explainCmd() = %d, stderr = %s", code, stderr)
+		}
+		if got := sensitiveCell(t, stdout, "LogLevel"); got != "false" {
+			t.Errorf("LogLevel SENSITIVE = %q by default, want %q", got, "false")
+		}
+	})
+
+	t.Run("--secret-schemes makes it sensitive", func(t *testing.T) {
+		stdout, stderr, code := runExplain(t, "--type=Config", "--secret-schemes=env")
+		if code != 0 {
+			t.Fatalf("explainCmd(--secret-schemes=env) = %d, stderr = %s", code, stderr)
+		}
+		if got := sensitiveCell(t, stdout, "LogLevel"); got != "true" {
+			t.Errorf("LogLevel SENSITIVE = %q with --secret-schemes=env, want %q", got, "true")
+		}
+		// The built-in schemes must survive the extension, not be replaced.
+		if got := sensitiveCell(t, stdout, "APIKey"); got != "true" {
+			t.Errorf("APIKey SENSITIVE = %q, want the built-in aws-sm to still count", got)
+		}
+	})
+}
+
+// TestExplainSecretSchemesForms checks the flag's accepted spellings and that
+// an invalid value (a full ref rather than a bare scheme token) is rejected
+// rather than silently ignored.
+func TestExplainSecretSchemesForms(t *testing.T) {
+	for _, form := range [][]string{
+		{"--secret-schemes=mysecrets"},
+		{"-secret-schemes=mysecrets"},
+		{"--secret-schemes", "mysecrets"},
+		{"-secret-schemes", "mysecrets"},
+	} {
+		t.Run(strings.Join(form, "_"), func(t *testing.T) {
+			_, _, _, schemes, err := parseExplainArgs(form)
+			if err != nil {
+				t.Fatalf("parseExplainArgs(%v) error: %v", form, err)
+			}
+			if !schemes.Contains("mysecrets") {
+				t.Errorf("scheme set does not contain the added scheme: %v", schemes.Sorted())
+			}
+			if !schemes.Contains("vault") {
+				t.Errorf("scheme set dropped the built-ins: %v", schemes.Sorted())
+			}
+		})
+	}
+
+	if _, _, _, _, err := parseExplainArgs([]string{"--secret-schemes=mysecrets://prod"}); err == nil {
+		t.Error("parseExplainArgs accepted a full ref as a scheme token, want an error")
+	}
+	if _, _, _, _, err := parseExplainArgs([]string{"--secret-schemes"}); err == nil {
+		t.Error("parseExplainArgs(--secret-schemes) with no value = nil error, want an error")
+	}
+}
+
+// TestExplainNoSecretSchemesMeansNilSet checks that omitting the flag leaves
+// the set nil, so Extract keeps using the shared built-in set rather than a
+// freshly built map on every call.
+func TestExplainNoSecretSchemesMeansNilSet(t *testing.T) {
+	_, _, _, schemes, err := parseExplainArgs([]string{"./..."})
+	if err != nil {
+		t.Fatalf("parseExplainArgs error: %v", err)
+	}
+	if schemes != nil {
+		t.Errorf("schemes = %v, want nil when --secret-schemes is absent", schemes.Sorted())
+	}
+}

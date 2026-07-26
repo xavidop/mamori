@@ -29,7 +29,8 @@ body:
         - secret types / redaction
         - a provider module
         - middleware
-        - providertest / reconcilevet
+        - providertest / mamoritest
+        - cli
         - docs / examples
     validations:
       required: true

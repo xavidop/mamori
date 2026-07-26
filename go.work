@@ -36,8 +36,6 @@ use (
 	./providers/unleash
 	./providers/vault
 	./server
-	./tools/reconcilevet
-	./tools/sourcetag
 	./x/authjwt
 	./x/otel
 )

@@ -58,7 +58,7 @@ Redaction runs once, where the `Report` is built, not per surface. The same deny
 These guarantees hold without any configuration on your part.
 
 - Sensitive values never pass through `fmt` or logs unredacted. `secret.String` / `secret.Bytes` render as `[REDACTED]`, and only `Reveal()` exposes the value.
-- `reconcilevet` catches sensitive refs stored in plain `string` / `[]byte` fields at `go vet` time.
+- [`mamori vet`](/docs/cli/vet/) catches sensitive refs stored in plain `string` / `[]byte` fields at `go vet` time.
 - `Zero()` is best-effort and documented as such: Go's GC may already have copied the value, so mamori makes no false promises about memory safety.
 - The `exec:` provider is off by default and must be enabled with `WithExecProvider()`. Refs are never interpolated from other resolved values, so there are no injection chains.
 - Providers must not log payloads; the conformance kit enforces this with a log-capture assertion.
@@ -85,7 +85,7 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 
 ## Releases and versioning
 
-Core releases are automated from [Conventional Commits](https://www.conventionalcommits.org/). When commits land on `main`, **semantic-release** decides the next version (`fix:` -> patch, `feat:` -> minor, breaking -> major), updates the changelog, and creates the `vX.Y.Z` tag; **GoReleaser** then builds the `reconcilevet` binary and publishes the GitHub Release with checksums, an SBOM, and SLSA provenance.
+Core releases are automated from [Conventional Commits](https://www.conventionalcommits.org/). When commits land on `main`, **semantic-release** decides the next version (`fix:` -> patch, `feat:` -> minor, breaking -> major), updates the changelog, and creates the `vX.Y.Z` tag; **GoReleaser** then builds the `mamori` CLI binary and publishes the GitHub Release with checksums, an SBOM, and SLSA provenance.
 
 Modules are versioned with semantic-version git tags. The core module tags as `v0.1.0`; each submodule tags with its path prefix:
 

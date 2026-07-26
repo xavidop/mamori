@@ -2,33 +2,22 @@
 #
 # Library modules (core and providers/*) are released via semver git tags and
 # consumed by `go get`; there is nothing to "build" for them. GoReleaser here
-# builds and releases the two shipped binaries - the reconcilevet analyzer and
-# the mamori CLI - with checksums, a changelog, and (in CI) SLSA provenance.
-# The mamori CLI is additionally published to a Homebrew tap (see brews:
-# below) so `brew install xavidop/tap/mamori` works.
+# builds and releases the one shipped binary - the mamori CLI - with checksums,
+# a changelog, and (in CI) SLSA provenance. The CLI is dual-mode: it is both
+# the `mamori` command and a `go vet` tool (`go vet -vettool=mamori`), so the
+# `mamori vet` analyzer ships inside it rather than as a separate binary. The
+# CLI is additionally published to a Homebrew tap (see brews: below) so
+# `brew install xavidop/tap/mamori` works.
 version: 2
 
 project_name: mamori
 
-# No before-hooks: GoReleaser's build step runs `go build` in tools/reconcilevet
-# and cmd/mamori with GOWORK=off (see builds[].env below), which resolves and
-# downloads each module's own deps. A `go mod download` hook is both redundant
-# and awkward here (hooks are exec'd without a shell, so an env-var prefix is
-# not honored).
+# No before-hooks: GoReleaser's build step runs `go build` in cmd/mamori with
+# GOWORK=off (see builds[].env below), which resolves and downloads the module's
+# own deps. A `go mod download` hook is both redundant and awkward here (hooks
+# are exec'd without a shell, so an env-var prefix is not honored).
 
 builds:
-  - id: reconcilevet
-    dir: tools/reconcilevet
-    main: ./cmd/reconcilevet
-    binary: reconcilevet
-    env:
-      - CGO_ENABLED=0
-      - GOWORK=off
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
   - id: mamori
     dir: cmd/mamori
     main: .
@@ -43,12 +32,6 @@ builds:
       - -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
 archives:
-  - id: reconcilevet
-    ids: [reconcilevet]
-    name_template: "reconcilevet_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        formats: [zip]
   - id: mamori
     ids: [mamori]
     name_template: "mamori_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -101,15 +84,15 @@ release:
     **Full module docs:** https://mamorigo.dev
 
     Library modules are consumed via `go get github.com/xavidop/mamori@{{ .Tag }}`.
-    This release also ships the `reconcilevet` analyzer and `mamori` CLI
-    binaries above. Install the CLI via `brew install xavidop/tap/mamori` or
-    `go install github.com/xavidop/mamori/cmd/mamori@latest`.
+    This release ships the `mamori` CLI binary above. It is dual-mode: it works
+    as a `go vet` tool too (`go vet -vettool=$(which mamori) ./...`), which runs
+    the `mamori vet` analyzer. Install the CLI via `brew install
+    xavidop/tap/mamori` or `go install github.com/xavidop/mamori/cmd/mamori@latest`.
 
-# Publishes the mamori CLI archive to a Homebrew tap. Only the mamori
-# archive (ids: [mamori]) is shipped as a formula; reconcilevet is not
-# published to the tap, since it is a go-vet tool most operators install via
-# `go install`, not `brew install`, and installing it into a mamori formula
-# would make "brew install mamori" ship a second, unrelated binary.
+# Publishes the mamori CLI archive to a Homebrew tap. The CLI is the only
+# shipped binary, so it is the only formula. It doubles as a go-vet tool
+# (`go vet -vettool=$(which mamori)`), so installing mamori is all an operator
+# needs for both the CLI and the `mamori vet` analyzer.
 brews:
   - name: mamori
     ids: [mamori]
