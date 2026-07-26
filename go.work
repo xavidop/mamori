@@ -2,6 +2,7 @@ go 1.26.5
 
 use (
 	.
+	./cmd/mamori
 	./providers/aws
 	./providers/azblob
 	./providers/azure
@@ -36,5 +37,6 @@ use (
 	./providers/vault
 	./server
 	./tools/reconcilevet
+	./tools/sourcetag
 	./x/otel
 )

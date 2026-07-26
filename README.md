@@ -158,6 +158,18 @@ For a pre-deploy check, `mamori.Doctor[Config](ctx, opts...)` resolves every fie
 
 [`server/`](server/) is a separate module: a standalone process that fronts a fixed, operator-declared table of name-to-ref bindings (`server.Bind`/`server.BindFile` - never a client-supplied ref) and serves resolved values to authenticated, authorized callers over Unix sockets and TLS TCP, under a mandatory `Policy` and `Authenticator`. It reuses the same `Authenticator`/`Identity` as the admin endpoint above, plus a Unix-socket-only `PeerCred` scheme authenticated by kernel-verified uid/gid. It is deliberately the highest-blast-radius component in this project - it concentrates every backend credential its bindings touch into one process - so read [the docs](https://mamorigo.dev/docs/server) before deploying one, not just the quick start.
 
+## CLI
+
+[`cmd/mamori`](cmd/mamori/) is a standalone CLI with two halves that never mix: `explain`/`schema`/`policy` statically read your Go source and never resolve anything (struct field tables, JSON Schema, least-privilege IAM/GCP/ExternalSecret artifacts), while `doctor`/`status` are thin clients of a running process's admin endpoint (`WithAdminHTTP` above), exiting `0`-`4` so a script can tell a broken config apart from one it merely couldn't reach.
+
+```bash
+brew install xavidop/tap/mamori
+# or
+go install github.com/xavidop/mamori/cmd/mamori@latest
+```
+
+See [mamorigo.dev/docs/cli](https://mamorigo.dev/docs/cli) for the full command reference.
+
 ## Documentation
 
 - 📖 **Docs site:** https://mamorigo.dev

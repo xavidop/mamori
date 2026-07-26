@@ -1,0 +1,110 @@
+[
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "example.com/fixture.Config",
+    "type": "object",
+    "properties": {
+      "LogLevel": {
+        "type": "string"
+      },
+      "APIKey": {
+        "type": "string"
+      },
+      "DBHost": {
+        "type": "string"
+      },
+      "Port": {
+        "type": "string",
+        "default": "8080"
+      },
+      "Workers": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 256,
+        "default": 4
+      },
+      "Level": {
+        "type": "string",
+        "enum": [
+          "debug",
+          "info",
+          "warn",
+          "error"
+        ]
+      },
+      "Region": {
+        "type": "string"
+      },
+      "ServiceName": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 64
+      },
+      "RequestTimeout": {
+        "type": "string"
+      },
+      "GCPSecret": {
+        "type": "string"
+      },
+      "Redis": {
+        "type": "object",
+        "properties": {
+          "Addr": {
+            "type": "string"
+          },
+          "Password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "Addr",
+          "Password"
+        ]
+      }
+    },
+    "required": [
+      "APIKey",
+      "DBHost",
+      "GCPSecret",
+      "Level",
+      "LogLevel",
+      "Region",
+      "RequestTimeout",
+      "ServiceName"
+    ]
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "example.com/fixture.RedisConfig",
+    "type": "object",
+    "properties": {
+      "Addr": {
+        "type": "string"
+      },
+      "Password": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "Addr",
+      "Password"
+    ]
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "example.com/fixture.ServerConfig",
+    "type": "object",
+    "properties": {
+      "Host": {
+        "type": "string"
+      },
+      "Port": {
+        "type": "string",
+        "default": "9090"
+      }
+    },
+    "required": [
+      "Host"
+    ]
+  }
+]

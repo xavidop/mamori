@@ -1,0 +1,6 @@
+{
+  "role": "roles/secretmanager.secretAccessor",
+  "resources": [
+    "projects/acme-prod/secrets/db-password"
+  ]
+}

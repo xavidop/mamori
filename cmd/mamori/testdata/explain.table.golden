@@ -1,0 +1,24 @@
+example.com/fixture.Config
+FIELD           TYPE           CHAIN                               DEFAULT  OPTIONAL  SENSITIVE
+LogLevel        string         env:LOG_LEVEL                       -        false     false
+APIKey          secret.String  aws-sm://prod/api#key               -        false     true
+DBHost          string         env:DB_HOST, aws-sm://prod/db#host  -        false     true
+Port            string         env:PORT                            8080     true      false
+Workers         int            env:WORKERS                         4        false     false
+Level           string         env:LEVEL                           -        false     false
+Region          string         env:REGION                          -        false     false
+ServiceName     string         env:SERVICE_NAME                    -        false     false
+RequestTimeout  string         aws-ps://prod/app/config#timeout    -        false     false
+GCPSecret       string         gcp-sm://acme-prod/db-password      -        false     true
+Redis.Addr      string         env:REDIS_ADDR                      -        false     false
+Redis.Password  secret.String  vault://kv/redis#password           -        false     true
+
+example.com/fixture.RedisConfig
+FIELD     TYPE           CHAIN                      DEFAULT  OPTIONAL  SENSITIVE
+Addr      string         env:REDIS_ADDR             -        false     false
+Password  secret.String  vault://kv/redis#password  -        false     true
+
+example.com/fixture.ServerConfig
+FIELD  TYPE    CHAIN            DEFAULT  OPTIONAL  SENSITIVE
+Host   string  env:SERVER_HOST  -        false     false
+Port   string  env:SERVER_PORT  9090     false     false

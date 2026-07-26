@@ -1,0 +1,245 @@
+[
+  {
+    "Package": "example.com/fixture",
+    "TypeName": "Config",
+    "Fields": [
+      {
+        "Path": "LogLevel",
+        "GoType": "string",
+        "Source": "env:LOG_LEVEL",
+        "Refs": [
+          "env:LOG_LEVEL"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "APIKey",
+        "GoType": "secret.String",
+        "Source": "aws-sm://prod/api#key",
+        "Refs": [
+          "aws-sm://prod/api#key"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": true,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "DBHost",
+        "GoType": "string",
+        "Source": "env:DB_HOST,aws-sm://prod/db#host",
+        "Refs": [
+          "env:DB_HOST",
+          "aws-sm://prod/db#host"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": true,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Port",
+        "GoType": "string",
+        "Source": "env:PORT",
+        "Refs": [
+          "env:PORT"
+        ],
+        "Default": "8080",
+        "HasDefault": true,
+        "Optional": true,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Workers",
+        "GoType": "int",
+        "Source": "env:WORKERS",
+        "Refs": [
+          "env:WORKERS"
+        ],
+        "Default": "4",
+        "HasDefault": true,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": "gte=1,lte=256"
+      },
+      {
+        "Path": "Level",
+        "GoType": "string",
+        "Source": "env:LEVEL",
+        "Refs": [
+          "env:LEVEL"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": "oneof=debug info warn error"
+      },
+      {
+        "Path": "Region",
+        "GoType": "string",
+        "Source": "env:REGION",
+        "Refs": [
+          "env:REGION"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": "required"
+      },
+      {
+        "Path": "ServiceName",
+        "GoType": "string",
+        "Source": "env:SERVICE_NAME",
+        "Refs": [
+          "env:SERVICE_NAME"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": "min=3,max=64"
+      },
+      {
+        "Path": "RequestTimeout",
+        "GoType": "string",
+        "Source": "aws-ps://prod/app/config#timeout",
+        "Refs": [
+          "aws-ps://prod/app/config#timeout"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "GCPSecret",
+        "GoType": "string",
+        "Source": "gcp-sm://acme-prod/db-password",
+        "Refs": [
+          "gcp-sm://acme-prod/db-password"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": true,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Redis.Addr",
+        "GoType": "string",
+        "Source": "env:REDIS_ADDR",
+        "Refs": [
+          "env:REDIS_ADDR"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Redis.Password",
+        "GoType": "secret.String",
+        "Source": "vault://kv/redis#password",
+        "Refs": [
+          "vault://kv/redis#password"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": true,
+        "OnFail": "keeplast",
+        "Validate": ""
+      }
+    ]
+  },
+  {
+    "Package": "example.com/fixture",
+    "TypeName": "RedisConfig",
+    "Fields": [
+      {
+        "Path": "Addr",
+        "GoType": "string",
+        "Source": "env:REDIS_ADDR",
+        "Refs": [
+          "env:REDIS_ADDR"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Password",
+        "GoType": "secret.String",
+        "Source": "vault://kv/redis#password",
+        "Refs": [
+          "vault://kv/redis#password"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": true,
+        "OnFail": "keeplast",
+        "Validate": ""
+      }
+    ]
+  },
+  {
+    "Package": "example.com/fixture",
+    "TypeName": "ServerConfig",
+    "Fields": [
+      {
+        "Path": "Host",
+        "GoType": "string",
+        "Source": "env:SERVER_HOST",
+        "Refs": [
+          "env:SERVER_HOST"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Port",
+        "GoType": "string",
+        "Source": "env:SERVER_PORT",
+        "Refs": [
+          "env:SERVER_PORT"
+        ],
+        "Default": "9090",
+        "HasDefault": true,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "default",
+        "Validate": ""
+      }
+    ]
+  }
+]
