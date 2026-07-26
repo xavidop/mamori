@@ -41,7 +41,7 @@ The operational layer is a second axis the alternatives mostly leave to you: kno
 
 ## What mamori is not
 
-- Not a secrets store: no encryption at rest, and no persistent state of its own. The optional [config server](server) is a read-through fan-out in front of your existing backends, not a place secrets live, so it does not make mamori a store.
+- Not a secrets store: no encryption at rest, and no persistent state of its own. The optional [config server](/docs/server/) is a read-through fan-out in front of your existing backends, not a place secrets live, so it does not make mamori a store.
 - Not a sync engine between stores (that is ESO / vals / teller territory).
 - Not a general feature-flag system, though a flags provider could be built on top.
 - Not cross-language: it is deliberately Go-idiomatic.

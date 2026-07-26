@@ -54,7 +54,7 @@ Config-style schemes (`env`, `file`, `consul`, `exec`, and the like) never carry
 
 ## Chain-aware analysis
 
-A `source` tag may hold a [precedence chain](../concepts#source-chains-and-precedence) of comma-separated refs rather than a single one, for example `env:TOKEN,vault://kv/token`. `reconcilevet` checks every ref in the chain, not just the first, so a sensitive ref anywhere in the chain is flagged even when it sits behind a non-sensitive primary as a lower-priority fallback:
+A `source` tag may hold a [precedence chain](/docs/concepts/source-chains/) of comma-separated refs rather than a single one, for example `env:TOKEN,vault://kv/token`. `reconcilevet` checks every ref in the chain, not just the first, so a sensitive ref anywhere in the chain is flagged even when it sits behind a non-sensitive primary as a lower-priority fallback:
 
 ```go
 type Config struct {
@@ -78,7 +78,7 @@ type Config struct {
 }
 ```
 
-The wrapper keeps the plaintext from leaking through `String()`, `fmt`, `encoding/json`, or `log/slog`. See [Secret types](../concepts#secret-types) for what the wrappers redact.
+The wrapper keeps the plaintext from leaking through `String()`, `fmt`, `encoding/json`, or `log/slog`. See [Secret types](/docs/concepts/secret-types/) for what the wrappers redact.
 
 ## Integrating into CI
 
@@ -106,5 +106,5 @@ GOWORK=off go test ./...
 
 ## See also
 
-- [Concepts: Secret types](../concepts#secret-types) for the redacting wrappers this analyzer steers you toward.
-- [Concepts: Source chains and precedence](../concepts#source-chains-and-precedence) for how a `source` tag chain is parsed.
+- [Concepts: Secret types](/docs/concepts/secret-types/) for the redacting wrappers this analyzer steers you toward.
+- [Concepts: Source chains and precedence](/docs/concepts/source-chains/) for how a `source` tag chain is parsed.

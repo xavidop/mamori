@@ -13,7 +13,7 @@ MODULES := $(shell find . -name go.mod \
 GO ?= go
 export GOWORK = off
 
-.PHONY: all test race lint vet fmt tidy build vet-analyzer work-sync site-dev site-build clean help
+.PHONY: all test race lint vet fmt tidy build vet-analyzer work-sync site-dev site-build site-linkcheck clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -55,6 +55,9 @@ site-dev: ## Run the docs site dev server
 
 site-build: ## Build the docs site
 	@cd site && npm install && npm run build
+
+site-linkcheck: ## Build the docs site and check for broken internal links
+	@cd site && npm install && npm run build && npm run linkcheck
 
 clean: ## Remove build artifacts
 	@rm -rf dist site/dist site/.astro /tmp/reconcilevet

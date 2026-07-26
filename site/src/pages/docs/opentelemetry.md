@@ -109,7 +109,7 @@ The instrument names are also exported as constants (`MetricResolveDuration`, `M
 
 `mamori.error.kind` is the useful differentiator for dashboards: it lets you separate a denied permission from a rate limit from a missing key rather than lumping every failure into one `error` bucket. It appears on both the `mamori.resolve.duration` histogram and the `mamori.resolve` span.
 
-It is present only when the resolve fails, carrying the same classification as `mamori.ErrorKind(err)` (see [Concepts](../concepts#error-kinds)):
+It is present only when the resolve fails, carrying the same classification as `mamori.ErrorKind(err)` (see [Concepts](/docs/concepts/error-kinds/)):
 
 - `not_found`
 - `permission_denied`
@@ -131,6 +131,6 @@ Because the bridge only implements the small `mamori.Meter` / `mamori.Tracer` in
 
 ## See also
 
-[Observability](../observability) covers `Status`, `Health`, and the pre-deploy `Doctor` check, which answer "what is true right now" where the spans and metrics here answer "what happened over time."
+[Observability](/docs/observability/) covers `Status`, `Health`, and the pre-deploy `Doctor` check, which answer "what is true right now" where the spans and metrics here answer "what happened over time."
 
-[Concepts](../concepts#error-kinds) covers the error-kind classification that `mamori.error.kind` carries.
+[Concepts](/docs/concepts/error-kinds/) covers the error-kind classification that `mamori.error.kind` carries.

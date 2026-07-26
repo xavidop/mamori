@@ -27,9 +27,15 @@ const groups = [
     label: "Start",
     items: [
       { slug: "", title: "Introduction" },
+      { slug: "quickstart", title: "Quick start" },
       { slug: "comparison", title: "Why mamori" },
       { slug: "concepts", title: "Concepts" },
+      { slug: "concepts/source-chains", title: "Source chains", indent: true },
+      { slug: "concepts/error-kinds", title: "Error kinds", indent: true },
+      { slug: "concepts/secret-types", title: "Secret types", indent: true },
       { slug: "usage", title: "Loading & watching" },
+      { slug: "usage/watching", title: "Watching", indent: true },
+      { slug: "usage/snapshots", title: "Snapshots & pinning", indent: true },
       { slug: "validation", title: "Validation" },
     ],
   },
@@ -37,7 +43,6 @@ const groups = [
     label: "Providers",
     items: [
       { slug: "providers", title: "Overview" },
-      { slug: "writing-a-provider", title: "Write a provider" },
       { subhead: "Built-in" },
       { slug: "providers/env", title: "env", indent: true },
       { slug: "providers/dotenv", title: "dotenv", indent: true },
@@ -85,36 +90,71 @@ const groups = [
     ],
   },
   {
+    label: "Observe",
+    items: [
+      { slug: "observability", title: "Observability" },
+      { slug: "observability/doctor", title: "Doctor", indent: true },
+      { slug: "observability/admin", title: "Admin endpoint", indent: true },
+      { slug: "opentelemetry", title: "OpenTelemetry" },
+    ],
+  },
+  {
+    label: "Serve",
+    items: [
+      { slug: "server", title: "Config server" },
+      { slug: "server/bindings", title: "Bindings", indent: true },
+      { slug: "server/transports", title: "Deploy & expose", indent: true },
+      { slug: "server/authorization", title: "Auth & policy", indent: true },
+      { slug: "server/wire-protocol", title: "Wire protocol", indent: true },
+      { slug: "auth", title: "Auth" },
+      { slug: "auth/schemes", title: "Schemes", indent: true },
+      { slug: "auth/custom", title: "Custom & rotation", indent: true },
+    ],
+  },
+  {
     label: "Extend",
     items: [
       { slug: "middleware", title: "Middleware" },
-      { slug: "opentelemetry", title: "OpenTelemetry" },
-      { slug: "observability", title: "Observability" },
-      { slug: "auth", title: "Auth" },
-      { slug: "server", title: "Config server" },
-      { slug: "testing", title: "Testing" },
-      { slug: "reconcilevet", title: "reconcilevet" },
+      { slug: "writing-a-provider", title: "Write a provider" },
+      { slug: "writing-a-provider/resolve", title: "Resolve & errors", indent: true },
+      { slug: "writing-a-provider/capabilities", title: "Watch & batch", indent: true },
+      { slug: "writing-a-provider/conformance", title: "Conformance", indent: true },
+    ],
+  },
+  {
+    label: "Tooling",
+    items: [
       { slug: "cli", title: "CLI" },
+      { slug: "cli/explain", title: "explain", indent: true },
+      { slug: "cli/schema", title: "schema", indent: true },
+      { slug: "cli/policy", title: "policy", indent: true },
+      { slug: "cli/doctor-status", title: "doctor & status", indent: true },
+      { slug: "reconcilevet", title: "reconcilevet" },
+      { slug: "testing", title: "Testing" },
+      { slug: "skill", title: "Agent skill" },
     ],
   },
   {
     label: "More",
     items: [
-      { slug: "samples", title: "Samples" },
       { slug: "security", title: "Security & releases" },
       { slug: "getting-help", title: "Getting help" },
     ],
   },
 ];
 
+// Emit directory-style hrefs with a trailing slash (paired with
+// trailingSlash: "always" in astro.config) so relative links inside pages
+// resolve the same way no matter how the visitor arrived.
 const hrefFor = (slug?: string) => {
-  const p = (base + "docs/" + (slug ?? "")).replace(/\/+$/, "");
-  return p === "" ? "/" : p;
+  const s = slug ?? "";
+  return base + "docs/" + (s ? s + "/" : "");
 };
-const here = Astro.url.pathname.replace(/\/+$/, "") || "/";
+const norm = (p: string) => p.replace(/\/+$/, "") || "/";
+const here = norm(Astro.url.pathname);
 
 const flat = groups.flatMap((g) => g.items).filter((i) => typeof i.slug === "string");
-const idx = flat.findIndex((i) => hrefFor(i.slug) === here);
+const idx = flat.findIndex((i) => norm(hrefFor(i.slug)) === here);
 const prev = idx > 0 ? flat[idx - 1] : null;
 const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
 ---
@@ -142,10 +182,10 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
                     <li>
                       <a
                         href={hrefFor(i.slug)}
-                        aria-current={hrefFor(i.slug) === here ? "page" : undefined}
+                        aria-current={norm(hrefFor(i.slug)) === here ? "page" : undefined}
                         class:list={[
                           "toc__link",
-                          { "toc__link--active": hrefFor(i.slug) === here },
+                          { "toc__link--active": norm(hrefFor(i.slug)) === here },
                           { "toc__link--indent": i.indent },
                         ]}
                       >
@@ -289,8 +329,16 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
   }
 
   .doc {
-    max-width: 74ch;
+    max-width: 880px;
     font-size: 1.02rem;
+  }
+  /* Keep prose at a readable measure, but let tables, code, and diagrams use
+     the full content width so wide tables are not cramped. */
+  .doc > p,
+  .doc > ul,
+  .doc > ol,
+  .doc > blockquote {
+    max-width: 72ch;
   }
   .doc > :first-child {
     margin-top: 0;
@@ -387,6 +435,100 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     max-width: 100%;
     height: auto;
   }
+  /* Rendered diagrams are click-to-zoom. */
+  .doc pre.mermaid[data-processed="true"] {
+    position: relative;
+    cursor: zoom-in;
+  }
+  .mermaid-zoom {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    opacity: 0;
+    transition: opacity 0.18s var(--ease);
+    pointer-events: none;
+  }
+  .doc pre.mermaid[data-processed="true"]:hover .mermaid-zoom {
+    opacity: 1;
+  }
+
+  /* Full-screen diagram viewer (zoom + pan). */
+  .diagram-modal[hidden] {
+    display: none;
+  }
+  .diagram-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .diagram-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--ink) 78%, transparent);
+    backdrop-filter: blur(2px);
+  }
+  .diagram-modal__stage {
+    position: relative;
+    z-index: 1;
+    width: 94vw;
+    height: 88vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    cursor: grab;
+    touch-action: none;
+  }
+  .diagram-modal__stage:active {
+    cursor: grabbing;
+  }
+  .diagram-modal__stage svg {
+    max-width: 90vw;
+    max-height: 84vh;
+    height: auto;
+    transform-origin: center center;
+    will-change: transform;
+    background: var(--bg-2);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+  }
+  .diagram-modal__toolbar {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 2;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .diagram-modal__toolbar button {
+    min-width: 2.2rem;
+    height: 2.2rem;
+    padding: 0 0.7rem;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.18s var(--ease);
+  }
+  .diagram-modal__toolbar button:hover {
+    border-color: var(--green);
+  }
   .doc blockquote {
     margin: 1.4rem 0;
     padding: 0.6rem 1.1rem;
@@ -402,22 +544,23 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     width: 100%;
     border-collapse: collapse;
     margin: 1.2rem 0;
-    font-size: 0.9rem;
+    font-size: 0.86rem;
     display: block;
     overflow-x: auto;
   }
   .doc th,
   .doc td {
     text-align: left;
-    padding: 0.55rem 0.8rem;
+    padding: 0.5rem 0.6rem;
     border-bottom: 1px solid var(--line);
     color: var(--muted);
+    vertical-align: top;
   }
   .doc th {
     color: var(--ink);
     font-family: var(--font-mono);
-    font-size: 0.78rem;
-    letter-spacing: 0.03em;
+    font-size: 0.74rem;
+    letter-spacing: 0.02em;
   }
   .doc td code {
     white-space: nowrap;
@@ -592,6 +735,21 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
       });
     });
   }
+
+  // Keep your place in the sidebar across page loads: this is a multi-page
+  // site, so each navigation re-renders the nav scrolled to the top. Bring the
+  // active entry back into view within the nav's own scroll container (only the
+  // container scrolls, never the page), so the sidebar does not jump to the top
+  // every time you follow a link.
+  const tocInner = document.getElementById("toc-nav");
+  const activeLink = tocInner?.querySelector(".toc__link--active");
+  if (tocInner && activeLink) {
+    const c = tocInner.getBoundingClientRect();
+    const a = activeLink.getBoundingClientRect();
+    if (a.top < c.top || a.bottom > c.bottom) {
+      tocInner.scrollTop += a.top - c.top - c.height / 2 + a.height / 2;
+    }
+  }
 </script>
 
 <script>
@@ -668,8 +826,113 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     });
     try {
       await mermaid.run({ querySelector: "pre.mermaid" });
+      setupDiagramZoom();
     } catch (err) {
       console.error("mermaid render failed", err);
     }
+  }
+
+  // Click-to-maximize for rendered diagrams: a full-screen viewer with wheel /
+  // button zoom and drag-to-pan. Vanilla, no extra dependency.
+  function setupDiagramZoom() {
+    const diagrams = Array.from(
+      document.querySelectorAll('pre.mermaid[data-processed="true"]'),
+    ).filter((pre) => pre.querySelector("svg"));
+    if (!diagrams.length) return;
+
+    const modal = document.createElement("div");
+    modal.className = "diagram-modal";
+    modal.hidden = true;
+    modal.innerHTML =
+      '<div class="diagram-modal__backdrop" data-close></div>' +
+      '<div class="diagram-modal__toolbar">' +
+      '<button data-zoom-out aria-label="Zoom out">-</button>' +
+      '<button data-zoom-reset aria-label="Reset zoom">100%</button>' +
+      '<button data-zoom-in aria-label="Zoom in">+</button>' +
+      '<button data-close aria-label="Close viewer">Close</button>' +
+      "</div>" +
+      '<div class="diagram-modal__stage" data-stage></div>';
+    document.body.appendChild(modal);
+
+    const stage = modal.querySelector("[data-stage]") as HTMLElement;
+    let scale = 1,
+      tx = 0,
+      ty = 0,
+      dragging = false,
+      startX = 0,
+      startY = 0;
+
+    const apply = () => {
+      const svg = stage.firstElementChild as SVGElement | null;
+      if (svg) svg.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    };
+    const setScale = (next: number) => {
+      scale = Math.min(Math.max(next, 0.3), 8);
+      apply();
+    };
+    const open = (svg: SVGElement) => {
+      stage.innerHTML = "";
+      const clone = svg.cloneNode(true) as SVGElement;
+      clone.style.transform = "";
+      stage.appendChild(clone);
+      scale = 1;
+      tx = 0;
+      ty = 0;
+      apply();
+      modal.hidden = false;
+      document.body.style.overflow = "hidden";
+    };
+    const close = () => {
+      modal.hidden = true;
+      document.body.style.overflow = "";
+    };
+
+    diagrams.forEach((pre) => {
+      const hint = document.createElement("span");
+      hint.className = "mermaid-zoom";
+      hint.textContent = "click to zoom";
+      hint.setAttribute("aria-hidden", "true");
+      pre.appendChild(hint);
+      pre.addEventListener("click", () => {
+        const svg = pre.querySelector("svg") as SVGElement | null;
+        if (svg) open(svg);
+      });
+    });
+
+    modal.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", close));
+    modal.querySelector("[data-zoom-in]")?.addEventListener("click", () => setScale(scale * 1.25));
+    modal.querySelector("[data-zoom-out]")?.addEventListener("click", () => setScale(scale / 1.25));
+    modal.querySelector("[data-zoom-reset]")?.addEventListener("click", () => {
+      scale = 1;
+      tx = 0;
+      ty = 0;
+      apply();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (!modal.hidden && e.key === "Escape") close();
+    });
+    stage.addEventListener(
+      "wheel",
+      (e: WheelEvent) => {
+        e.preventDefault();
+        setScale(scale * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+      },
+      { passive: false },
+    );
+    stage.addEventListener("pointerdown", (e: PointerEvent) => {
+      dragging = true;
+      startX = e.clientX - tx;
+      startY = e.clientY - ty;
+      stage.setPointerCapture(e.pointerId);
+    });
+    stage.addEventListener("pointermove", (e: PointerEvent) => {
+      if (!dragging) return;
+      tx = e.clientX - startX;
+      ty = e.clientY - startY;
+      apply();
+    });
+    stage.addEventListener("pointerup", () => {
+      dragging = false;
+    });
   }
 </script>

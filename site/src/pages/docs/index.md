@@ -23,7 +23,7 @@ go get github.com/xavidop/mamori/providers/vault # vault://
 go get github.com/xavidop/mamori/providers/k8s   # k8s-secret://  k8s-cm://
 ```
 
-See the [Providers overview](providers) for the full list of schemes.
+See the [Providers overview](/docs/providers/) for the full list of schemes.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ func main() {
 }
 ```
 
-To react to changes at runtime instead of loading once, see [Loading & watching](usage).
+To react to changes at runtime instead of loading once, see [Loading & watching](/docs/usage/).
 
 ## How it works
 
@@ -82,11 +82,11 @@ The payoff: rotate a database password in Secrets Manager and your connection po
 
 ## Where to go next
 
-- **[Concepts](concepts):** refs, providers, the reconciler, and the full `source`/`default`/`validate` tag grammar.
-- **[Loading & watching](usage):** one-shot `Load` versus a live `Watch`, change events, source chains, and snapshot pinning.
-- **[Validation](validation):** the `validate:` rules applied on load and on every update.
-- **[Providers overview](providers):** every scheme, its watch strategy, and how to authenticate it.
-- **[Config server](server):** the opt-in module that serves resolved values to other callers behind mandatory auth.
-- **[CLI](cli):** `explain`, `schema`, and `policy` read your source statically; `doctor` and `status` probe a running process.
-- **[Observability](observability):** `Status`, `Health`, the pre-deploy `Doctor` check, and the admin HTTP endpoint.
-- **[Security](security):** secret hygiene, the two HTTP surfaces, and what `mamori` is deliberately not (it is not a secrets store).
+- **[Concepts](/docs/concepts/):** refs, providers, the reconciler, and the full `source`/`default`/`validate` tag grammar.
+- **[Loading & watching](/docs/usage/):** one-shot `Load` versus a live `Watch`, change events, source chains, and snapshot pinning.
+- **[Validation](/docs/validation/):** the `validate:` rules applied on load and on every update.
+- **[Providers overview](/docs/providers/):** every scheme, its watch strategy, and how to authenticate it.
+- **[Config server](/docs/server/):** the opt-in module that serves resolved values to other callers behind mandatory auth.
+- **[CLI](/docs/cli/):** `explain`, `schema`, and `policy` read your source statically; `doctor` and `status` probe a running process.
+- **[Observability](/docs/observability/):** `Status`, `Health`, the pre-deploy `Doctor` check, and the admin HTTP endpoint.
+- **[Security](/docs/security/):** secret hygiene, the two HTTP surfaces, and what `mamori` is deliberately not (it is not a secrets store).

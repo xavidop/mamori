@@ -13,6 +13,6 @@ title: Getting help
 
 ## Contributing
 
-Contributions are welcome, new providers especially. Read [CONTRIBUTING.md](https://github.com/xavidop/mamori/blob/main/CONTRIBUTING.md) and the [Write a provider guide](../writing-a-provider). A provider that passes the `providertest` conformance kit gets listed in the README with a badge.
+Contributions are welcome, new providers especially. Read [CONTRIBUTING.md](https://github.com/xavidop/mamori/blob/main/CONTRIBUTING.md) and the [Write a provider guide](/docs/writing-a-provider/). A provider that passes the `providertest` conformance kit gets listed in the README with a badge.
 
 Before filing a bug, please check these docs and existing issues. When you do file one, keep secret values out of it.

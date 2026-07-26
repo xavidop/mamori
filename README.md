@@ -170,6 +170,16 @@ go install github.com/xavidop/mamori/cmd/mamori@latest
 
 See [mamorigo.dev/docs/cli](https://mamorigo.dev/docs/cli) for the full command reference.
 
+## Agent skill
+
+Teach your AI coding agent (Claude Code, Cursor, Copilot, and others) how to use mamori with the shipped [Agent Skill](skills/mamori/):
+
+```bash
+npx skills add xavidop/mamori
+```
+
+See [mamorigo.dev/docs/skill](https://mamorigo.dev/docs/skill) for what it covers and manual install.
+
 ## Documentation
 
 - 📖 **Docs site:** https://mamorigo.dev

@@ -25,8 +25,8 @@ flowchart TD
   server -.->|highest blast radius| Risk2["Leaks the values themselves"]
 ```
 
-- **The admin endpoint** (`Handler`, `WithAdminHTTP`, see [HTTP exposure](../observability#serve-the-report-over-http)) is part of the core module and serves operational metadata only: a `Report` of field paths, provider schemes, refs with sensitive query options redacted, staleness, and error kinds. It cannot serve a configuration value. There is no route, under any option, that returns one: the response body is always `w.Status()`, which never carries a resolved value.
-- **The [config server](../server)** (the separate `server/` module) serves resolved values, the actual secret bytes, gated by a mandatory authorization `Policy` expressed in terms of the `Identity` an `Authenticator` returns (see [Auth](../auth)). It concentrates every backend credential its bindings touch into one process, which makes it the highest-blast-radius component in mamori: compromising it is worse than compromising any single consumer that would otherwise hold its own slice of those credentials. See the config server's [Blast radius](../server#blast-radius) section for the full accounting and its structural mitigations (no client-supplied refs, mandatory policy, mandatory auth and TLS over the network, no values in the audit log).
+- **The admin endpoint** (`Handler`, `WithAdminHTTP`, see [HTTP exposure](/docs/observability/admin/)) is part of the core module and serves operational metadata only: a `Report` of field paths, provider schemes, refs with sensitive query options redacted, staleness, and error kinds. It cannot serve a configuration value by construction, not by a check the handler could forget to make: the response body is always `w.Status()`, and a `Report` never carries a resolved value in the first place, so no route or option can return one even by mistake.
+- **The [config server](/docs/server/)** (the separate `server/` module) serves resolved values, the actual secret bytes, gated by a mandatory authorization `Policy` expressed in terms of the `Identity` an `Authenticator` returns (see [Auth](/docs/auth/)). It concentrates every backend credential its bindings touch into one process, which makes it the highest-blast-radius component in mamori: compromising it is worse than compromising any single consumer that would otherwise hold its own slice of those credentials. See the config server's [Blast radius](/docs/server/#blast-radius) section for the full accounting and its structural mitigations (no client-supplied refs, mandatory policy, mandatory auth and TLS over the network, no values in the audit log).
 
 Keep the two apart when reasoning about exposure. Pointing an unauthenticated admin endpoint at the public internet is a metadata leak, not a secret leak. That is still worth avoiding, but it is a categorically different mistake from misconfiguring the config server, which leaks the values themselves.
 
@@ -35,7 +35,7 @@ Keep the two apart when reasoning about exposure. Pointing an unauthenticated ad
 `WithAdminHTTP` starts with no `Authenticator` attached: any request that can reach the port gets the `Report`. Before exposing it beyond a single trusted host, do at least one of the following.
 
 - **Bind to localhost or a non-ingress port.** Use `WithAdminHTTP("127.0.0.1:9090")` rather than a port your load balancer or ingress controller forwards, so the endpoint is reachable only from the same host or network namespace.
-- **Require authentication.** Pass a shipped `Authenticator` scheme (or your own) as `WithAuth` to the admin handler (see [Auth](../auth)), so a request must present a credential.
+- **Require authentication.** Pass a shipped `Authenticator` scheme (or your own) as `WithAuth` to the admin handler (see [Auth](/docs/auth/)), so a request must present a credential.
 - **Layer `WithAdminTLS`** on top, so a credential sent to the endpoint (a bearer token, a basic-auth password) is never sent in the clear. `WithAdminTLS` has no effect without `WithAdminHTTP`.
 
 These combine. Bind to a non-ingress port and require auth when the endpoint has to be reachable from more than one host:
@@ -49,7 +49,9 @@ w, err := mamori.Watch[Config](ctx,
 
 ## Ref redaction
 
-Every `Report.Fields[i].Ref`, wherever it surfaces (`Status()`, `Doctor`, or the admin HTTP endpoint), has a fixed denylist of query-option names redacted before it can leave the process: `token`, `password`, `secret`, `key`, `apikey`, `api_key`, `sas`, `credential`, `client_secret`, `secret_access_key`, `access_key`, `private_key`, `secret_key`, `pwd`, `passwd` (matched case-insensitively). The scheme, path, key, and any non-sensitive option are left intact so the ref stays useful for diagnostics; only the values behind those names are replaced with `secret.Redacted`. See [Observability](../observability) for the `Report` shape this applies to.
+Every `Report.Fields[i].Ref` has a fixed denylist of query-option names redacted before it can leave the process: `token`, `password`, `secret`, `key`, `apikey`, `api_key`, `sas`, `credential`, `client_secret`, `secret_access_key`, `access_key`, `private_key`, `secret_key`, `pwd`, `passwd` (matched case-insensitively). The scheme, path, key, and any non-sensitive option are left intact so the ref stays useful for diagnostics; only the values behind those names are replaced with `secret.Redacted`.
+
+Redaction runs once, where the `Report` is built, not per surface. The same denylist therefore applies whether a ref leaves via `Status()`, `Doctor`, or the admin HTTP endpoint, so there is no path that emits an un-redacted ref. See [Observability](/docs/observability/) for the `Report` shape this applies to.
 
 ## Redaction and memory safety
 
@@ -63,7 +65,7 @@ These guarantees hold without any configuration on your part.
 
 ## `WithHistory` retains past secrets in memory
 
-`WithHistory(n)` (see [Loading & watching](../usage#retaining-snapshots-with-withhistory)) defaults to `0`: a `Watcher` normally keeps only its current, live snapshot. Turning it on trades that off against operability (being able to inspect what config looked like a few versions back, or `Pin` `Get()` to it) at a cost worth stating plainly.
+`WithHistory(n)` (see [Loading & watching](/docs/usage/snapshots/#retaining-snapshots-with-withhistory)) defaults to `0`: a `Watcher` normally keeps only its current, live snapshot. Turning it on trades that off against operability (being able to inspect what config looked like a few versions back, or `Pin` `Get()` to it) at a cost worth stating plainly.
 
 - Each retained `Snapshot[T]` holds a **full copy of `T`** as it was at that version, including every `secret.String` / `secret.Bytes` field's value at the time.
 - A secret that has since rotated is not gone from process memory just because it rotated: it stays reachable through `w.History()[i].Config` (or via `w.Pin` to that version) for as long as that snapshot sits inside the `n`-snapshot window.
@@ -79,7 +81,7 @@ Report vulnerabilities privately via [GitHub Security Advisories](https://github
 
 ## Out of scope
 
-`mamori` is not a secrets store and provides no encryption at rest. It is a library: it holds values in process memory only and writes nothing to disk. The core module's only server component is the optional, metadata-only admin HTTP endpoint above, which exposes no way to serve a configuration value. The separate [config server](../server) module does serve values, deliberately and behind mandatory auth and authz, but it is opt-in (a distinct module you must import and deploy) rather than something the core library does on your behalf. Protecting the backends it reads from (IAM policies, Vault ACLs, KMS keys) is your infrastructure's responsibility either way.
+`mamori` is not a secrets store and provides no encryption at rest. It is a library: it holds values in process memory only and writes nothing to disk. The core module's only server component is the optional, metadata-only admin HTTP endpoint above, which exposes no way to serve a configuration value. The separate [config server](/docs/server/) module does serve values, deliberately and behind mandatory auth and authz, but it is opt-in (a distinct module you must import and deploy) rather than something the core library does on your behalf. Protecting the backends it reads from (IAM policies, Vault ACLs, KMS keys) is your infrastructure's responsibility either way.
 
 ## Releases and versioning
 
@@ -101,8 +103,3 @@ go get github.com/xavidop/mamori/providers/aws@v0.1.0
 ```
 
 Each provider module keeps its own release cadence, so a breaking change in one SDK never forces a core release.
-
-## How it works
-
-- **The admin endpoint cannot serve a value by construction, not by a check the handler could forget to make.** Its response body is always `w.Status()`, and a `Report` never carries a resolved value in the first place, so no route or option can return one even by mistake.
-- **Ref redaction runs where the `Report` is built**, not per surface, so the same denylist applies whether the ref leaves via `Status()`, `Doctor`, or the admin HTTP endpoint. There is no path that emits an un-redacted ref.

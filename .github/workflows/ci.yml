@@ -104,3 +104,23 @@ jobs:
           go build -o "$RUNNER_TEMP/reconcilevet" ./cmd/reconcilevet
           cd "$GITHUB_WORKSPACE"
           go vet -vettool="$RUNNER_TEMP/reconcilevet" ./... ./examples/...
+
+  docs:
+    name: Docs build & link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install dependencies
+        working-directory: site
+        run: npm ci || npm install
+      - name: Build the docs site
+        working-directory: site
+        run: npm run build
+      - name: Check for broken internal links
+        working-directory: site
+        run: npm run linkcheck

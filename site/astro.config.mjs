@@ -30,6 +30,9 @@ function remarkMermaid() {
 export default defineConfig({
   site: "https://xavidop.github.io",
   base,
+  // Internal doc links are root-relative (/docs/...), so they resolve the same
+  // with or without a trailing slash; "ignore" lets the dev server serve both
+  // forms rather than 404-ing bare URLs.
   trailingSlash: "ignore",
   devToolbar: { enabled: false },
   build: { format: "directory" },
