@@ -50,7 +50,7 @@ jobs:
       # 1. Determine the next version, update CHANGELOG.md, create and push the tag.
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v6
         with:
           semantic_version: 24
           extra_plugins: |
