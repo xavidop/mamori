@@ -163,22 +163,17 @@ func vetCmd(args []string, stdout, stderr io.Writer) int {
 func parseVetArgs(args []string) (patterns []string, schemes string, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		switch {
-		case a == "--secret-schemes" || a == "-secret-schemes":
-			i++
-			if i >= len(args) {
-				return nil, "", fmt.Errorf("mamori vet: %s requires a value", a)
-			}
-			schemes = args[i]
-		case strings.HasPrefix(a, "--secret-schemes="):
-			schemes = strings.TrimPrefix(a, "--secret-schemes=")
-		case strings.HasPrefix(a, "-secret-schemes="):
-			schemes = strings.TrimPrefix(a, "-secret-schemes=")
-		case strings.HasPrefix(a, "-"):
-			return nil, "", fmt.Errorf("mamori vet: unknown flag %q", a)
-		default:
-			patterns = append(patterns, a)
+		if value, consumed, matchErr := matchSecretSchemes("vet", args, i); matchErr != nil {
+			return nil, "", matchErr
+		} else if consumed > 0 {
+			schemes = value
+			i += consumed - 1
+			continue
 		}
+		if strings.HasPrefix(a, "-") {
+			return nil, "", fmt.Errorf("mamori vet: unknown flag %q", a)
+		}
+		patterns = append(patterns, a)
 	}
 	if _, err := sourcetag.ParseSchemeList(schemes); err != nil {
 		return nil, "", fmt.Errorf("mamori vet: --secret-schemes: %w", err)

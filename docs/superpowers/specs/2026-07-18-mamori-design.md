@@ -81,13 +81,15 @@ mamori/
     onepassword/ go.mod          # op://                      (Connect HTTP)
     sops/        go.mod          # sops://                    (age/KMS + fsnotify)
   x/otel/        go.mod          # OTel Meter/Tracer bridge
-  tools/reconcilevet/ go.mod     # go vet analyzer (golang.org/x/tools)
+  cmd/mamori/    go.mod          # mamori CLI; internal/vetcheck holds the go vet
+                                 # analyzer (mamorivet, golang.org/x/tools),
+                                 # internal/sourcetag the shared tag parsing
   site/                          # Astro docs site
   .github/workflows/             # ci.yml, pages.yml, release.yml
   .goreleaser.yaml
 ```
 
-Each `providers/*`, `x/otel`, and `tools/reconcilevet` is its **own Go module**
+Each `providers/*`, `x/otel`, and `cmd/mamori` is its **own Go module**
 so cloud SDKs never leak into core consumers. `go.work` unifies them for local dev.
 
 ---
@@ -179,7 +181,7 @@ type Bytes struct { b []byte }              // same contract
 
 mapstructure decode hooks populate `secret.String`/`secret.Bytes` from a `Value`
 and set `Sensitive`. Assigning a sensitive ref to a plain `string`/`[]byte` field
-is flagged by `reconcilevet`.
+is flagged by `mamorivet`.
 
 ---
 
@@ -269,13 +271,15 @@ providers earn a registry badge.
 
 ---
 
-## 11. reconcilevet (`tools/reconcilevet`)
+## 11. mamorivet (`cmd/mamori/internal/vetcheck`)
 
 `analysis.Analyzer` flagging struct fields with a `source:` tag pointing at a
 secret-bearing scheme (`aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
 `k8s-secret`) whose Go type is plain `string`/`[]byte` instead of
-`secret.String`/`secret.Bytes`. Shipped as a binary; usable via
-`go vet -vettool=$(which reconcilevet)`.
+`secret.String`/`secret.Bytes`. It is not a separate binary: it lives inside
+the `mamori` CLI module and is reachable two ways, `mamori vet ./...` (a
+subcommand) and `go vet -vettool=$(which mamori) ./...` (the go vet tool
+protocol).
 
 ---
 
@@ -290,7 +294,7 @@ secret-bearing scheme (`aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
 
 ## 13. Security
 
-- Sensitive `Value`s never pass through `fmt`/logs unredacted; `reconcilevet`
+- Sensitive `Value`s never pass through `fmt`/logs unredacted; `mamorivet`
   flags sensitive-ref → non-secret-field assignments.
 - `Zero()` best-effort, GC caveats documented honestly.
 - `exec:` disabled by default; refs never interpolated from other resolved values
@@ -315,12 +319,13 @@ Actions. Built with the `frontend-design` skill for the "wow".
 ## 15. CI / release
 
 - `ci.yml`: matrix over all modules - `go test ./...`, `go vet`, race detector,
-  `golangci-lint`; runs `reconcilevet` on the examples.
+  `golangci-lint`; runs `mamori vet` on the examples.
 - `pages.yml`: build Astro site, deploy to GitHub Pages.
-- `release.yml` + `.goreleaser.yaml`: build `reconcilevet` binary for
-  linux/darwin/windows × amd64/arm64, changelog, checksums, SLSA provenance,
-  GitHub Release. Library modules release via semver git tags (`v0.1.0` core,
-  `providers/aws/v0.1.0` for submodules) - tagging scheme documented.
+- `release.yml` + `.goreleaser.yaml`: build the `mamori` CLI binary (which
+  carries the vet analyzer) for linux/darwin/windows × amd64/arm64, changelog,
+  checksums, SLSA provenance, GitHub Release. Library modules release via
+  semver git tags (`v0.1.0` core, `providers/aws/v0.1.0` for submodules) -
+  tagging scheme documented.
 
 ---
 
@@ -346,6 +351,6 @@ support. `runtimevar` bridge deferred (avoid muddying the provider story at laun
 1. **Core** (engine, secret, ref/registry, decode, env/file/exec, providertest,
    middleware) - locks the SPI. Sequential, test-first.
 2. **Provider modules** (fan out in parallel once SPI is frozen) + `x/otel` +
-   `reconcilevet`.
+   `cmd/mamori` (`mamorivet`).
 3. **CI / GoReleaser / Pages** wiring + `go.work`.
 4. **Astro docs site** (frontend-design skill).

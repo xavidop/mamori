@@ -21,7 +21,7 @@ import (
 func runVet(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	root := moduleRoot(t)
-	t.Chdir(filepath.Join(root, "testdata", "vet"))
+	enterFixtureModule(t, filepath.Join(root, "testdata", "vet"))
 	resetSecretSchemesFlag(t)
 
 	var outBuf, errBuf bytes.Buffer

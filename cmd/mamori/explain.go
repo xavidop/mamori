@@ -73,6 +73,13 @@ func parseExplainArgs(args []string) (patterns []string, typeName string, jsonOu
 	var extra string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if value, consumed, matchErr := matchSecretSchemes("explain", args, i); matchErr != nil {
+			return nil, "", false, nil, matchErr
+		} else if consumed > 0 {
+			extra = value
+			i += consumed - 1
+			continue
+		}
 		switch {
 		case a == "--json" || a == "-json":
 			jsonOut = true
@@ -86,16 +93,6 @@ func parseExplainArgs(args []string) (patterns []string, typeName string, jsonOu
 			typeName = strings.TrimPrefix(a, "--type=")
 		case strings.HasPrefix(a, "-type="):
 			typeName = strings.TrimPrefix(a, "-type=")
-		case a == "--secret-schemes" || a == "-secret-schemes":
-			i++
-			if i >= len(args) {
-				return nil, "", false, nil, fmt.Errorf("mamori explain: %s requires a value", a)
-			}
-			extra = args[i]
-		case strings.HasPrefix(a, "--secret-schemes="):
-			extra = strings.TrimPrefix(a, "--secret-schemes=")
-		case strings.HasPrefix(a, "-secret-schemes="):
-			extra = strings.TrimPrefix(a, "-secret-schemes=")
 		case strings.HasPrefix(a, "-"):
 			return nil, "", false, nil, fmt.Errorf("mamori explain: unknown flag %q", a)
 		default:
@@ -103,13 +100,9 @@ func parseExplainArgs(args []string) (patterns []string, typeName string, jsonOu
 		}
 	}
 
-	if extra != "" {
-		parsed, perr := sourcetag.ParseSchemeList(extra)
-		if perr != nil {
-			return nil, "", false, nil, fmt.Errorf("mamori explain: --secret-schemes: %w", perr)
-		}
-		schemes = sourcetag.DefaultSecretSchemes()
-		schemes.Add(parsed...)
+	schemes, err = secretSchemeSet("explain", extra)
+	if err != nil {
+		return nil, "", false, nil, err
 	}
 	return patterns, typeName, jsonOut, schemes, nil
 }

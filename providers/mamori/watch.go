@@ -62,6 +62,12 @@ const (
 // With several replicas configured (Config.Endpoints), each reconnect moves
 // on to the next endpoint in the list rather than redialing the one that just
 // dropped; see watchLoop for the rotation and how it interacts with backoff.
+// Because those replicas watch upstream on independent schedules, a reconnect
+// can land on one that is a poll cycle behind, so every forwarded update is
+// first checked against the newest one already delivered for that binding and
+// dropped if it is meaningfully older - see freshnessGuard in freshness.go for
+// that guard, what it deliberately does not do, and the clock-skew assumption
+// it rests on.
 //
 // The binding name is ref.Path, exactly as for Resolve and ResolveBatch (see
 // Resolve's doc comment for why a mamori:// ref's path is always a binding
@@ -131,6 +137,15 @@ func (p *Provider) watchLoop(ctx context.Context, name string, ch chan mamori.Up
 		endpoints = []endpoint{{}}
 	}
 
+	// The freshness guard is created HERE, outside the loop, and is the one
+	// piece of watch state that deliberately OUTLIVES a connection. Resetting
+	// it per connection would leave it empty at exactly the moment it is
+	// needed: a reconnect rotating onto a laggier replica is the whole reason
+	// it exists (see freshnessGuard). It belongs to this goroutine alone and
+	// is passed down the call stack rather than stored on the Provider, since
+	// two concurrent watches must not share watermarks.
+	guard := newFreshnessGuard()
+
 	backoff := watchBackoffFloor
 	// current indexes the endpoint this iteration dials; it advances by one,
 	// wrapping, after every attempt.
@@ -140,7 +155,7 @@ func (p *Provider) watchLoop(ctx context.Context, name string, ch chan mamori.Up
 			return
 		}
 
-		established := p.watchOnce(ctx, endpoints[current], name, ch)
+		established := p.watchOnce(ctx, endpoints[current], name, ch, guard)
 		if ctx.Err() != nil {
 			return
 		}
@@ -185,7 +200,11 @@ func (p *Provider) watchLoop(ctx context.Context, name string, ch chan mamori.Up
 // later ends. A post-connect disconnect (EOF, a read error) is NOT itself
 // reported as an Update - see readSSE's doc comment for why - it only ends
 // this call so watchLoop can rotate on, back off, and reconnect.
-func (p *Provider) watchOnce(ctx context.Context, ep endpoint, name string, ch chan<- mamori.Update) (established bool) {
+//
+// guard is the watch's freshness guard, owned by watchLoop and passed through
+// untouched: this connection is one of many it outlives, so watchOnce never
+// creates, resets, or inspects it.
+func (p *Provider) watchOnce(ctx context.Context, ep endpoint, name string, ch chan<- mamori.Update, guard *freshnessGuard) (established bool) {
 	q := url.Values{}
 	q.Set("name", name)
 
@@ -224,7 +243,7 @@ func (p *Provider) watchOnce(ctx context.Context, ep endpoint, name string, ch c
 	stop := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
 	defer stop()
 
-	readSSE(ctx, resp.Body, name, ch)
+	readSSE(ctx, resp.Body, name, ch, guard)
 	return true
 }
 
@@ -279,7 +298,7 @@ func watchConnectError(name string, resp *http.Response) error {
 // (incomplete) frame is discarded rather than delivered, so the connection
 // tears down and watchLoop reconnects with backoff instead of the goroutine
 // hanging onto an ever-growing dataLines slice forever.
-func readSSE(ctx context.Context, body io.Reader, name string, ch chan<- mamori.Update) {
+func readSSE(ctx context.Context, body io.Reader, name string, ch chan<- mamori.Update, guard *freshnessGuard) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, sseScanInitialBuf), sseScanMaxLine)
 
@@ -293,7 +312,7 @@ func readSSE(ctx context.Context, body io.Reader, name string, ch chan<- mamori.
 		switch {
 		case line == "":
 			if event != "" || dataLines != nil {
-				if !dispatchSSEFrame(ctx, name, event, dataLines, ch) {
+				if !dispatchSSEFrame(ctx, name, event, dataLines, ch, guard) {
 					return // ctx is done; sendUpdate already observed it
 				}
 			}
@@ -342,7 +361,12 @@ func readSSE(ctx context.Context, body io.Reader, name string, ch chan<- mamori.
 // did not actually send. A frame whose data fails to decode is dropped the
 // same way, rather than tearing down an otherwise-healthy stream over one
 // bad frame.
-func dispatchSSEFrame(ctx context.Context, name, event string, dataLines []string, ch chan<- mamori.Update) bool {
+//
+// This is also where the freshness guard applies, and only to "update"
+// frames: an "error" frame is a live signal about the CURRENT connection, not
+// a value, so it can never be out of order and is always forwarded. See
+// freshnessGuard for what the guard does with an update.
+func dispatchSSEFrame(ctx context.Context, name, event string, dataLines []string, ch chan<- mamori.Update, guard *freshnessGuard) bool {
 	data := strings.Join(dataLines, "\n")
 
 	switch event {
@@ -351,17 +375,49 @@ func dispatchSSEFrame(ctx context.Context, name, event string, dataLines []strin
 		if err := json.Unmarshal([]byte(data), &vb); err != nil {
 			return true
 		}
+
+		// The guard is keyed on the name the FRAME carries, not the name this
+		// call was subscribed with, because one connection can carry frames
+		// for several bindings and a lagging one must not hold back the
+		// others. A frame that omits its name (no server on this wire does,
+		// but a malformed one could) is attributed to the subscribed name,
+		// which is the only binding this connection ever asked about.
+		frameName := vb.Name
+		if frameName == "" {
+			frameName = name
+		}
+		if !guard.allows(frameName, vb.ResolvedAt) {
+			// This value predates one already delivered for the same binding:
+			// the connection has almost certainly been re-established against
+			// a replica that is a poll cycle behind. Drop the frame and keep
+			// reading - the stream itself is perfectly healthy, and this
+			// replica will send a newer frame once it catches up.
+			return true
+		}
+
 		var notAfter time.Time
 		if vb.NotAfter != nil {
 			notAfter = *vb.NotAfter
 		}
-		return sendUpdate(ctx, ch, mamori.Update{Value: mamori.Value{
+		// vb.Stale is deliberately not consulted: a last-known-good value
+		// being served while upstream is failing is still a real, usable
+		// value, and suppressing it would leave the caller with nothing at
+		// all. It is dropped here for the same reason vb.Kind is dropped in
+		// resolveOnce - mamori.Value has no field to carry it.
+		if !sendUpdate(ctx, ch, mamori.Update{Value: mamori.Value{
 			Bytes:     vb.Bytes,
 			Version:   vb.Version,
 			Sensitive: vb.Sensitive,
 			NotAfter:  notAfter,
 			Metadata:  vb.Metadata,
-		}})
+		}}) {
+			return false
+		}
+		// Recorded only now, after the update has actually reached the
+		// caller: a watermark raised by a value nobody received would hide
+		// every later value dated before it.
+		guard.record(frameName, vb.ResolvedAt)
+		return true
 
 	case "error":
 		var vb valueBody

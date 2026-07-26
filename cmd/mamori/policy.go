@@ -21,7 +21,7 @@ import (
 	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
-const policyUsage = `usage: mamori policy [patterns...] [--type=Name] --format=<f>
+var policyUsage = `usage: mamori policy [patterns...] [--type=Name] --format=<f> [--secret-schemes=list]
 
 Policy reads Go source (via golang.org/x/tools/go/packages) and emits a
 least-privilege access artifact derived from each source: tagged config
@@ -33,6 +33,9 @@ clearly-marked placeholders (see below) for the operator to fill in.
   patterns   Go package patterns to load (default: the current directory,
              same as omitting a pattern to "go build"). Example: ./...
   --type     only consider refs from the struct type with this name
+  --secret-schemes  comma-separated extra schemes to treat as secret-bearing,
+             added to the built-in set. Use this for a custom provider, e.g.
+             --secret-schemes=mysecrets,corp-kv
   --format   required; one of:
                aws-iam           an IAM policy document granting
                                   secretsmanager:GetSecretValue on every
@@ -83,7 +86,7 @@ var supportedPolicyFormats = []string{formatAWSIAM, formatGCP, formatExternalSec
 // successful run that produced a valid, if empty, artifact -- see
 // policyUsage).
 func policyCmd(args []string, stdout, stderr io.Writer) int {
-	patterns, typeName, format, err := parsePolicyArgs(args)
+	patterns, typeName, format, schemes, err := parsePolicyArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		_, _ = fmt.Fprint(stderr, policyUsage)
@@ -96,7 +99,7 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	structs, err := Extract(patterns, typeName, nil)
+	structs, err := Extract(patterns, typeName, schemes)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori policy: %v\n", err)
 		return 1
@@ -136,14 +139,24 @@ func isSupportedPolicyFormat(format string) bool {
 // flags. It scans by recognized flag shape rather than using flag.FlagSet,
 // so patterns and flags may appear in either order, matching
 // parseExplainArgs/parseSchemaArgs (explain.go, schema.go).
-func parsePolicyArgs(args []string) (patterns []string, typeName, format string, err error) {
+// The returned schemes is nil unless --secret-schemes was given (see
+// secretschemes.go), so the common case keeps using the built-in set.
+func parsePolicyArgs(args []string) (patterns []string, typeName, format string, schemes sourcetag.SchemeSet, err error) {
+	var extra string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if value, consumed, matchErr := matchSecretSchemes("policy", args, i); matchErr != nil {
+			return nil, "", "", nil, matchErr
+		} else if consumed > 0 {
+			extra = value
+			i += consumed - 1
+			continue
+		}
 		switch {
 		case a == "--type" || a == "-type":
 			i++
 			if i >= len(args) {
-				return nil, "", "", fmt.Errorf("mamori policy: %s requires a value", a)
+				return nil, "", "", nil, fmt.Errorf("mamori policy: %s requires a value", a)
 			}
 			typeName = args[i]
 		case strings.HasPrefix(a, "--type="):
@@ -153,7 +166,7 @@ func parsePolicyArgs(args []string) (patterns []string, typeName, format string,
 		case a == "--format" || a == "-format":
 			i++
 			if i >= len(args) {
-				return nil, "", "", fmt.Errorf("mamori policy: %s requires a value", a)
+				return nil, "", "", nil, fmt.Errorf("mamori policy: %s requires a value", a)
 			}
 			format = args[i]
 		case strings.HasPrefix(a, "--format="):
@@ -161,12 +174,16 @@ func parsePolicyArgs(args []string) (patterns []string, typeName, format string,
 		case strings.HasPrefix(a, "-format="):
 			format = strings.TrimPrefix(a, "-format=")
 		case strings.HasPrefix(a, "-"):
-			return nil, "", "", fmt.Errorf("mamori policy: unknown flag %q", a)
+			return nil, "", "", nil, fmt.Errorf("mamori policy: unknown flag %q", a)
 		default:
 			patterns = append(patterns, a)
 		}
 	}
-	return patterns, typeName, format, nil
+	schemes, err = secretSchemeSet("policy", extra)
+	if err != nil {
+		return nil, "", "", nil, err
+	}
+	return patterns, typeName, format, schemes, nil
 }
 
 // policyRefs buckets every ref collected from a set of StructInfo by

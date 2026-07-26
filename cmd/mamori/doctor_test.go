@@ -86,7 +86,7 @@ func TestDoctorJSONPassesBodyThroughUnchanged(t *testing.T) {
 func TestDoctorCompareDetectsDrift(t *testing.T) {
 	root := moduleRoot(t)
 	fixtureDir := filepath.Join(root, "testdata", "example")
-	t.Chdir(fixtureDir)
+	enterFixtureModule(t, fixtureDir)
 
 	structs, err := Extract([]string{"./..."}, "", nil)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestDoctorCompareDetectsDrift(t *testing.T) {
 func TestDoctorCompareNoDriftReportsMatch(t *testing.T) {
 	root := moduleRoot(t)
 	fixtureDir := filepath.Join(root, "testdata", "example")
-	t.Chdir(fixtureDir)
+	enterFixtureModule(t, fixtureDir)
 
 	structs, err := Extract([]string{"./..."}, "", nil)
 	if err != nil {

@@ -86,7 +86,8 @@ Precedence chains: a `source:` tag may list several refs comma-separated
 - `mamori explain ./...` - list every `source:` ref in a package's config structs.
 - `mamori schema ./...` - emit JSON Schema from field types and `validate:` tags.
 - `mamori policy ./... --format=aws-iam|gcp|external-secret` - least-privilege access artifact.
-- `mamori vet ./...` - flag secret-bearing sources stored in a plain `string`/`[]byte`. Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`. For a custom provider's scheme, add it: `mamori vet --secret-schemes=mysecrets ./...`.
+- `mamori vet ./...` - flag secret-bearing sources stored in a plain `string`/`[]byte`. Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`.
+- `--secret-schemes=mysecrets` - accepted by `explain`, `schema`, `policy`, `vet`, and `doctor --compare`; adds a custom provider's scheme to the built-in secret-bearing set so every command agrees on what is a secret.
 - `mamori doctor --endpoint <ep>` / `mamori status` - probe a running process's admin endpoint; exit codes 0 healthy, 1 unhealthy, 2 admin off, 3 unreachable, 4 auth failed.
 
 ## When helping a user

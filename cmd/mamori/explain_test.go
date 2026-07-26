@@ -25,6 +25,32 @@ func moduleRoot(t *testing.T) string {
 	return wd
 }
 
+// enterFixtureModule disables the Go workspace for the duration of the test
+// and moves into the fixture module at dir. Every helper that runs a static
+// command against a testdata fixture goes through it.
+//
+// The workspace part is not incidental. The fixture modules under testdata/
+// are deliberately absent from the repo's go.work, the same way the Makefile
+// and CI exclude testdata from module discovery. With a workspace active, go
+// refuses to load a package from inside a module the workspace does not list
+// ("directory prefix . does not contain modules listed in go.work"), and
+// since these commands resolve patterns relative to the process's working
+// directory, every fixture-based test would fail for a reason that has
+// nothing to do with the code under test. That is invisible to `make test`
+// and CI, which both set GOWORK=off globally, but it hits anyone running
+// `go test ./...` directly from an editor.
+//
+// Scoping it to the test (t.Setenv restores it on cleanup) rather than
+// changing the CLI keeps real behaviour untouched: a user running `mamori
+// explain` inside a workspace repo generally does want workspace resolution.
+func enterFixtureModule(t *testing.T, dir string) {
+	t.Helper()
+	// t.Setenv is incompatible with t.Parallel, which is why no fixture-based
+	// test may call it. They are all fast and IO-light, so nothing is lost.
+	t.Setenv("GOWORK", "off")
+	t.Chdir(dir)
+}
+
 // runExplain runs explainCmd against the fixture package (testdata/example)
 // and returns its stdout, stderr, and exit code. It changes the process
 // working directory to the fixture module for the duration of the test
@@ -34,7 +60,7 @@ func moduleRoot(t *testing.T) string {
 func runExplain(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	root := moduleRoot(t)
-	t.Chdir(filepath.Join(root, "testdata", "example"))
+	enterFixtureModule(t, filepath.Join(root, "testdata", "example"))
 
 	var outBuf, errBuf bytes.Buffer
 	code = explainCmd(args, &outBuf, &errBuf)

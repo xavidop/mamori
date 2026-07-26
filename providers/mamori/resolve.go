@@ -34,6 +34,26 @@ type valueBody struct {
 	Metadata  map[string]string `json:"metadata"`
 	Kind      string            `json:"kind,omitempty"`
 	Error     *errorDetail      `json:"error,omitempty"`
+
+	// ResolvedAt is when the replica that answered last successfully fetched
+	// THESE bytes from upstream, and Stale reports that it is serving them as
+	// last-known-good because upstream is currently failing. Both are the
+	// freshness half of the server's HA support and both are optional on the
+	// wire: a server that sends neither is a perfectly valid server, and every
+	// path below must keep working unchanged against one.
+	//
+	// ResolvedAt is a *time.Time for the same reason NotAfter is, but the
+	// distinction matters more here: it is the only way to tell "this server
+	// never sends resolved_at" (nil) from "this value was resolved at the zero
+	// time", and Watch's freshness guard keys its entire behavior off exactly
+	// that difference - see freshnessGuard in freshness.go.
+	//
+	// Only the watch path acts on either field. Resolve and ResolveBatch decode
+	// them and drop them, the same way they drop Kind: mamori.Value has nowhere
+	// to carry them, and a single request has no earlier answer to be out of
+	// order with anyway.
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	Stale      bool       `json:"stale,omitempty"`
 }
 
 // errorDetail is the wire shape of one error: Kind is a mamori.Kind's string

@@ -84,6 +84,16 @@ Credentials reuse the same `Authenticator` schemes the admin endpoint supports. 
 
 **Prefer the file/stdin forms.** `--bearer`/`--basic` put the credential in `os.Args`, visible to anything that can read this process's argv (e.g. `ps`). The `-file` forms (including `-` for stdin) keep the token out of both shell history and argv.
 
+## Custom provider schemes with --compare
+
+`--compare` is the only part of `doctor` that reads source, so it is the only part affected by the scheme set. If you [wrote your own provider](/docs/writing-a-provider/), name its scheme so drift detection classifies its fields as secrets:
+
+```bash
+mamori doctor --endpoint https://svc:9090 --compare ./... --secret-schemes=mysecrets
+```
+
+The flag is validated before any network call, so a typo fails immediately rather than after the round trip. See [`mamori vet`](/docs/cli/vet/#covering-a-custom-provider) for the built-in set.
+
 ## See also
 
 [CLI overview](/docs/cli/). [Observability](/docs/observability/) covers the `Report` shape these render; [Config server](/docs/server/) shares the same endpoint forms and auth schemes.

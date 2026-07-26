@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
-const schemaUsage = `usage: mamori schema [patterns...] [--type=Name]
+var schemaUsage = `usage: mamori schema [patterns...] [--type=Name] [--secret-schemes=list]
 
 Schema reads Go source (via golang.org/x/tools/go/packages) and emits a
 JSON Schema (draft 2020-12) derived from each source: tagged config
@@ -23,6 +25,10 @@ network calls, no secret managers contacted).
   patterns   Go package patterns to load (default: the current directory,
              same as omitting a pattern to "go build"). Example: ./...
   --type     only emit the schema for the struct type with this name
+  --secret-schemes  comma-separated extra schemes to treat as secret-bearing
+             when deciding which fields are sensitive, added to the built-in
+             set. Use this for a custom provider, e.g.
+             --secret-schemes=mysecrets,corp-kv
 
 Output shape: if exactly one struct qualifies (a --type filter narrowed it
 to one, or only one struct in the loaded packages carries a source: tag),
@@ -44,14 +50,14 @@ const jsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
 // os.Stdout/os.Stderr) and returns the process exit code: 0 on success, 1
 // on a usage or package-load error.
 func schemaCmd(args []string, stdout, stderr io.Writer) int {
-	patterns, typeName, err := parseSchemaArgs(args)
+	patterns, typeName, schemes, err := parseSchemaArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		_, _ = fmt.Fprint(stderr, schemaUsage)
 		return 1
 	}
 
-	structs, err := Extract(patterns, typeName, nil)
+	structs, err := Extract(patterns, typeName, schemes)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori schema: %v\n", err)
 		return 1
@@ -64,14 +70,24 @@ func schemaCmd(args []string, stdout, stderr io.Writer) int {
 // scans by recognized flag shape rather than using flag.FlagSet, so
 // patterns and flags may appear in either order, matching explainCmd's
 // parseExplainArgs (explain.go).
-func parseSchemaArgs(args []string) (patterns []string, typeName string, err error) {
+// The returned schemes is nil unless --secret-schemes was given (see
+// secretschemes.go), so the common case keeps using the built-in set.
+func parseSchemaArgs(args []string) (patterns []string, typeName string, schemes sourcetag.SchemeSet, err error) {
+	var extra string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if value, consumed, matchErr := matchSecretSchemes("schema", args, i); matchErr != nil {
+			return nil, "", nil, matchErr
+		} else if consumed > 0 {
+			extra = value
+			i += consumed - 1
+			continue
+		}
 		switch {
 		case a == "--type" || a == "-type":
 			i++
 			if i >= len(args) {
-				return nil, "", fmt.Errorf("mamori schema: %s requires a value", a)
+				return nil, "", nil, fmt.Errorf("mamori schema: %s requires a value", a)
 			}
 			typeName = args[i]
 		case strings.HasPrefix(a, "--type="):
@@ -79,12 +95,16 @@ func parseSchemaArgs(args []string) (patterns []string, typeName string, err err
 		case strings.HasPrefix(a, "-type="):
 			typeName = strings.TrimPrefix(a, "-type=")
 		case strings.HasPrefix(a, "-"):
-			return nil, "", fmt.Errorf("mamori schema: unknown flag %q", a)
+			return nil, "", nil, fmt.Errorf("mamori schema: unknown flag %q", a)
 		default:
 			patterns = append(patterns, a)
 		}
 	}
-	return patterns, typeName, nil
+	schemes, err = secretSchemeSet("schema", extra)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return patterns, typeName, schemes, nil
 }
 
 // writeSchema builds one schemaDoc per struct and writes them to stdout: a

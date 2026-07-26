@@ -10,6 +10,8 @@
 
 This implements spec section 10 (`docs/superpowers/specs/2026-07-24-operational-layer-design.md`). It is the most invasive change to core semantics in the whole spec, which is why it lands after the observability work that makes its behavior observable.
 
+> **Note (layout changed since this plan was executed):** `tools/reconcilevet` no longer exists; the analyzer now lives at `cmd/mamori/internal/vetcheck` inside the `cmd/mamori` CLI module (renamed `mamorivet`), reachable via `mamori vet ./...` or `go vet -vettool=$(which mamori) ./...`. Its site doc has moved accordingly to `site/src/pages/docs/cli/vet.md`. See `docs/superpowers/specs/2026-07-24-operational-layer-design.md` section 10.6 for the current description.
+
 ## Global Constraints
 
 - **Core dependencies frozen.** stdlib plus the four allowed deps. Nothing added.
@@ -265,31 +267,31 @@ fields watch exactly as before; goroutine hygiene holds.
 
 ---
 
-### Task 4: reconcilevet chain awareness
+### Task 4: mamorivet chain awareness
 
 **Files:**
-- Modify: `tools/reconcilevet/analyzer.go` (parse chains, not just single refs)
-- Test: `tools/reconcilevet/analyzer_test.go` + testdata
+- Modify: `cmd/mamori/internal/vetcheck/analyzer.go` (parse chains, not just single refs)
+- Test: `cmd/mamori/internal/vetcheck/analyzer_test.go` + testdata
 
 **Interfaces:**
 - Consumes: the chain tag syntax (Task 1).
-- Produces: a `reconcilevet` that flags a sensitive ref anywhere in a multi-ref tag.
+- Produces: a `mamorivet` that flags a sensitive ref anywhere in a multi-ref tag.
 
-**Why this is a correctness fix, not an enhancement.** `reconcilevet` flags a sensitive ref assigned to a plain `string` field. It currently parses a single ref per `source` tag. With chains, a tag like `source:"env:X,aws-sm://secret"` would have its sensitive `aws-sm://` ref SILENTLY IGNORED by the analyzer, so the vet check under-reports. A vet analyzer that quietly stops catching the thing it exists to catch is worse than one that errors. This task makes it parse every ref in the chain.
+**Why this is a correctness fix, not an enhancement.** `mamorivet` flags a sensitive ref assigned to a plain `string` field. It currently parses a single ref per `source` tag. With chains, a tag like `source:"env:X,aws-sm://secret"` would have its sensitive `aws-sm://` ref SILENTLY IGNORED by the analyzer, so the vet check under-reports. A vet analyzer that quietly stops catching the thing it exists to catch is worse than one that errors. This task makes it parse every ref in the chain.
 
 - [ ] **Step 1: Write the failing test**
 
-Add a testdata case with a chained sensitive ref on a plain `string` field (`source:"env:X,aws-sm://prod/db#password"`) and assert the analyzer flags it. Read how `tools/reconcilevet` shares tag-parsing (the spec notes tag parsing should be shared with the CLI; if the analyzer has its own parser, make it use the same scheme-comma split as `ParseRefs`, or replicate the split faithfully and note the duplication for the later shared-extraction work in the CLI plan).
+Add a testdata case with a chained sensitive ref on a plain `string` field (`source:"env:X,aws-sm://prod/db#password"`) and assert the analyzer flags it. Read how `cmd/mamori/internal/vetcheck` shares tag-parsing (the spec notes tag parsing should be shared with the CLI; if the analyzer has its own parser, make it use the same scheme-comma split as `ParseRefs`, or replicate the split faithfully and note the duplication for the later shared-extraction work in the CLI plan).
 
 - [ ] **Steps 2-4: Implement, run, stage**
 
 ```bash
-cd tools/reconcilevet && GOWORK=off go test ./...
+cd cmd/mamori && GOWORK=off go test ./internal/vetcheck/...
 make vet-analyzer
 ```
 
 ```
-fix(reconcilevet): flag sensitive refs anywhere in a source chain
+fix(mamorivet): flag sensitive refs anywhere in a source chain
 
 The analyzer parsed only the first ref of a source tag, so a sensitive ref in
 a later chain position was silently ignored and a plain string field bound to
@@ -303,7 +305,7 @@ it went unflagged. It now checks every ref in the chain.
 **Files:**
 - Modify: `site/src/pages/docs/concepts.md` (chain grammar, precedence, onfail, the %2C escape)
 - Modify: `site/src/pages/docs/usage.md` (chain + onfail examples)
-- Modify: `site/src/pages/docs/reconcilevet.md` (chain-aware)
+- Modify: `site/src/pages/docs/cli/vet.md` (chain-aware)
 - Modify: `README.md`
 
 - [ ] Document the chain grammar and precedence rules, the `onfail` policies (with `keeplast` as the default reproducing single-ref behavior), the comma-ambiguity rule and the `%2C` escape, and that every chain position is watched so precedence is live. State that availability fallback remains `middleware.Failover` (chains are precedence, not failover). Verify examples. `make site-build`. Stage.
@@ -312,7 +314,7 @@ it went unflagged. It now checks every ref in the chain.
 
 ## Self-Review
 
-**Spec coverage.** Implements spec section 10 in full: 10.1 syntax and 10.2 parsing (Task 1), 10.3 resolution and 10.4 failure policy (Task 2), 10.5 watch behavior and 10.6 ripple (Task 3), the `reconcilevet` correctness fix called out in 10.6 (Task 4), documentation (Task 5).
+**Spec coverage.** Implements spec section 10 in full: 10.1 syntax and 10.2 parsing (Task 1), 10.3 resolution and 10.4 failure policy (Task 2), 10.5 watch behavior and 10.6 ripple (Task 3), the `mamorivet` correctness fix called out in 10.6 (Task 4), documentation (Task 5).
 
 **Placeholders.** None. Task 1 gives full `ParseRefs`/`splitChain` code; Tasks 2-3 specify the shared `resolveChain`/winner logic and the exact engine rework with the single-ref invariant as the guardrail. Two steps flag a judgment call and require a report: Task 2's batch-grouping (full `(scheme, position)` grouping vs the documented single-ref-only fallback) and Task 3's runtime-env test mechanism.
 

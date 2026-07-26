@@ -82,8 +82,10 @@ Every value response is therefore dated:
 }
 ```
 
-- `resolved_at` is when *that replica* last fetched the bytes from upstream. Compare it against what you already hold, and ignore an answer that is older.
-- `stale` is `true` when the replica is serving its last-known-good value because upstream is currently failing. Prefer a replica that is not stale.
+- `resolved_at` is when *that replica* last fetched the bytes from upstream.
+- `stale` is `true` when the replica is serving its last-known-good value because upstream is currently failing.
+
+If you consume this with the [`mamori://` client](/docs/providers/mamori/), you get the protection for free: it tracks the newest `resolved_at` it has delivered per binding and **drops an update that is older**, so a watch that reconnects onto a laggier replica cannot hand your program a stale value dressed up as a change. Writing your own client is the only case where you need to compare the field yourself.
 
 Both are omitted when they do not apply, so a single-replica deployment sees the wire shape it always did. Note that `resolved_at` dates the *value*, not the last attempt: a failed refresh carries the timestamp forward with the bytes it belongs to, so it always tells you how old the data you were handed really is.
 

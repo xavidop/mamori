@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
 const doctorUsage = `usage: mamori doctor [--endpoint=<url>] [flags]
@@ -40,6 +41,10 @@ Doctor-specific flags:
                 source: refs from them (like "mamori explain") and flag any
                 field present in the source but missing from the live
                 report, or present live but not found in source (drift)
+  --secret-schemes
+                comma-separated extra schemes to treat as secret-bearing,
+                added to the built-in set. Only affects --compare, which is
+                the only part of doctor that reads source.
 
 Exit codes:
   0   the target process is healthy
@@ -67,8 +72,20 @@ func doctorCmd(args []string, stdout, stderr io.Writer) int {
 	lf.register(fs)
 	jsonOut := fs.Bool("json", false, "emit the raw admin Report JSON body unchanged")
 	compare := fs.String("compare", "", "space-separated Go package patterns to compare against the live report")
+	// --compare is the only part of doctor that reads source, so it is the
+	// only part that needs the scheme set (see secretschemes.go). Registering
+	// the flag here keeps the spelling identical to the static commands.
+	secretSchemes := fs.String("secret-schemes", "", "comma-separated extra schemes to treat as secret-bearing, added to the built-in set (only affects --compare)")
 
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	// Validate eagerly, before any network call: a typo in the scheme list
+	// should fail immediately rather than after the endpoint round trip.
+	schemes, err := secretSchemeSet("doctor", *secretSchemes)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
 
@@ -86,7 +103,7 @@ func doctorCmd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *compare != "" {
-		runCompare(stdout, stderr, strings.Fields(*compare), res.rep)
+		runCompare(stdout, stderr, strings.Fields(*compare), res.rep, schemes)
 	}
 
 	return res.exit
@@ -150,8 +167,8 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 // field is reported as missing from live: --compare still runs and still
 // reports what it can, rather than silently doing nothing just because the
 // live half of the comparison came back empty.
-func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report) {
-	structs, err := Extract(patterns, "", nil)
+func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report, schemes sourcetag.SchemeSet) {
+	structs, err := Extract(patterns, "", schemes)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mamori doctor --compare: %v\n", err)
 		return

@@ -16,7 +16,7 @@ import (
 // process's current working directory.
 func runPolicy(t *testing.T, fixtureDir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	t.Chdir(fixtureDir)
+	enterFixtureModule(t, fixtureDir)
 
 	var outBuf, errBuf bytes.Buffer
 	code = policyCmd(args, &outBuf, &errBuf)

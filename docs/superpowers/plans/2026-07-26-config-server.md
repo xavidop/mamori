@@ -39,7 +39,7 @@ This implements spec section 13. It builds on the `Authenticator` from `2026-07-
 - Modify: `go.mod` (promote `golang.org/x/sys` to direct)
 
 **Interfaces produced:**
-- `WatchRef(ctx context.Context, p Provider, ref Ref, opts ...Option) <-chan Update` — the watch-source selection (native `WatchableProvider.Watch` else `pollWatch`), extracted so the server can watch a single ref the same way the engine does.
+- `WatchRef(ctx context.Context, p Provider, ref Ref, opts ...Option) <-chan Update` - the watch-source selection (native `WatchableProvider.Watch` else `pollWatch`), extracted so the server can watch a single ref the same way the engine does.
 - `PeerCred(opts PeerCredOptions) Authenticator`, `PeerCredOptions{UIDs []int, GIDs []int}`.
 
 **WatchRef extraction.** The engine's `start` currently inlines: `if wp, isW := p.(WatchableProvider); isW { ch, werr := wp.Watch(ctx, ref); if werr != nil { src = pollWatch(...) } else { src = ch } } else { src = pollWatch(...) }`. Extract exactly that into `WatchRef`, and have `start` call it. This must be behavior-preserving: the full existing watch suite passes unchanged. `WatchRef` builds an `options` from `opts` for `pollWatch`'s clock/interval/jitter (read how `start` gets `e.o`; `WatchRef` needs the same, so it takes `...Option` and builds `defaultOptions()` + applies them, matching `Load`/`Watch`).

@@ -48,6 +48,16 @@ $ mamori schema ./... --type=Config
 
 A field is also `required` when it has no `default:` and is not `optional:"true"`. A `default:` tag becomes the schema's `default`, typed as a JSON number where the field is numeric.
 
+## Custom provider schemes
+
+Sensitivity is computed from the same [built-in scheme set `mamori vet` uses](/docs/cli/vet/#what-it-flags), which only knows the providers mamori ships. If you [wrote your own provider](/docs/writing-a-provider/), name its scheme so its fields are treated as secrets here too:
+
+```bash
+mamori schema --secret-schemes=mysecrets ./...
+```
+
+The flag adds to the built-in set rather than replacing it, takes a bare scheme token (not a full ref), and is accepted by `explain`, `schema`, `policy`, `vet`, and `doctor --compare`, so every command agrees on what counts as a secret.
+
 ## See also
 
 [`mamori explain`](/docs/cli/explain/) lists the same structs as a table. [CLI overview](/docs/cli/).

@@ -129,6 +129,18 @@ The connection is not assumed to stay up forever. The server drops the SSE strea
 
 A struct with several `mamori://` fields does not open several connections, either for a one-shot resolve or for `ResolveBatch`: `mamori.Load`/`mamori.Watch` group same-provider refs and this provider answers a batch with a single `POST /v1/values` request carrying every binding name at once, rather than one request per field.
 
+### Going backwards in time is prevented
+
+`Watch` reconnects on its own, and across [several replicas](#several-replicas) it rotates endpoints, so a reconnect can land on a replica whose copy of a binding is older. Left alone, that older value would arrive looking like a brand new change.
+
+It does not. The client tracks the newest `resolved_at` it has delivered for each binding and drops an update older than that watermark. The watermark is per binding name and **survives reconnects**, which is the whole point: the reconnect is exactly when the risk appears.
+
+Three deliberate details:
+
+- An update carrying no `resolved_at` is always forwarded, so an older server that does not send the field behaves exactly as before.
+- Error frames are never dropped. An error describes the connection right now and cannot be out of order.
+- Comparison is against wall clocks on different machines, so a one second tolerance absorbs ordinary clock skew. Replica lag is tens of seconds (the upstream poll interval) while NTP-synced hosts sit within milliseconds, so the band is far below the lag it is catching, and ties go to delivering the value rather than withholding it.
+
 ## Error classification
 
 Classification is a full passthrough, not just a "some backend, some error" mapping: the wire `kind` the config server reports is exactly the `mamori.Kind` its own upstream provider produced, and this client reconstructs the matching sentinel from it. Concretely:
@@ -140,6 +152,6 @@ Classification is a full passthrough, not just a "some backend, some error" mapp
 
 A batch (`ResolveBatch`) treats a hard per-name classified error (anything other than `not_found`) as a whole-call failure rather than silently dropping that one entry, since dropping it would let a struct field fall back to its zero value in place of a secret the caller was denied, or one that is genuinely unavailable - not something a per-ref `Resolve` of that same name would ever do either.
 
-Across replicas, a value response also carries `resolved_at` (when that replica last fetched the bytes from upstream) and `stale` (it is serving last-known-good while upstream fails). Because each replica watches on its own schedule, comparing `resolved_at` is how a client notices it reached a replica that is behind one it already spoke to. See [High availability](/docs/server/ha/).
+Across replicas, a value response also carries `resolved_at` (when that replica last fetched the bytes from upstream) and `stale` (it is serving last-known-good while upstream fails). Because each replica watches on its own schedule, these are what let a client tell that it reached a replica running behind one it already spoke to. See [High availability](/docs/server/ha/).
 
 See the config server's page for the full [`kind` field semantics](/docs/server/wire-protocol/#read-kind-on-a-success-fresh-vs-stale-but-serving), including the distinction between a failure `kind` and a successful-but-stale `kind` on a value that is still being served while its upstream is currently failing (this provider returns that stale value with a nil error, exactly as the server intends).

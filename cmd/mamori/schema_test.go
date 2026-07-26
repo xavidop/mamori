@@ -22,7 +22,7 @@ import (
 // wrong path.
 func runSchema(t *testing.T, fixtureDir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	t.Chdir(fixtureDir)
+	enterFixtureModule(t, fixtureDir)
 
 	var outBuf, errBuf bytes.Buffer
 	code = schemaCmd(args, &outBuf, &errBuf)

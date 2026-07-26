@@ -828,10 +828,10 @@ polled providers more API calls. This is documented, and a chain entry can set
 grouping now groups by `(scheme, chain position)`. `schemeForPath` returns the
 winning entry's scheme, so existing metric labels stay meaningful.
 
-`reconcilevet` (`tools/reconcilevet`) parses `source` tags and must learn chains,
-otherwise it silently stops flagging sensitive refs in multi-ref tags. This is a
-correctness fix, not an enhancement: a vet analyzer that quietly under-reports is
-worse than one that errors.
+`mamorivet` (`cmd/mamori/internal/vetcheck`) parses `source` tags and must learn
+chains, otherwise it silently stops flagging sensitive refs in multi-ref tags.
+This is a correctness fix, not an enhancement: a vet analyzer that quietly
+under-reports is worse than one that errors.
 
 ---
 
@@ -857,9 +857,10 @@ the CLI without violating decision D1: it never resolves anything itself.
 Struct discovery: a struct qualifies if any field carries a `source` tag.
 `--type=Config` narrows to a named type when a package has several.
 
-Tag parsing is shared with `reconcilevet` rather than duplicated. The shared
-logic moves to an internal package consumed by both, so chain support and the
-sensitivity heuristics cannot drift between the analyzer and the CLI.
+Tag parsing is shared with `mamorivet` rather than duplicated. The shared logic
+lives in `cmd/mamori/internal/sourcetag`, an internal package consumed by both,
+so chain support and the sensitivity heuristics cannot drift between the
+analyzer and the CLI.
 
 ### 11.2 Live commands
 
@@ -936,7 +937,7 @@ Released via the existing GoReleaser config, which gains a second build target.
 | `docs/usage.md` | Chain and `onfail` examples; `Status`/`Pin` in the watch walkthrough |
 | `docs/security.md` | The two-surface model and why it is two: admin serves metadata and can never serve values, the server serves values under policy and audit. The unauthenticated default of `WithAdminHTTP` and the recommendation to bind it to localhost or a non-ingress port. Ref redaction denylist. History secret-retention tradeoff. Server blast radius. |
 | `docs/writing-a-provider.md` | Error-kind mapping table, the `Fail` hook, the new required conformance case, and the "do not break the `errors.Is` chain" rule |
-| `docs/reconcilevet.md` | Chain-aware analysis |
+| `docs/cli/vet.md` | Chain-aware analysis |
 | `docs/providers/*.md` (31 pages) | Per-provider error-mapping table: backend error → mamori kind |
 | `docs/providers/index.md` | Conformance badge now covers error classification; `mamori://` added to the provider table as a native watch |
 | `docs/index.md` (non-goals) | The section 3 restatement: still not a secrets store, and why the server does not contradict that |
@@ -1245,7 +1246,7 @@ validates every other provider.
 | B | Report construction from a driven engine; `Age`/`Stale` recomputation against `FakeClock`; redaction of denylisted opts; concurrent `Status` under `-race` while the engine reconciles; handler routes and the 503 shape; a test asserting the route set is exactly `/` and `/healthz`, so no future change can add a value-bearing route without failing; a test seeding a distinctive secret into the config and asserting it appears nowhere in any admin response body; `Doctor` against `mamoritest` providers seeded with each failure kind. For `WithAdminHTTP`: no listener and no extra goroutine without the option (asserted with `goleak` plus a connect attempt on a pre-chosen port); a bind failure fails `Watch` and leaves no watcher running; `Close` releases the port, verified by rebinding the same address afterward |
 | C | The kit tests itself: `Set`/`Del`/`Fail` drive a real `Watch`; `WaitForSnapshot` fails cleanly on timeout; `goleak` on kit teardown |
 | D | Version monotonicity; `History` bounds and ordering at n=0, 1, and many; pin blocks apply while `Live` advances; `Unpin` emits exactly one coalesced `Change` with the correct accumulated diff; validation errors still surface while pinned; concurrent `Pin`/`Unpin` under `-race` |
-| E | `ParseRefs` on the comma-ambiguity corpus; chain walk for win, not-found fallthrough, non-not-found stop, and all-not-found-to-default; each `onfail` policy including `keeplast` with no prior value; live precedence takeover and fallback under watch; `BatchProvider` grouping with chains; `reconcilevet` on chained sensitive refs |
+| E | `ParseRefs` on the comma-ambiguity corpus; chain walk for win, not-found fallthrough, non-not-found stop, and all-not-found-to-default; each `onfail` policy including `keeplast` with no prior value; live precedence takeover and fallback under watch; `BatchProvider` grouping with chains; `mamorivet` on chained sensitive refs |
 | F | Golden-file tests for `explain`, `schema`, and each `policy` format against fixture packages in `testdata`. For the live half: each exit code against a purpose-built fixture, including a real `Handler` for 0 and 1, a bare 404 mux for 2, a closed port and a missing socket path for 3, and a `Handler` with auth for 4; endpoint parsing for all three URL forms; credential flags read from file and stdin without appearing in `os.Args`; `--compare` detecting both an extra and a missing field |
 | H | Binding table rejects `exec:` and `mamori:` without the opt-ins; `New` errors with no policy configured and with no authenticator configured; `NoAuth` is refused on a TCP listener and accepted on a UDS; both listeners serve identical bindings under one policy, and `Close` shuts down both; TCP without TLS errors unless `InsecureNoTLS`; kind-to-status mapping table; denied and nonexistent names are byte-identical responses; `Cache-Control: no-store` on every value response; SSE delivers updates and survives a forced disconnect with resubscription; one upstream watch serves N concurrent clients (asserted by counting resolves against a fake); UDS file mode is honored and the socket is unlinked on `Close`; `PeerCred` denies on TCP and on unsupported platforms; audit log never contains a value, asserted by scanning captured output for the seeded secret |
 | I | `providertest` against a real in-process server over both UDS and TLS TCP; `errors.Is` reaches the correct sentinel for every kind returned by the server; `Value.Sensitive` survives the hop; batch path issues one request for a multi-binding struct; reconnect backoff on server restart mid-watch; endpoint parsing for all three URL forms including the `http://` refusal without `InsecureNoTLS` |
@@ -1286,7 +1287,7 @@ format, per the risk noted in section 18.
 3. **B** status, health, doctor, handler, `Authenticator` and the core schemes.
 4. **C** `mamoritest`, which depends on `Status().Snapshot`.
 5. **D** history and pin.
-6. **E** source chains, including the `reconcilevet` fix.
+6. **E** source chains, including the `mamorivet` fix.
 7. **H** config server, including the `WatchRef` extraction in core.
 8. **I** `providers/mamori` client, whose conformance suite validates H.
 9. **F** CLI, including the shared tag-parsing extraction.
