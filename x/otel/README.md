@@ -74,13 +74,18 @@ records measurements against `context.Background()`.
 
 | Instrument | Name | Kind | Unit | Attributes |
 | --- | --- | --- | --- | --- |
-| Resolve duration | `mamori.resolve.duration` | Float64 histogram | `ms` | `scheme`, `status` (`ok` \| `error`) |
+| Resolve duration | `mamori.resolve.duration` | Float64 histogram | `ms` | `scheme`, `status` (`ok` \| `error`), `mamori.error.kind` (failed resolves only) |
 | Refresh count | `mamori.refresh.count` | Int64 counter | - | `scheme` |
 | Watch errors | `mamori.watch.errors` | Int64 counter | - | `scheme` |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws`,
   `vault`).
 - `status` is `error` when the resolve returned a non-nil error, otherwise `ok`.
+- `mamori.error.kind` is present only on failed resolves, carrying the same
+  classification as `mamori.ErrorKind(err)`: `not_found`, `permission_denied`,
+  `unauthenticated`, `unavailable`, `rate_limited`, `invalid`, or `unknown`. It
+  lets a dashboard separate a denied permission from a rate limit from a missing
+  key rather than lumping every failure into one `error` bucket.
 
 The instrument names and metric attribute keys are also exported as constants
 (`MetricResolveDuration`, `MetricRefreshCount`, `MetricWatchErrors`).
@@ -90,7 +95,10 @@ The instrument names and metric attribute keys are also exported as constants
 Each resolve produces one span:
 
 - **Name**: `mamori.resolve` (exported as `SpanResolve`)
-- **Attributes**: `mamori.scheme`, `mamori.ref`
+- **Attributes**: `mamori.scheme`, `mamori.ref`, and `mamori.error.kind` on a
+  failed resolve (the same classification the metric carries: `not_found`,
+  `permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`,
+  `invalid`, or `unknown`; never set on success).
 - **Status on success**: `Ok`
 - **Status on failure**: `Error` with the error message as the description, plus
   the error recorded as an `exception` span event via `RecordError`.
