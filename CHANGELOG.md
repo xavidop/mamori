@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.1.8](https://github.com/xavidop/mamori/compare/v1.1.7...v1.1.8) (2026-07-26)
+
+
+### Bug Fixes
+
+* debounce watchFilePath to eliminate truncate-before-write race in TestFileProviderWatch ([#44](https://github.com/xavidop/mamori/issues/44)) ([c749f77](https://github.com/xavidop/mamori/commit/c749f7759e11d64a3c199b98a11bdb98abafdbaf))
+
 ## [1.1.7](https://github.com/xavidop/mamori/compare/v1.1.6...v1.1.7) (2026-07-20)
 
 
