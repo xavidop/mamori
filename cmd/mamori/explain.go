@@ -31,14 +31,14 @@ resolves anything (no network calls, no secret managers contacted).
 func explainCmd(args []string, stdout, stderr io.Writer) int {
 	patterns, typeName, jsonOut, err := parseExplainArgs(args)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		fmt.Fprint(stderr, explainUsage)
+		_, _ = fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprint(stderr, explainUsage)
 		return 1
 	}
 
 	structs, err := Extract(patterns, typeName)
 	if err != nil {
-		fmt.Fprintf(stderr, "mamori explain: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori explain: %v\n", err)
 		return 1
 	}
 
@@ -89,7 +89,7 @@ func writeExplainJSON(stdout, stderr io.Writer, structs []StructInfo) int {
 		structs = []StructInfo{}
 	}
 	if err := enc.Encode(structs); err != nil {
-		fmt.Fprintf(stderr, "mamori explain: encoding JSON: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori explain: encoding JSON: %v\n", err)
 		return 1
 	}
 	return 0
@@ -101,21 +101,21 @@ func writeExplainJSON(stdout, stderr io.Writer, structs []StructInfo) int {
 func writeExplainTable(stdout io.Writer, structs []StructInfo) {
 	for i, s := range structs {
 		if i > 0 {
-			fmt.Fprintln(stdout)
+			_, _ = fmt.Fprintln(stdout)
 		}
-		fmt.Fprintf(stdout, "%s.%s\n", s.Package, s.TypeName)
+		_, _ = fmt.Fprintf(stdout, "%s.%s\n", s.Package, s.TypeName)
 
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "FIELD\tTYPE\tCHAIN\tDEFAULT\tOPTIONAL\tSENSITIVE")
+		_, _ = fmt.Fprintln(tw, "FIELD\tTYPE\tCHAIN\tDEFAULT\tOPTIONAL\tSENSITIVE")
 		for _, f := range s.Fields {
 			def := "-"
 			if f.HasDefault {
 				def = f.Default
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				f.Path, f.GoType, strings.Join(f.Refs, ", "), def,
 				strconv.FormatBool(f.Optional), strconv.FormatBool(f.Sensitive))
 		}
-		tw.Flush()
+		_ = tw.Flush()
 	}
 }

@@ -201,7 +201,7 @@ func doFetch(ctx context.Context, f liveFlags) fetchResult {
 	if err != nil {
 		return fetchResult{exit: exitUnreachable, err: fmt.Errorf("mamori: connecting to %s: %w", f.endpoint, err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

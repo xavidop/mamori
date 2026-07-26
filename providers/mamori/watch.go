@@ -156,7 +156,7 @@ func (p *Provider) watchOnce(ctx context.Context, name string, ch chan<- mamori.
 		})
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		sendUpdate(ctx, ch, mamori.Update{Err: watchConnectError(name, resp)})
@@ -173,7 +173,7 @@ func (p *Provider) watchOnce(ctx context.Context, name string, ch chan<- mamori.
 	// function returns by any other path (a normal EOF, say) so it never
 	// fires - and therefore never leaks a goroutine - after the stream it
 	// would have torn down is already gone.
-	stop := context.AfterFunc(ctx, func() { resp.Body.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
 	defer stop()
 
 	readSSE(ctx, resp.Body, name, ch)

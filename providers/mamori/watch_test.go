@@ -37,7 +37,7 @@ func TestWatchDeliversUpdate(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
-		fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"aHVudGVyMg==","version":"v1","metadata":{}}`)
+		_, _ = fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"aHVudGVyMg==","version":"v1","metadata":{}}`)
 		flusher.Flush()
 		<-r.Context().Done() // keep the connection open until the client disconnects
 	}))
@@ -69,9 +69,9 @@ func TestWatchDeliversErrorFrameKeepsChannelOpen(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
-		fmt.Fprintf(w, "event: error\ndata: %s\n\n", `{"name":"db-password","error":{"kind":"permission_denied","message":"denied"}}`)
+		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", `{"name":"db-password","error":{"kind":"permission_denied","message":"denied"}}`)
 		flusher.Flush()
-		fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"aGVsbG8=","metadata":{}}`)
+		_, _ = fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"aGVsbG8=","metadata":{}}`)
 		flusher.Flush()
 		<-r.Context().Done()
 	}))
@@ -110,12 +110,12 @@ func TestWatchReconnectsAfterDisconnect(t *testing.T) {
 		flusher := w.(http.Flusher)
 
 		if n == 1 {
-			fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"Zmlyc3Q=","metadata":{}}`)
+			_, _ = fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"Zmlyc3Q=","metadata":{}}`)
 			flusher.Flush()
 			return // close the connection after the first frame; the client must reconnect
 		}
 
-		fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"c2Vjb25k","metadata":{}}`)
+		_, _ = fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"c2Vjb25k","metadata":{}}`)
 		flusher.Flush()
 		<-r.Context().Done()
 	}))
@@ -188,9 +188,9 @@ func TestWatchIgnoresHeartbeatComments(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
-		io.WriteString(w, ": heartbeat\n\n")
+		_, _ = io.WriteString(w, ": heartbeat\n\n")
 		flusher.Flush()
-		fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"aGVsbG8=","metadata":{}}`)
+		_, _ = fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"aGVsbG8=","metadata":{}}`)
 		flusher.Flush()
 		<-r.Context().Done()
 	}))
@@ -250,10 +250,10 @@ func TestWatchRejectsOversizedFrame(t *testing.T) {
 			// the connection open indefinitely. A well-behaved client must
 			// give up on this frame on its own instead of waiting forever
 			// for a blank line that is never coming.
-			fmt.Fprintf(w, "event: update\n")
+			_, _ = fmt.Fprintf(w, "event: update\n")
 			chunk := strings.Repeat("a", 64*1024) // 64 KiB per data: line
 			for sent := 0; sent <= sseMaxFrameBytes; sent += len(chunk) {
-				fmt.Fprintf(w, "data: %s\n", chunk)
+				_, _ = fmt.Fprintf(w, "data: %s\n", chunk)
 				flusher.Flush()
 			}
 			<-r.Context().Done() // no blank line ever follows
@@ -262,7 +262,7 @@ func TestWatchRejectsOversizedFrame(t *testing.T) {
 
 		// Second connection (the reconnect): a normal, small, well-formed
 		// frame.
-		fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"c2Vjb25k","metadata":{}}`)
+		_, _ = fmt.Fprintf(w, "event: update\ndata: %s\n\n", `{"name":"db-password","bytes":"c2Vjb25k","metadata":{}}`)
 		flusher.Flush()
 		<-r.Context().Done()
 	}))

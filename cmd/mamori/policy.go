@@ -85,20 +85,20 @@ var supportedPolicyFormats = []string{formatAWSIAM, formatGCP, formatExternalSec
 func policyCmd(args []string, stdout, stderr io.Writer) int {
 	patterns, typeName, format, err := parsePolicyArgs(args)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		fmt.Fprint(stderr, policyUsage)
+		_, _ = fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprint(stderr, policyUsage)
 		return 1
 	}
 
 	if !isSupportedPolicyFormat(format) {
-		fmt.Fprintf(stderr, "mamori policy: unsupported --format %q; supported formats: %s\n",
+		_, _ = fmt.Fprintf(stderr, "mamori policy: unsupported --format %q; supported formats: %s\n",
 			format, strings.Join(supportedPolicyFormats, ", "))
 		return 2
 	}
 
 	structs, err := Extract(patterns, typeName)
 	if err != nil {
-		fmt.Fprintf(stderr, "mamori policy: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori policy: %v\n", err)
 		return 1
 	}
 
@@ -341,7 +341,7 @@ func writeAWSIAMPolicy(stdout, stderr io.Writer, refs policyRefs) int {
 	}
 
 	if len(doc.Statement) == 0 {
-		fmt.Fprintf(stderr, "mamori policy: no %s:// or %s:// refs found for --format=%s; emitted an empty policy document\n",
+		_, _ = fmt.Fprintf(stderr, "mamori policy: no %s:// or %s:// refs found for --format=%s; emitted an empty policy document\n",
 			awsSMScheme, awsPSScheme, formatAWSIAM)
 	}
 
@@ -401,7 +401,7 @@ func writeGCPPolicy(stdout, stderr io.Writer, refs policyRefs) int {
 	sort.Strings(resources)
 
 	if len(resources) == 0 {
-		fmt.Fprintf(stderr, "mamori policy: no %s:// refs found for --format=%s; emitted an empty policy document\n",
+		_, _ = fmt.Fprintf(stderr, "mamori policy: no %s:// refs found for --format=%s; emitted an empty policy document\n",
 			gcpSMScheme, formatGCP)
 	}
 
@@ -483,10 +483,10 @@ func writeExternalSecretManifest(stdout, stderr io.Writer, refs policyRefs) int 
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintf(stderr, "mamori policy: no relevant refs found for --format=%s; emitted an empty manifest\n", formatExternalSecret)
+		_, _ = fmt.Fprintf(stderr, "mamori policy: no relevant refs found for --format=%s; emitted an empty manifest\n", formatExternalSecret)
 	}
 
-	fmt.Fprint(stdout, renderExternalSecretYAML(entries))
+	_, _ = fmt.Fprint(stdout, renderExternalSecretYAML(entries))
 	return 0
 }
 
@@ -621,9 +621,9 @@ const (
 func encodePolicyJSON(stdout, stderr io.Writer, v any) int {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		fmt.Fprintf(stderr, "mamori policy: encoding JSON: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori policy: encoding JSON: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s\n", b)
+	_, _ = fmt.Fprintf(stdout, "%s\n", b)
 	return 0
 }

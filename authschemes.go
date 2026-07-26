@@ -53,7 +53,7 @@ func (b basicAuth) Authenticate(r *http.Request) (Identity, error) {
 	}
 	userOK := subtle.ConstantTimeCompare([]byte(gotUser), []byte(wantUser)) == 1
 	passOK := subtle.ConstantTimeCompare([]byte(gotPass), wantPass.RevealBytes()) == 1
-	if !(userOK && passOK) {
+	if !userOK || !passOK {
 		// Name the failure, never the presented value: a message that echoed
 		// gotUser or gotPass would leak the credential into logs and error
 		// reporting pipelines that are not held to the same secrecy bar as the

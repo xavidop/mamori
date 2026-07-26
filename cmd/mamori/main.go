@@ -63,10 +63,10 @@ func run(args []string) int {
 
 	switch args[0] {
 	case "help", "-h", "--help":
-		fmt.Fprint(os.Stdout, usage)
+		_, _ = fmt.Fprint(os.Stdout, usage)
 		return 0
 	case "version", "--version":
-		fmt.Fprintf(os.Stdout, "mamori version %s\n", version)
+		_, _ = fmt.Fprintf(os.Stdout, "mamori version %s\n", version)
 		return 0
 	case "explain":
 		return explainCmd(args[1:], os.Stdout, os.Stderr)

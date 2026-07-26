@@ -46,14 +46,14 @@ const jsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
 func schemaCmd(args []string, stdout, stderr io.Writer) int {
 	patterns, typeName, err := parseSchemaArgs(args)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		fmt.Fprint(stderr, schemaUsage)
+		_, _ = fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprint(stderr, schemaUsage)
 		return 1
 	}
 
 	structs, err := Extract(patterns, typeName)
 	if err != nil {
-		fmt.Fprintf(stderr, "mamori schema: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori schema: %v\n", err)
 		return 1
 	}
 
@@ -110,10 +110,10 @@ func writeSchema(stdout, stderr io.Writer, structs []StructInfo) int {
 
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		fmt.Fprintf(stderr, "mamori schema: encoding JSON: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori schema: encoding JSON: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s\n", b)
+	_, _ = fmt.Fprintf(stdout, "%s\n", b)
 	return 0
 }
 

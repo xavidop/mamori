@@ -70,7 +70,7 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		limited := io.LimitReader(resp.Body, errBodyLimit)

@@ -93,7 +93,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	if err != nil {
 		return mamori.Value{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		var vb valueBody

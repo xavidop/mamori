@@ -53,7 +53,7 @@ const defaultStatusInterval = 2 * time.Second
 func statusCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, statusUsage) }
+	fs.Usage = func() { _, _ = fmt.Fprint(stderr, statusUsage) }
 
 	var lf liveFlags
 	lf.register(fs)
@@ -70,7 +70,7 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 			writeReportTable(stdout, res.rep)
 		}
 		if res.err != nil {
-			fmt.Fprintln(stderr, res.err)
+			_, _ = fmt.Fprintln(stderr, res.err)
 		}
 		return res.exit
 	}
@@ -91,7 +91,7 @@ func watchStatus(stdout, stderr io.Writer, lf liveFlags, interval time.Duration)
 			writeReportTable(stdout, res.rep)
 		}
 		if res.err != nil {
-			fmt.Fprintln(stderr, res.err)
+			_, _ = fmt.Fprintln(stderr, res.err)
 		}
 	}
 

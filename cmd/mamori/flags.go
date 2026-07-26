@@ -115,7 +115,7 @@ func (f *liveFlags) resolveValue(value, file string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer fh.Close()
+		defer func() { _ = fh.Close() }()
 		r = fh
 	}
 	br := bufio.NewReader(r)

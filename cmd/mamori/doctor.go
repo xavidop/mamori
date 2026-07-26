@@ -61,7 +61,7 @@ Exit codes:
 func doctorCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, doctorUsage) }
+	fs.Usage = func() { _, _ = fmt.Fprint(stderr, doctorUsage) }
 
 	var lf liveFlags
 	lf.register(fs)
@@ -82,7 +82,7 @@ func doctorCmd(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if res.err != nil {
-		fmt.Fprintln(stderr, res.err)
+		_, _ = fmt.Fprintln(stderr, res.err)
 	}
 
 	if *compare != "" {
@@ -103,7 +103,7 @@ func writeDoctorJSON(stdout io.Writer, res fetchResult) {
 	}
 	_, _ = stdout.Write(res.body)
 	if len(res.body) == 0 || res.body[len(res.body)-1] != '\n' {
-		fmt.Fprintln(stdout)
+		_, _ = fmt.Fprintln(stdout)
 	}
 }
 
@@ -113,7 +113,7 @@ func writeDoctorJSON(stdout io.Writer, res fetchResult) {
 // `status` render an identical table for the same report.
 func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tSCHEME\tREF\tVERSION\tSTALE\tLAST_KIND\tLAST_ERROR\tSENSITIVE")
+	_, _ = fmt.Fprintln(tw, "PATH\tSCHEME\tREF\tVERSION\tSTALE\tLAST_KIND\tLAST_ERROR\tSENSITIVE")
 	for _, f := range rep.Fields {
 		lastKind := string(f.LastKind)
 		if lastKind == "" {
@@ -123,11 +123,11 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 		if lastErr == "" {
 			lastErr = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			f.Path, f.Scheme, f.Ref, f.Version,
 			strconv.FormatBool(f.Stale), lastKind, lastErr, strconv.FormatBool(f.Sensitive))
 	}
-	tw.Flush()
+	_ = tw.Flush()
 
 	status := "HEALTHY"
 	if !rep.Healthy {
@@ -137,7 +137,7 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 	if rep.Pinned {
 		pinned = ", pinned"
 	}
-	fmt.Fprintf(stdout, "\n%s: %d field(s), snapshot %d (live %d)%s, generated %s\n",
+	_, _ = fmt.Fprintf(stdout, "\n%s: %d field(s), snapshot %d (live %d)%s, generated %s\n",
 		status, len(rep.Fields), rep.Snapshot, rep.Live, pinned,
 		rep.GeneratedAt.Format(time.RFC3339))
 }
@@ -153,7 +153,7 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report) {
 	structs, err := Extract(patterns, "")
 	if err != nil {
-		fmt.Fprintf(stderr, "mamori doctor --compare: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "mamori doctor --compare: %v\n", err)
 		return
 	}
 
@@ -184,15 +184,15 @@ func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report)
 	sort.Strings(onlySource)
 	sort.Strings(onlyLive)
 
-	fmt.Fprintln(stdout, "\ncompare: source vs. live field paths")
+	_, _ = fmt.Fprintln(stdout, "\ncompare: source vs. live field paths")
 	if len(onlySource) == 0 && len(onlyLive) == 0 {
-		fmt.Fprintln(stdout, "  no drift: source and live field sets match")
+		_, _ = fmt.Fprintln(stdout, "  no drift: source and live field sets match")
 		return
 	}
 	for _, p := range onlySource {
-		fmt.Fprintf(stdout, "  only in source (not live): %s\n", p)
+		_, _ = fmt.Fprintf(stdout, "  only in source (not live): %s\n", p)
 	}
 	for _, p := range onlyLive {
-		fmt.Fprintf(stdout, "  only in live (not source): %s\n", p)
+		_, _ = fmt.Fprintf(stdout, "  only in live (not source): %s\n", p)
 	}
 }

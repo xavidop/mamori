@@ -127,7 +127,7 @@ func (r errRow) Scan(_ ...any) error { return r.err }
 type constFailQueryer struct{ err error }
 
 func (c constFailQueryer) QueryRowContext(_ context.Context, _ string, _ ...any) row {
-	return errRow{err: c.err}
+	return errRow(c)
 }
 
 // compile-time checks that the test doubles satisfy the provider's seam.
