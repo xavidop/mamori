@@ -1,11 +1,23 @@
 ---
+import type { MarkdownHeading } from "astro";
 import Layout from "./Layout.astro";
 import Search from "../components/Search.astro";
 
-const { frontmatter } = Astro.props;
+const { frontmatter, headings = [] } = Astro.props as {
+  frontmatter?: { title?: string };
+  headings?: MarkdownHeading[];
+};
 const title = frontmatter?.title
   ? `${frontmatter.title} - mamori docs`
   : "mamori docs";
+
+// In-page table of contents: the h2/h3 headings of the current page, rendered
+// on the right with scroll-spy so a reader always sees where they are. Astro
+// generates a slug for every heading (matching the anchor id it emits), so the
+// links here point straight at those anchors. Rendered only when a page has
+// enough structure to be worth navigating (2+ entries).
+const pageHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
+const showPageToc = pageHeadings.length >= 2;
 
 const base = import.meta.env.BASE_URL;
 
@@ -173,13 +185,35 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
         }
       </nav>
     </article>
+
+    {
+      showPageToc && (
+        <aside class="page-toc" aria-label="On this page">
+          <p class="page-toc__title">On this page</p>
+          <ul>
+            {pageHeadings.map((h) => (
+              <li
+                class:list={[
+                  "page-toc__item",
+                  { "page-toc__item--sub": h.depth === 3 },
+                ]}
+              >
+                <a href={`#${h.slug}`} class="page-toc__link" data-toc-link={h.slug}>
+                  {h.text}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )
+    }
   </div>
 </Layout>
 
 <style is:global>
   .docs {
     display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr) 200px;
     gap: 3rem;
     padding-block: 3rem 4rem;
     align-items: start;
@@ -406,6 +440,56 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     color: var(--green-deep);
   }
 
+  .page-toc {
+    position: sticky;
+    top: 84px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    font-size: 0.85rem;
+  }
+  .page-toc__title {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+    margin: 0 0 0.6rem;
+  }
+  .page-toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.1rem;
+    border-left: 1px solid var(--line);
+  }
+  .page-toc__item {
+    margin: 0;
+  }
+  .page-toc__link {
+    display: block;
+    color: var(--muted-2);
+    padding: 0.25rem 0.8rem;
+    margin-left: -1px;
+    border-left: 2px solid transparent;
+    line-height: 1.35;
+    transition:
+      color 0.2s var(--ease),
+      border-color 0.2s var(--ease);
+  }
+  .page-toc__item--sub .page-toc__link {
+    padding-left: 1.6rem;
+    font-size: 0.8rem;
+  }
+  .page-toc__link:hover {
+    color: var(--green-deep);
+  }
+  .page-toc__link--active {
+    color: var(--green-deep);
+    border-left-color: var(--green);
+    font-weight: 500;
+  }
+
   .toc__toggle {
     display: none;
     align-items: center;
@@ -426,6 +510,15 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
   }
   .toc[data-open] .toc__toggle svg {
     transform: rotate(180deg);
+  }
+
+  @media (max-width: 1180px) {
+    .docs {
+      grid-template-columns: 220px minmax(0, 1fr);
+    }
+    .page-toc {
+      display: none;
+    }
   }
 
   @media (max-width: 900px) {
@@ -474,5 +567,54 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
         tocToggle.setAttribute("aria-expanded", "false");
       });
     });
+  }
+</script>
+
+<script>
+  // Scroll-spy for the on-this-page TOC: highlight the section the reader is
+  // currently in. The active heading is the last one whose top has scrolled
+  // above a line ~100px below the viewport top, computed on scroll (throttled
+  // with requestAnimationFrame) so it stays deterministic rather than relying
+  // on IntersectionObserver's fire-order across fast scrolls.
+  const tocLinks = Array.from(document.querySelectorAll("[data-toc-link]"));
+  if (tocLinks.length) {
+    const linkBySlug = new Map(
+      tocLinks.map((a) => [a.getAttribute("data-toc-link"), a]),
+    );
+    const headingEls = tocLinks
+      .map((a) => document.getElementById(a.getAttribute("data-toc-link") || ""))
+      .filter((el) => el !== null);
+
+    let activeSlug: string | null = null;
+    const setActive = (slug: string | null) => {
+      if (slug === activeSlug) return;
+      if (activeSlug) linkBySlug.get(activeSlug)?.classList.remove("page-toc__link--active");
+      activeSlug = slug;
+      if (slug) linkBySlug.get(slug)?.classList.add("page-toc__link--active");
+    };
+
+    const update = () => {
+      let current = headingEls[0];
+      for (const h of headingEls) {
+        if (h.getBoundingClientRect().top - 100 <= 0) current = h;
+        else break;
+      }
+      setActive(current ? current.id : null);
+    };
+
+    let ticking = false;
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+          update();
+          ticking = false;
+        });
+      },
+      { passive: true },
+    );
+    update();
   }
 </script>
