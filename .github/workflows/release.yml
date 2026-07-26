@@ -69,6 +69,18 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The Homebrew formula is committed to xavidop/homebrew-tap, a
+          # different repository, which GITHUB_TOKEN cannot write to (it is
+          # scoped to this repo, so GoReleaser gets 403 "Resource not
+          # accessible by integration"). HOMEBREW_TAP_TOKEN must be a PAT (or
+          # GitHub App token) with contents:write on the tap repo.
+          #
+          # The fallback keeps the variable always defined: .goreleaser.yaml
+          # interpolates {{ .Env.HOMEBREW_TAP_TOKEN }}, and an undefined env
+          # var there is a template error that would fail the ENTIRE release,
+          # including artifacts that are otherwise fine. With the fallback, a
+          # missing secret degrades to exactly today's behaviour instead.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.GITHUB_TOKEN }}
 
       # 3. Export the artifact hashes for the provenance job.
       - name: Export artifact hashes

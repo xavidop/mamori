@@ -93,12 +93,23 @@ release:
 # shipped binary, so it is the only formula. It doubles as a go-vet tool
 # (`go vet -vettool=$(which mamori)`), so installing mamori is all an operator
 # needs for both the CLI and the `mamori vet` analyzer.
+#
+# The tap lives in a DIFFERENT repository, which is why this block needs its
+# own token. A workflow's automatic GITHUB_TOKEN is scoped to the repository
+# running the workflow, so using it here fails with "403 Resource not
+# accessible by integration" when GoReleaser tries to commit the formula to
+# xavidop/homebrew-tap. HOMEBREW_TAP_TOKEN must therefore be a token with
+# contents:write on the TAP repo (see release.yml, which falls back to
+# GITHUB_TOKEN when the secret is absent so a missing secret degrades to
+# "the release publishes, only the formula step fails" rather than breaking
+# the whole release on a template error).
 brews:
   - name: mamori
     ids: [mamori]
     repository:
       owner: xavidop
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://mamorigo.dev"
     description: "CLI for the mamori typed config and secrets library: explain, schema, policy, doctor, status"
     license: "MIT"
