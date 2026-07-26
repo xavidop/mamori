@@ -62,7 +62,7 @@ jobs:
       # 2. Build and publish the GitHub Release for the tag semantic-release created.
       - name: Run GoReleaser
         if: steps.semantic.outputs.new_release_published == 'true'
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
