@@ -5,11 +5,63 @@ title: Observability
 
 # Observability
 
-Three functions answer "is my config healthy" at three different times: `Status` for a live snapshot, `Health` for a single yes/no a probe can act on, and `Doctor` for a pre-deploy check that runs before a watcher ever starts. All three share one report shape and one definition of "healthy", so the answer cannot drift between the live and one-shot paths.
+Three functions answer "is my config healthy" at three different times: `Status` for a live snapshot, `Health` for a single yes/no a probe can act on, and `Doctor` for a pre-deploy check that runs before a watcher ever starts.
 
-This page covers the reporting layer itself: the `Report` shape and the three functions that produce one. [HTTP exposure](#http-exposure) below covers serving that same `Report` over the network.
+```mermaid
+flowchart LR
+  D["Doctor - before a watcher starts (CI / pre-deploy)"]
+  S["Status - live per-field snapshot while running"]
+  H["Health - one yes/no for a readiness probe"]
+  D --> Deploy([Deploy])
+  Deploy --> S
+  Deploy --> H
+```
 
-## The Report shape
+## Quick start
+
+Read a running watcher's per-field health with `Status`, and back a readiness probe with `Health`.
+
+```go
+w, err := mamori.Watch[Config](ctx)
+if err != nil {
+	log.Fatal(err)
+}
+defer w.Close()
+
+// Live snapshot: per-field health right now.
+for _, f := range w.Status().Fields {
+	log.Printf("%s (%s): kind=%s stale=%v age=%s", f.Path, f.Scheme, f.LastKind, f.Stale, f.Age)
+}
+
+// One-shot yes/no, ready to back a readiness probe.
+http.HandleFunc("/readyz", func(rw http.ResponseWriter, r *http.Request) {
+	if err := w.Health(); err != nil {
+		http.Error(rw, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	rw.WriteHeader(http.StatusOK)
+})
+```
+
+## Read the live Status
+
+```go
+func (w *Watcher[T]) Status() Report
+```
+
+`Status` returns a point-in-time report of the watcher's per-field health. `Age` and `Stale` are recomputed against the watcher's clock at call time, so a watcher that has gone quiet does not keep reporting the age it had at the last reconcile. It is lock-free (see [How it works](#how-it-works)).
+
+```go
+for _, f := range w.Status().Fields {
+	log.Printf("%s (%s): kind=%s stale=%v age=%s", f.Path, f.Scheme, f.LastKind, f.Stale, f.Age)
+}
+```
+
+A `Report` is safe to log, serialize, or hand to another team: `Ref` has sensitive query options redacted, and no field's resolved value ever appears anywhere in a `FieldStatus`. This holds whether the report came from a running `Watcher` or from `Doctor`.
+
+### Report and FieldStatus fields
+
+Every report shares this shape, whichever function produced it.
 
 ```go
 type FieldStatus struct {
@@ -35,46 +87,25 @@ type Report struct {
 }
 ```
 
-A `Report` is safe to log, serialize, or hand to another team: `Ref` has sensitive query options (`token`, `password`, `secret`, `key`, and similar) redacted with `secret.Redacted`, and no field's resolved value ever appears anywhere in a `FieldStatus`. This holds whether the report came from a running `Watcher` or from `Doctor`.
-
 `Snapshot` and `Live` are equal, and `Pinned` is `false`, unless the watcher is currently frozen with `Watcher.Pin` / `Watcher.PinCurrent`: see [Snapshot history and pinning](../usage#snapshot-history-and-pinning) for what that divergence means and how to produce and clear it.
 
-## Status: a live snapshot
-
-```go
-func (w *Watcher[T]) Status() Report
-```
-
-`Status` returns a point-in-time report of the watcher's per-field health. It is lock-free: it only reads the report most recently published by the reconciler goroutine and works on a copy, never touching the engine's internal maps directly. `Age` and `Stale` are recomputed against the watcher's clock at call time, so a watcher that has gone quiet does not keep reporting the age it had at the last reconcile.
-
-```go
-w, err := mamori.Watch[Config](ctx)
-if err != nil {
-	log.Fatal(err)
-}
-defer w.Close()
-
-for _, f := range w.Status().Fields {
-	log.Printf("%s (%s): kind=%s stale=%v age=%s", f.Path, f.Scheme, f.LastKind, f.Stale, f.Age)
-}
-```
-
-## Health: the terminal-vs-transient rule
+## Check health for a probe
 
 ```go
 func (w *Watcher[T]) Health() error
 ```
 
-`Health` returns `nil` when every field is fresh and no field carries a terminal error kind. Otherwise it returns a `*HealthError` naming the offending fields, so a caller can log which fields are broken instead of a bare "unhealthy". It is meant to back a Kubernetes readiness probe:
+`Health` returns `nil` when every field is fresh and no field carries a terminal error kind. Otherwise it returns a `*HealthError` naming the offending fields, so a caller can log which fields are broken instead of a bare "unhealthy".
 
 ```go
-http.HandleFunc("/readyz", func(rw http.ResponseWriter, r *http.Request) {
-	if err := w.Health(); err != nil {
-		http.Error(rw, err.Error(), http.StatusServiceUnavailable)
-		return
+if err := w.Health(); err != nil {
+	var he *mamori.HealthError
+	if errors.As(err, &he) {
+		for _, f := range he.Fields {
+			log.Printf("unhealthy: %s (%s): %s", f.Path, f.LastKind, f.LastError)
+		}
 	}
-	rw.WriteHeader(http.StatusOK)
-})
+}
 ```
 
 A field is unhealthy under one rule, shared by `Status`, `Health`, and `Doctor`:
@@ -85,7 +116,7 @@ A field is unhealthy under one rule, shared by `Status`, `Health`, and `Doctor`:
 
 See [Concepts](../concepts#error-kinds) for the full list of `Kind` values and what each one means.
 
-## Doctor: a pre-deploy reachability check
+## Check reachability before deploying with Doctor
 
 ```go
 func Doctor[T any](ctx context.Context, opts ...Option) (Report, error)
@@ -121,20 +152,20 @@ go test -tags preflight ./...
 
 That catches a rotated-away secret, a missing IAM permission, or a typo'd ref before it ships, instead of at container startup.
 
-## HTTP exposure
+## Serve the report over HTTP
 
-There are two ways to serve a `Report` over HTTP: mount `Handler` on a mux you already run, or let mamori run its own server with `WithAdminHTTP`. Both expose exactly the same two routes, and neither ever serves a configuration value: the JSON body they return is always `w.Status()`, whose `Ref` fields are already redacted and which never carries a resolved value. **This is a metadata endpoint. It cannot serve a config value under any option, on any route.**
+There are two ways to serve a `Report` over HTTP: mount `Handler` on a mux you already run, or let mamori run its own server with `WithAdminHTTP`. Both expose exactly the same two routes.
 
-### The two routes
+**This is a metadata endpoint. It never serves a configuration value, under any option, on any route.** The JSON body is always `w.Status()`, whose `Ref` fields are already redacted and which never carries a resolved value. For the surface that serves resolved config *values* to many callers, see the [config server](../server).
 
 | Route | Response |
 | --- | --- |
 | `GET /` | The `Report`, as JSON (same shape as `w.Status()`) |
 | `GET /healthz` | A liveness/readiness signal, `{"status":"ok"}` or `{"status":"unhealthy",...}` |
 
-Every other path, and every other method, is `404`. There is no route, under any `HandlerOption` or admin option, that returns a decoded field value; the handler has no way to add anything to the response beyond what `Report` already carries. In particular, `Watcher.Pin` / `Watcher.PinCurrent` / `Watcher.Unpin` are **not** reachable through either route: `GET /` reports `Pinned` (and the `Snapshot`/`Live` divergence it causes) read-only, but nothing here changes it. An application that wants to pin remotely needs its own authenticated route calling `w.Pin` directly - see [Snapshot history and pinning](../usage#snapshot-history-and-pinning).
+Every other path, and every other method, is `404`. No route, under any `HandlerOption` or admin option, returns a decoded field value. In particular, `Watcher.Pin` / `Watcher.PinCurrent` / `Watcher.Unpin` are **not** reachable through either route: `GET /` reports `Pinned` (and the `Snapshot`/`Live` divergence it causes) read-only, but nothing here changes it. An application that wants to pin remotely needs its own authenticated route calling `w.Pin` directly (see [Snapshot history and pinning](../usage#snapshot-history-and-pinning)).
 
-### Mount `Handler` on your own mux
+### Mount Handler on your own mux
 
 ```go
 func Handler[T any](w *Watcher[T], opts ...HandlerOption) http.Handler
@@ -160,7 +191,7 @@ mux.Handle("/admin/", mamori.Handler(w, mamori.HandlerPrefix("/admin")))
 
 `HandlerMiddleware` wraps the handler with a non-authentication concern, such as request logging, and runs outside `HandlerPrefix`'s stripping and outside any `WithAuth` check, in the order the options are given. Authentication itself, `WithAuth` and the shipped schemes, is covered on the [Auth](../auth) page.
 
-### Or let mamori run its own server
+### Run a standalone server with WithAdminHTTP
 
 ```go
 func WithAdminHTTP(addr string, opts ...HandlerOption) Option
@@ -181,14 +212,16 @@ log.Printf("admin endpoint listening on %s", w.AdminAddr())
 
 `WithAdminHTTP` exists for a caller who does not already run a mux of their own. It carries the same fail-fast lifecycle guarantees as the rest of mamori:
 
-- **Off by default.** With no `WithAdminHTTP` option, `Watch` binds no listener and starts no extra goroutine.
-- **A bind failure fails `Watch`.** The listener is bound before `Watch` returns, so a port already in use, or a permission error, comes back as `Watch`'s own error, the same way a failed initial `Load` does - it never leaves you believing the endpoint is up when it isn't.
+- **Off by default.** With no `WithAdminHTTP` option, there is no admin server (see [How it works](#how-it-works) for what that means internally).
+- **A bind failure fails `Watch`.** The listener is bound before `Watch` returns, so a port already in use, or a permission error, comes back as `Watch`'s own error (the same way a failed initial `Load` does), rather than leaving you believing the endpoint is up when it is not.
 - **`Close` releases the port.** `Watcher.Close` shuts the admin server down gracefully, bounded by a short grace period, before it returns, so by the time `Close` returns the port is free again.
-- **`AdminAddr()` gives you the bound address** - `func (w *Watcher[T]) AdminAddr() net.Addr` - which is `nil` unless `WithAdminHTTP` was used. This is how you discover the port the OS actually chose when binding to `:0`.
+- **`AdminAddr()` gives you the bound address** (`func (w *Watcher[T]) AdminAddr() net.Addr`), which is `nil` unless `WithAdminHTTP` was used. This is how you discover the port the OS actually chose when binding to `:0`.
 - **`WithAdminTLS(cfg)` serves the admin endpoint over TLS** instead of plaintext, and has no effect without `WithAdminHTTP`. Pair it with an `Authenticator` (see [Auth](../auth)) so a credential sent to the endpoint is never sent in the clear.
 - `Load` accepts `WithAdminHTTP` too, since `Load` and `Watch` share the same `Option` type, but `Load` has no long-lived watcher to run a server against, so it silently ignores the option.
 
-### `/healthz` as a readiness probe
+## Wire a readiness probe
+
+`GET /healthz` is built to back a Kubernetes readiness probe directly. Start the admin endpoint and point the probe at it:
 
 ```go
 w, err := mamori.Watch[Config](ctx, mamori.WithAdminHTTP(":9090"))
@@ -202,11 +235,25 @@ readinessProbe:
   periodSeconds: 5
 ```
 
-An unauthenticated caller, such as a kubelet probe, always gets a bare status - `200 {"status":"ok"}` or `503 {"status":"unhealthy"}` - so readiness never depends on holding a credential, even when the endpoint has [`WithAuth`](../auth) configured. If auth is configured and the caller does authenticate, the response also includes the failing-field detail (the same fields a `*HealthError` carries); with no auth configured at all, every caller gets that full detail, since there is no credential to distinguish callers by. `/healthz` never returns `401`.
+An unauthenticated caller, such as a kubelet probe, always gets a bare status (`200 {"status":"ok"}` or `503 {"status":"unhealthy"}`), so readiness never depends on holding a credential, even when the endpoint has [`WithAuth`](../auth) configured. If auth is configured and the caller does authenticate, the response also includes the failing-field detail (the same fields a `*HealthError` carries); with no auth configured at all, every caller gets that full detail, since there is no credential to distinguish callers by. `/healthz` never returns `401`.
 
-Again, stated plainly: the response body is always metadata - a status string and, at most, field paths, redacted refs, and error kinds - never a config value.
+The response body is always metadata (a status string and, at most, field paths, redacted refs, and error kinds), never a config value.
+
+## How it works
+
+**One report shape, one definition of healthy.** `Status`, `Health`, and `Doctor` all produce the same `Report` and decide per-field health through a single shared rule, so the live answer, the one-shot yes/no, and the pre-deploy probe cannot drift apart. The terminal-vs-transient rule above is that one rule.
+
+**`Status` is lock-free.** It reads the `Report` most recently published by the reconciler goroutine (through an atomic pointer) and works on a copy, never touching the engine's internal maps directly. That matters because the reconciler may be mid-mutation of those maps on its own goroutine at the exact moment `Status` is called. `Age` and `Stale` are then recomputed against the watcher's clock rather than the stored report's build time, which is why a watcher that has gone quiet reports its true current age.
+
+**`Snapshot` and `Live` are the watcher's version counter.** A running watcher's snapshot version starts at 1 and advances as new validated snapshots are published; `Snapshot` freezes at the pinned version while `Live` keeps climbing during a pin. `Doctor` reports both as `0` to mark a one-shot probe rather than a running snapshot.
+
+**Ref redaction.** Before a ref appears in a `Report`, the value of any query option whose name is on a fixed denylist (`token`, `password`, `secret`, `key`, `apikey`, `sas`, `credential`, and similar) is replaced with `secret.Redacted`, preserving the scheme, path, key, and non-sensitive options so the ref stays useful for diagnostics. That is what makes a `Report` safe to serve over HTTP.
+
+**No admin server unless you ask for one.** With no `WithAdminHTTP`, `Watch` binds no listener and starts no extra goroutine. When set, the listener is bound before `Watch` returns (so a bind failure surfaces as `Watch`'s own error, mirroring its fail-fast on the initial `Load`), and the server's goroutine is tracked by the same wait group as the reconciliation engine, so `Watcher.Close` shuts it down before returning.
 
 ## See also
+
+[Config server](../server) is the separate module that serves resolved config *values* to many callers, the counterpart to this metadata-only endpoint.
 
 [Auth](../auth) covers `WithAuth`, the shipped `Authenticator` schemes, and credential rotation for the admin endpoint described above.
 

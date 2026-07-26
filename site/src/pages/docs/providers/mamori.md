@@ -5,7 +5,7 @@ title: mamori (client) provider
 
 # mamori (client)
 
-The `mamori://` provider is the client half of the [config server](../server): it resolves **binding names** against a running `server.Server`, over that server's v1 HTTP wire protocol, instead of resolving a secret-manager ref directly.
+The `mamori://` provider is the client half of the [config server](../../server): it resolves **binding names** against a running `server.Server`, over that server's v1 HTTP wire protocol, instead of resolving a secret-manager ref directly.
 
 A `mamori://` ref never names an upstream ref. `mamori://db-password` asks the config server "give me the binding called `db-password`," and the server answers with whatever value that binding currently resolves to on its own end, whether that is `vault://secret/data/db#password`, `aws-sm://prod/db`, or another mamori server three hops away. The consuming struct has no way to tell any of that apart: it sees a name go out and a value come back, exactly as it would for any other provider.
 
@@ -46,7 +46,7 @@ Unlike most providers, there is nothing to register with a blank import: a `mamo
 mamori://<binding-name>
 ```
 
-`mamori://db-password` resolves the binding `db-password`. The path is a binding name the server operator declared with `server.Bind`/`server.BindFile` (see the config server's [Bindings section](../server#bindings-the-only-thing-a-client-can-name)); it is never, and can never be, an upstream ref supplied by this side. That asymmetry is the whole point of decision D9: a client that could instead send its own ref would let the config server's credentials be used to reach anything the client asked for, not just the bindings the operator chose to expose.
+`mamori://db-password` resolves the binding `db-password`. The path is a binding name the server operator declared with `server.Bind`/`server.BindFile` (see the config server's [Bindings section](../../server#declare-bindings)); it is never, and can never be, an upstream ref supplied by this side. That asymmetry is the whole point of decision D9: a client that could instead send its own ref would let the config server's credentials be used to reach anything the client asked for, not just the bindings the operator chose to expose.
 
 ```go
 type Config struct {
@@ -84,7 +84,7 @@ mamoriprov.New(mamoriprov.Config{
 
 ### Client credentials
 
-The config server authenticates inbound requests with a `mamori.Authenticator` (see [Auth](../auth)), which is a server-side concept: it authenticates a request that has already arrived. This provider does not reuse `mamori.Authenticator` for the reverse direction, because attaching a credential to an outbound request is a different shape entirely. Instead:
+The config server authenticates inbound requests with a `mamori.Authenticator` (see [Auth](../../auth)), which is a server-side concept: it authenticates a request that has already arrived. This provider does not reuse `mamori.Authenticator` for the reverse direction, because attaching a credential to an outbound request is a different shape entirely. Instead:
 
 ```go
 mamoriprov.New(mamoriprov.Config{Endpoint: "https://config.internal:8443"},
@@ -109,11 +109,11 @@ A struct with several `mamori://` fields does not open several connections, eith
 
 Classification is a full passthrough, not just a "some backend, some error" mapping: the wire `kind` the config server reports is exactly the `mamori.Kind` its own upstream provider produced, and this client reconstructs the matching sentinel from it. Concretely:
 
-- `errors.Is(err, mamori.ErrPermissionDenied)` holds against a `mamori://` resolve exactly when it would hold resolving the real backend ref directly, through the config server hop, because the server's own classification (see the config server's [wire protocol section](../server#the-v1-wire-protocol)) never gets flattened into something generic on the way back.
+- `errors.Is(err, mamori.ErrPermissionDenied)` holds against a `mamori://` resolve exactly when it would hold resolving the real backend ref directly, through the config server hop, because the server's own classification (see the config server's [wire protocol section](../../server#v1-wire-protocol-reference)) never gets flattened into something generic on the way back.
 - `mamori.Doctor` and a running watcher's `Status`/`Health` report the real upstream kind in `FieldStatus.LastKind`, not a generic "the proxy failed" kind. A `vault://` binding whose Vault lease was revoked reports `permission_denied` through `mamori://` exactly as it would resolving `vault://` directly.
 - A wire `not_found` (an unbound name, or the server's own upstream reporting one) maps to `mamori.ErrNotFound`, so a struct field's default value or `Optional` tag still applies exactly as it would for any other provider.
 - `mamori.Value.Sensitive` survives the hop unchanged: a binding backed by a secret-manager ref that sets `Sensitive` keeps it set on this side, so `secret.String`/`secret.Bytes` redaction, audit logging, and every other sensitivity-aware behavior downstream of `Load`/`Watch` keeps working exactly as if the field had resolved directly against the upstream provider.
 
 A batch (`ResolveBatch`) treats a hard per-name classified error (anything other than `not_found`) as a whole-call failure rather than silently dropping that one entry, since dropping it would let a struct field fall back to its zero value in place of a secret the caller was denied, or one that is genuinely unavailable - not something a per-ref `Resolve` of that same name would ever do either.
 
-See the config server's page for the full [`kind` field semantics](../server#the-kind-field-fresh-vs-stale-but-serving), including the distinction between a failure `kind` and a successful-but-stale `kind` on a value that is still being served while its upstream is currently failing (this provider returns that stale value with a nil error, exactly as the server intends).
+See the config server's page for the full [`kind` field semantics](../../server#read-kind-on-a-success-fresh-vs-stale-but-serving), including the distinction between a failure `kind` and a successful-but-stale `kind` on a value that is still being served while its upstream is currently failing (this provider returns that stale value with a nil error, exactly as the server intends).
