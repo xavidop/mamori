@@ -363,6 +363,30 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     border: 0;
     padding: 0;
   }
+  /* Mermaid diagrams: before the client renderer runs, hide the raw source; once
+     rendered, present the SVG as a centered, bordered figure. */
+  .doc pre.mermaid {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 1.8rem 0;
+    text-align: center;
+    line-height: normal;
+    font-family: var(--font-body);
+    color: transparent;
+    overflow-x: auto;
+  }
+  .doc pre.mermaid[data-processed="true"] {
+    color: inherit;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.4rem 1.2rem;
+  }
+  .doc pre.mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
   .doc blockquote {
     margin: 1.4rem 0;
     padding: 0.6rem 1.1rem;
@@ -616,5 +640,36 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
       { passive: true },
     );
     update();
+  }
+</script>
+
+<script>
+  // Render any mermaid diagrams on the page. mermaid is a sizeable dependency,
+  // so it is dynamically imported only on pages that actually contain a
+  // <pre class="mermaid"> (produced by the remarkMermaid plugin in
+  // astro.config.mjs from a ```mermaid fenced block). Theme variables match the
+  // site palette so diagrams read as part of the page, not a foreign embed.
+  if (document.querySelector("pre.mermaid")) {
+    const mermaid = (await import("mermaid")).default;
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "base",
+      fontFamily: "var(--font-body), system-ui, sans-serif",
+      themeVariables: {
+        primaryColor: "#e8f5ee",
+        primaryBorderColor: "#2f9e68",
+        primaryTextColor: "#14231b",
+        lineColor: "#5b6b62",
+        secondaryColor: "#f3f1ea",
+        tertiaryColor: "#ffffff",
+        fontSize: "14px",
+      },
+    });
+    try {
+      await mermaid.run({ querySelector: "pre.mermaid" });
+    } catch (err) {
+      console.error("mermaid render failed", err);
+    }
   }
 </script>
