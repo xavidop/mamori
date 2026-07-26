@@ -64,6 +64,9 @@ Exit codes:
 // output but does not change the returned code, since a source/live
 // mismatch is a separate concern from the target process's own health.
 func doctorCmd(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return writeHelp(stdout, doctorUsage)
+	}
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { _, _ = fmt.Fprint(stderr, doctorUsage) }

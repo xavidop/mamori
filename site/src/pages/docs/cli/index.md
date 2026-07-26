@@ -31,6 +31,17 @@ brew install xavidop/tap/mamori
 go install github.com/xavidop/mamori/cmd/mamori@latest
 ```
 
+## Getting help
+
+Every command prints its own usage, including the flags it accepts and, for the sensitivity-aware ones, the built-in secret-bearing schemes:
+
+```bash
+mamori --help          # the command list
+mamori vet --help      # one command's flags (also -h)
+```
+
+Help goes to stdout and exits `0`, so it pipes to a pager cleanly and a script checking the exit code does not read it as a failure. Errors are the opposite: the message and usage go to stderr with a non-zero exit.
+
 ## Quick start
 
 Static commands take a Go package pattern (`./...` for a whole module, a package path, or nothing for the current directory). Read what a config struct declares:

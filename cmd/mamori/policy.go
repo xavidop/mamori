@@ -86,6 +86,9 @@ var supportedPolicyFormats = []string{formatAWSIAM, formatGCP, formatExternalSec
 // successful run that produced a valid, if empty, artifact -- see
 // policyUsage).
 func policyCmd(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return writeHelp(stdout, policyUsage)
+	}
 	patterns, typeName, format, schemes, err := parsePolicyArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)

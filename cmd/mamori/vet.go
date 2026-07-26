@@ -60,6 +60,9 @@ the analyzer:
 // diagnostic is reported or a package fails to load, 0 when clean. stdout and
 // stderr are injected so tests never touch the real os.Stdout/os.Stderr.
 func vetCmd(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return writeHelp(stdout, vetUsage)
+	}
 	_ = stdout // vet writes diagnostics to stderr, matching go vet; stdout is unused.
 
 	patterns, schemes, err := parseVetArgs(args)

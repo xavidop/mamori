@@ -42,6 +42,9 @@ schemes:
 // reserved for doctor/status, which classify a running process's health,
 // not a static-analysis failure).
 func explainCmd(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return writeHelp(stdout, explainUsage)
+	}
 	patterns, typeName, jsonOut, schemes, err := parseExplainArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)

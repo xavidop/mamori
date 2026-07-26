@@ -51,6 +51,9 @@ const defaultStatusInterval = 2 * time.Second
 // operator asked to watch until they said stop, not until any one poll
 // failed.
 func statusCmd(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return writeHelp(stdout, statusUsage)
+	}
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { _, _ = fmt.Fprint(stderr, statusUsage) }

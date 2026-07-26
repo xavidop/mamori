@@ -50,6 +50,9 @@ const jsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
 // os.Stdout/os.Stderr) and returns the process exit code: 0 on success, 1
 // on a usage or package-load error.
 func schemaCmd(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return writeHelp(stdout, schemaUsage)
+	}
 	patterns, typeName, schemes, err := parseSchemaArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
