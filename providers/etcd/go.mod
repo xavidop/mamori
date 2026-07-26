@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/xavidop/mamori v0.1.0
-	go.etcd.io/etcd/api/v3 v3.7.0
+	go.etcd.io/etcd/api/v3 v3.7.1
 	go.etcd.io/etcd/client/v3 v3.7.0
 )
 
