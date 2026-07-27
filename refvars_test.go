@@ -50,6 +50,32 @@ func TestExpandRefVarsUnterminated(t *testing.T) {
 	}
 }
 
+func TestExpandRefVarsEmptyName(t *testing.T) {
+	_, err := expandRefVars("aws-sm://${}/db", map[string]string{})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error %q should call out the empty variable name, not just report it as undefined", err)
+	}
+}
+
+// TestExpandRefVarsNotRecursive pins that a variable's own value is inserted
+// verbatim and never rescanned. This is deliberate (recursive expansion would
+// risk an infinite loop from a self-referencing or cyclic variable value), but
+// nothing else in the test suite would catch a future refactor that started
+// rescanning expanded output, so this test exists to catch exactly that.
+func TestExpandRefVarsNotRecursive(t *testing.T) {
+	vars := map[string]string{"A": "${B}", "B": "resolved"}
+	got, err := expandRefVars("x-${A}-y", vars)
+	if err != nil {
+		t.Fatalf("expandRefVars: %v", err)
+	}
+	if want := "x-${B}-y"; got != want {
+		t.Errorf("expandRefVars = %q, want %q (expansion must not recurse into an expanded value)", got, want)
+	}
+}
+
 func TestFieldSpecsExpandsAndReportsField(t *testing.T) {
 	type cfg struct {
 		Pass string `source:"aws-sm://${ENV}/db#password"`
@@ -69,8 +95,18 @@ func TestFieldSpecsExpandsAndReportsField(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error for an undefined variable, got nil")
 	}
-	if !strings.Contains(err.Error(), "Pass") {
-		t.Errorf("error %q should name the field", err)
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("err = %v, want ErrInvalid", err)
+	}
+	// The message must name the field, the ref, and the variable together, so
+	// it points at something a user can fix: which field, which source tag,
+	// and which name is missing from WithRefVars. Asserting each in isolation
+	// would not catch a future change that dropped one of the three while
+	// keeping the others.
+	for _, want := range []string{"Pass", "ENV", "aws-sm://${ENV}/db#password"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should contain %q", err, want)
+		}
 	}
 }
 
