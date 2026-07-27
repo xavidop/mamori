@@ -53,6 +53,9 @@ type Config struct {
     // centrally managed Parameter Store value, otherwise the default.
     Port       string        `source:"env:PORT,aws-ps://svc/port" default:"8080"`
 
+    // A nested field, selected with an RFC 6901 JSON Pointer fragment
+    DBUser     string        `source:"aws-sm://prod/db#/credentials/user"`
+
     // A file-backed value, hot-reloaded via fsnotify
     TLSCert    []byte        `source:"file:///etc/tls/tls.crt"`
 
@@ -80,6 +83,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 ## What makes it different
 
 - **Typed & tag-driven** - one struct, multiple sources, generics API (`Load[T]` / `Watch[T]`).
+- **Nested selection** - `#/credentials/password` is an RFC 6901 JSON Pointer, addressing a value at any depth through objects and array elements; any other fragment (`#ca.crt`, `#tls.key`) stays a literal top-level key, exactly as before.
 - **Precedence chains** - `source:"env:PORT,aws-ps://svc/port"` tries sources in priority order: the first to yield a value wins, not-found falls through to the next, and a real error stops the walk and applies the field's `onfail` policy instead of silently sliding to a lower-priority source. Every position is watched, so precedence is live.
 - **Reconciled at runtime** - native watch where the backend supports it (Kubernetes informers, Consul blocking queries, fsnotify), polling with jitter everywhere else, and lease-aware pre-expiry refresh for Vault.
 - **Atomic & validated** - an update that fails validation is *rejected*; `Get()` keeps returning the last good config. Config never enters a broken state mid-flight.

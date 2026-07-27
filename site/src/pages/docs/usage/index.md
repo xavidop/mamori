@@ -23,6 +23,9 @@ import (
 type Config struct {
 	Port       string        `source:"env:PORT" default:"8080"`
 	DBPassword secret.String `source:"aws-sm://prod/db-password"`
+	// #/credentials/user is an RFC 6901 JSON Pointer fragment, selecting a
+	// value nested inside the secret's JSON payload rather than a top-level key.
+	DBUser     string        `source:"aws-sm://prod/db#/credentials/user"`
 }
 
 func main() {
@@ -59,5 +62,6 @@ Batch-capable providers (for example AWS Secrets Manager) are resolved in a sing
 ## See also
 
 - [Concepts](/docs/concepts/) for refs, the tag grammar, and error kinds.
+- [Ref grammar](/docs/concepts/ref-grammar/) for the full `#key` fragment grammar, including nested JSON Pointer selection.
 - [Validation](/docs/validation/) for the defaults and validation rules applied on every load.
 - [Observability](/docs/observability/) for `Status`, `Health`, `Doctor`, and the read-only HTTP surface.

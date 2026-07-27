@@ -208,6 +208,8 @@ func TestConformance(t *testing.T) {
 	providertest.Run(t, providertest.Config{
 		New: func() mamori.Provider { return New(withClient(f)) },
 		Ref: func(key string) string { return "split://" + key },
+		// No PointerRef: split refs carry no fragment at all - the traffic key
+		// comes from ?key=, and Resolve never reads ref.Key (see Resolve).
 		Seed: func(_ context.Context, key, val string) error {
 			f.set(defaultKey, key, val)
 			return nil

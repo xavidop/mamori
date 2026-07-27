@@ -47,6 +47,8 @@ k8s-cm://<namespace>/<name>[#key]
 - `k8s-cm://prod/app-config#log_level` - returns the `log_level` entry of the `app-config` ConfigMap.
 - `k8s-cm://prod/app-config` - returns the whole ConfigMap data map as a JSON object.
 
+`ca.crt`, `tls.crt`, and `tls.key` are literal key names, not paths. A mamori fragment is only a JSON Pointer when it begins with `/`, so a dotted key addresses exactly the key it names. A Kubernetes Secret's `data` is a flat map with no nesting to point into, so this provider only ever does a literal lookup.
+
 ```go
 type Config struct {
 	DBPassword secret.String `source:"k8s-secret://prod/db-creds#password"`

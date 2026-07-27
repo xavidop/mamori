@@ -46,6 +46,13 @@ Rules to hold onto:
 - `default:` applies only to genuine absence (not-found), never to a real error.
 - `validate:` uses go-playground/validator/v10 syntax and runs on load AND on
   every reconciled update; an invalid update is rejected atomically.
+- `#key` selects one field from a JSON payload. A fragment beginning with `/`
+  is an RFC 6901 JSON Pointer, addressing a value at any depth through objects
+  and array elements: `source:"aws-sm://prod/db#/credentials/password"`,
+  `source:"aws-sm://prod/db#/replicas/5/host"`. Any other fragment is a
+  literal top-level key, exactly as before: `source:"k8s-secret://prod/tls#ca.crt"`.
+  Do not restructure a secret or add application-code plumbing to reach a
+  nested field when a pointer fragment already reaches it directly.
 
 ## Watch for live changes
 

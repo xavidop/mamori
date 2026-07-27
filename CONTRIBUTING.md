@@ -68,6 +68,14 @@ Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) 
    backend, also set `NoResolveErrors: true` (the unit-test run against the
    fake already covers classification).
 
+   If your `#key` fragment selects into a JSON payload via `mamori.SelectKey`,
+   also supply `providertest.Config.PointerRef` so the `JSONPointerSelection`
+   case exercises RFC 6901 JSON Pointer selection (`#/credentials/password`,
+   `#/replicas/5/host`) against your provider. Leave `PointerRef` `nil`, with a
+   comment naming why, when the fragment is a backend-native key, a facet
+   selector on an evaluated result, or unused - the case skips rather than
+   failing.
+
 6. Add a `README.md` documenting schemes, ref grammar, auth, and what is verified vs needs a live backend. A provider that passes `providertest` gets listed in the root README with a badge.
 7. If you classified errors beyond not-found (step 3), also: add an `## Error classification` section to the module's `README.md`, mirror it onto the module's docs-site page, and flip that module's row in both coverage tables (the root `README.md` and `site/src/pages/docs/providers/index.md`).
 

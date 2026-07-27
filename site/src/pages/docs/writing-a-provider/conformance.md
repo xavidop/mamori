@@ -5,7 +5,7 @@ title: Conformance
 
 # Conformance
 
-`github.com/xavidop/mamori/providertest` runs one function that exercises resolution, not-found typing, error classification, `Version` monotonicity, concurrency, context cancellation, native watch, goroutine hygiene (goleak), and a no-payload-logging assertion. Every provider must pass it.
+`github.com/xavidop/mamori/providertest` runs one function that exercises resolution, not-found typing, error classification, nested JSON Pointer selection (opt-in), `Version` monotonicity, concurrency, context cancellation, native watch, goroutine hygiene (goleak), and a no-payload-logging assertion. Every provider must pass it.
 
 ## Run the conformance case
 
@@ -31,6 +31,23 @@ Set `NoResolveErrors: true` (with a comment naming why) only if your backend has
 
 Classification is guarded twice: the conformance case cannot prove your SDK mapping exists (no fake produces real SDK errors), so add a table test over real SDK errors too. `KindUnknown` is always a legal outcome.
 
+## `JSONPointerSelection`
+
+This case proves your provider routes `#key` through `mamori.SelectKey` rather than hand-rolling a top-level-only lookup, so RFC 6901 JSON Pointer selection (`#/credentials/password`, `#/replicas/5/host`) behaves identically everywhere. It is **opt-in**, because a fragment does not mean the same thing in every provider:
+
+```go
+providertest.Config{
+	// ...
+	PointerRef: func(key, frag string) string {
+		return "myscheme://" + key + frag
+	},
+}
+```
+
+Supply `PointerRef` only when your provider's fragment slot **is** a JSON selector into a structured payload. Leave it `nil`, with a comment naming why, when the fragment is something else entirely - a backend-native key (a Kubernetes Secret's `data` map entry, a Doppler secret name), a facet selector on an evaluated result (`flipt`'s `#attachment`, `unleash`'s `#variant`/`#payload`), or nothing at all (`providers/mamori` never reads `ref.Key`). None of those is a defect; the case simply skips.
+
+`PointerRef` is a ref *builder*, not a boolean, because `Config.Ref` is not fragment-free by convention - several providers bake a fixed fragment into it (`vault://secret/<key>#value`, and the same shape in `mongodb`, `firestore`, and `k8s`), so appending a second fragment to `Ref`'s output would produce a doubled, unparseable fragment. The builder lets each provider say exactly where its selector goes.
+
 ## Build and test the module
 
 Build and test each module independently with the workspace disabled, exactly as CI does:
@@ -51,6 +68,7 @@ Or from the repo root, `make test` / `make lint` run every module.
 - [ ] Other failures map to a sentinel (`ErrPermissionDenied`, `ErrUnauthenticated`, `ErrUnavailable`, `ErrRateLimited`, `ErrInvalid`) with `%w`. Cover it two ways: `Fail`/`Clear` in `providertest.Config` (required unless `NoResolveErrors: true` with a reason), AND a table test mapping real SDK errors to kinds.
 - [ ] `Value.Version` is set and changes when the value changes; secret-bearing values set `Sensitive: true`.
 - [ ] `#key` uses `mamori.SelectKey`; the payload is never logged.
+- [ ] If your fragment is a JSON selector, supply `providertest.Config.PointerRef` so `JSONPointerSelection` runs; otherwise leave it `nil` with a comment naming why (backend-native key, facet selector, or unused).
 - [ ] `Watch` is implemented only for native-push backends, closes on `ctx` cancel, and leaks no goroutines.
 - [ ] A client interface is injected so `providertest.Run` passes against a fake; live tests are behind `//go:build integration`.
 - [ ] `go build`, `go vet`, and `go test` are clean with `GOWORK=off`; the README documents scheme, ref grammar, and auth.

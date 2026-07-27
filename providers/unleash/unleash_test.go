@@ -252,6 +252,8 @@ func TestConformance(t *testing.T) {
 	providertest.Run(t, providertest.Config{
 		New: func() mamori.Provider { return fakeProvider(f) },
 		Ref: func(key string) string { return "unleash://" + key + "#payload" },
+		// No PointerRef: #variant/#payload selects a facet of the evaluated
+		// toggle result, not a path into a JSON document (see Resolve).
 		Seed: func(_ context.Context, key, val string) error {
 			f.set(key, toggle{enabled: true, variantName: key, payloadValue: val})
 			return nil

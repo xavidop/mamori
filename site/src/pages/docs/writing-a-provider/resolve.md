@@ -42,6 +42,18 @@ Rules that keep providers interchangeable:
 - Set `Sensitive: true` on secret-bearing values; never log the payload.
 - Honor `ctx` in every network call.
 
+### `SelectKey`'s contract
+
+`SelectKey(data []byte, key string) ([]byte, error)` handles both forms `ref.Key` can take, so your provider never has to branch on them itself:
+
+- `key == ""` returns `data` unchanged.
+- A `key` beginning with `/` is an RFC 6901 JSON Pointer, addressing a value at any depth through objects and array elements (`"/credentials/password"`, `"/replicas/5/host"`).
+- Any other `key` is a literal top-level key, exactly as before.
+
+Calling `SelectKey` is what earns your provider pointer support **for free**: a provider that hand-rolls its own `map[string]json.RawMessage` lookup instead passes every other conformance case and fails only `JSONPointerSelection` (see [Conformance](/docs/writing-a-provider/conformance/)). An absent key or an out-of-range array index wraps `ErrNotFound`, so `default:`/`optional` still apply exactly as they do for a missing top-level key; a structural mismatch - a pointer descending into a scalar, a malformed array token, a bad escape, or a non-JSON payload - wraps `ErrInvalid` instead, because it is a malformed request against this payload rather than genuine absence. See [Ref grammar](/docs/concepts/ref-grammar/) for the full grammar and error table.
+
+This only applies when your provider's fragment is actually a JSON selector. Some providers use `ref.Key` for a backend-native lookup that has no JSON document to point into at all (a Kubernetes Secret's `data` map, a facet like `#variant`/`#payload` on a feature-flag evaluation); those providers correctly skip `SelectKey` and are not expected to support pointers.
+
 ## Map backend errors to kinds
 
 `ErrNotFound` is the only error that changes mamori's behavior (it triggers `default:` and `optional` handling). Classify every other failure too, so telemetry (`mamori.error.kind`) and callers using `mamori.ErrorKind` can tell an operator what went wrong.

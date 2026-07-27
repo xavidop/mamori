@@ -329,6 +329,8 @@ func TestConformance(t *testing.T) {
 		Ref: func(key string) string {
 			return "flipt://" + testNamespace + "/" + key
 		},
+		// No PointerRef: #attachment selects a variant's attachment facet of
+		// the evaluated result, not a path into a JSON document (see Resolve).
 		Seed: func(_ context.Context, key, val string) error {
 			// Model every seeded flag as a variant flag whose matched variant key
 			// is the seeded value, so Resolve returns the value verbatim.

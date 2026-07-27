@@ -20,6 +20,12 @@
 //
 //	cfg, err := mamori.Load[Config](ctx)
 //
+// A source tag's optional #key fragment selects one field from a structured
+// payload: a fragment beginning with '/' is an RFC 6901 JSON Pointer
+// addressing a value at any depth ("#/credentials/password"), and any other
+// fragment is a literal top-level key ("#ca.crt"), exactly as before. See
+// [ParseRef] and [SelectKey].
+//
 // # Watching
 //
 // [Watch] performs an initial fail-fast load and then keeps the configuration

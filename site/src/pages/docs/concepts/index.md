@@ -29,6 +29,8 @@ type Config struct {
 	APIKey     secret.String `source:"aws-sm://prod/api-key"`
 	// one key of a JSON secret
 	DBPassword secret.String `source:"aws-sm://prod/db#password"`
+	// a nested key, addressed with an RFC 6901 JSON Pointer fragment
+	DBUser     string        `source:"aws-sm://prod/db#/credentials/user"`
 	// provider option
 	Leased     secret.String `source:"vault://kv/data/api#key?renew=true"`
 	// opaque scheme
@@ -38,7 +40,7 @@ type Config struct {
 }
 ```
 
-`ParseRef` produces a `Ref{Scheme, Path, Key, Opts, Raw}`. `#key` selects one field from a structured (JSON) payload; `?opts` are provider-specific plus a small set of core-recognized options (`debounce`, `optional`, `version`).
+`ParseRef` produces a `Ref{Scheme, Path, Key, Opts, Raw}`. `#key` selects one field from a structured (JSON) payload - either a literal top-level key, or, when the fragment begins with `/`, an RFC 6901 JSON Pointer addressing a value at any depth (see [Ref grammar](/docs/concepts/ref-grammar/) for the full rules). `?opts` are provider-specific plus a small set of core-recognized options (`debounce`, `optional`, `version`).
 
 ### Supplementary tags
 
@@ -85,6 +87,7 @@ type Value struct {
 
 ## Next
 
+- [Ref grammar](/docs/concepts/ref-grammar/) - the full scheme/fragment/query grammar, JSON Pointer selection, and the error table.
 - [Source chains and precedence](/docs/concepts/source-chains/) - multiple refs per field, `onfail`, and the comma-split rule.
 - [Snapshots and pinning](/docs/usage/snapshots/) - snapshot versions, `WithHistory`, and pinning.
 - [Error kinds](/docs/concepts/error-kinds/) - the typed `Kind` values and their sentinels.

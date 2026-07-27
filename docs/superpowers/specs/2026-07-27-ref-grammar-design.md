@@ -169,12 +169,23 @@ conformance case depends on it. Three distinct meanings exist today:
    These gain pointer support.
 2. **A backend-native key.** The Kubernetes provider reads `Secret.Data`, a Go
    map, so `#ca.crt` names a map entry, not a JSON path. Doppler's fragment
-   names the secret itself. These correctly do their own lookup and gain
-   nothing, because there is no document to point into.
+   names the secret itself. `flipt` and `unleash` belong here too: their
+   fragment is a **facet selector** on an already-evaluated result rather than
+   a path into a document (`flipt`: empty or `#attachment`; `unleash`: empty,
+   `#variant`, or `#payload`). All of these correctly do their own lookup and
+   gain nothing from pointer support, because there is no document to point
+   into.
 3. **Nothing.** `providers/mamori`'s client never reads `ref.Key` at all;
    per decision D9 of the operational-layer spec, field selection is
-   server-side only. Feature-flag providers returning a bare `bool` or `string`
-   (`unleash`, `split`, `flipt`) have no payload to select from either.
+   server-side only. `providers/split` is the same: its `Resolve` consults
+   only `ref.Path` and the `?key=` query option, never `ref.Key`, so a split
+   ref carries no fragment grammar at all - not even a facet selector.
+
+A genuine gap, out of scope here: `flipt`'s `#attachment` and `unleash`'s
+`#payload` can themselves be a JSON string, and there is no second-level
+selector to reach into it once the facet is chosen - a caller who needs one
+field out of an attachment or payload must decode the whole string
+(`flatten:"json"`) rather than compose a pointer onto the facet fragment.
 
 Only category 1 can be conformance-tested for pointer support, and a provider
 in category 2 or 3 is not defective for failing such a test. The conformance

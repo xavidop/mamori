@@ -29,6 +29,8 @@ type Config struct {
 - Without `#key`, the whole data map is JSON-encoded as an object of string values.
 - `Value.Version` is the object's `ResourceVersion` - monotonic, native change detection.
 
+`ca.crt`, `tls.crt`, and `tls.key` are literal key names, not paths. A mamori fragment is only a JSON Pointer when it begins with `/`, so a dotted key addresses exactly the key it names. A Kubernetes Secret's `data` is a flat map with no nesting to point into, so this provider only ever does a literal lookup.
+
 ## Authentication
 
 In-cluster config when running in a Pod; otherwise the default kubeconfig resolution (`KUBECONFIG`, then `~/.kube/config`). Override explicitly:
