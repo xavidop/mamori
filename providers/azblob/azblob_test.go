@@ -281,8 +281,9 @@ const confContainer = "conformance"
 func TestConformance(t *testing.T) {
 	fake := newFakeStore()
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(WithClient(fake)) },
-		Ref: func(key string) string { return "azblob://" + confContainer + "/" + key },
+		New:        func() mamori.Provider { return New(WithClient(fake)) },
+		Ref:        func(key string) string { return "azblob://" + confContainer + "/" + key },
+		PointerRef: func(key, frag string) string { return "azblob://" + confContainer + "/" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			fake.put(confContainer, key, val)
 			return nil

@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -196,6 +197,22 @@ var _ backend = (*fakeBackend)(nil)
 
 // --- conformance ---------------------------------------------------------------
 
+// conformanceDoc builds the document Seed/Mutate write for val. Most
+// conformance cases seed a plain scalar (e.g. "hello-world"), which is not
+// valid JSON, so it is wrapped under a "value" field and selected via Ref's
+// baked-in #value. JSONPointerSelection instead seeds a JSON object payload;
+// merging its fields directly into the document (alongside _id) lets
+// PointerRef's fragment select directly into it, exactly as a real
+// multi-field MongoDB document would be addressed.
+func conformanceDoc(key, val string) bson.M {
+	var m bson.M
+	if err := json.Unmarshal([]byte(val), &m); err == nil {
+		m["_id"] = key
+		return m
+	}
+	return bson.M{"_id": key, "value": val}
+}
+
 func TestConformance(t *testing.T) {
 	fake := newFakeBackend()
 	providertest.Run(t, providertest.Config{
@@ -203,15 +220,20 @@ func TestConformance(t *testing.T) {
 		// The conformance kit stores each value as a document's "value" field and
 		// selects it with #value, so the resolved bytes equal the seeded string.
 		Ref: func(key string) string { return "mongodb://conformance/" + key + "#value" },
+		// PointerRef drops the baked "#value" fragment in favor of the caller's
+		// own: #key is delegated to mamori.SelectKey (see valueFor), and a JSON
+		// Pointer fragment needs to address the document directly, not a value
+		// nested one field under it.
+		PointerRef: func(key, frag string) string { return "mongodb://conformance/" + key + frag },
 		// mongodb.go: the change stream is opened before the goroutine runs and
 		// the baseline is read after it ("Emit the current value as a baseline").
 		WatchDeliversBaseline: true,
 		Seed: func(_ context.Context, key, val string) error {
-			fake.put("conformance", key, bson.M{"_id": key, "value": val})
+			fake.put("conformance", key, conformanceDoc(key, val))
 			return nil
 		},
 		Mutate: func(_ context.Context, key, val string) error {
-			fake.put("conformance", key, bson.M{"_id": key, "value": val})
+			fake.put("conformance", key, conformanceDoc(key, val))
 			return nil
 		},
 		Fail: func(_ context.Context, key string, err error) error {

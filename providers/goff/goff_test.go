@@ -79,8 +79,9 @@ func (f *fakeEvaluator) RawVariation(flagKey string, _ ffcontext.Context, _ any)
 func TestConformance(t *testing.T) {
 	fake := newFake()
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(withEvaluator(fake)) },
-		Ref: func(key string) string { return "goff://" + key },
+		New:        func() mamori.Provider { return New(withEvaluator(fake)) },
+		Ref:        func(key string) string { return "goff://" + key },
+		PointerRef: func(key, frag string) string { return "goff://" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

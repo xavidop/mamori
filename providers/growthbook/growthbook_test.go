@@ -77,8 +77,9 @@ func parse(t *testing.T, raw string) mamori.Ref {
 func TestConformance(t *testing.T) {
 	fake := newFakeEvaluator()
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(withEvaluator(fake)) },
-		Ref: func(key string) string { return "growthbook://" + key },
+		New:        func() mamori.Provider { return New(withEvaluator(fake)) },
+		Ref:        func(key string) string { return "growthbook://" + key },
+		PointerRef: func(key, frag string) string { return "growthbook://" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			// Seed a string so encodeFeatureValue returns the raw value the
 			// conformance kit compares against.

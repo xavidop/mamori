@@ -167,6 +167,8 @@ func TestConformanceSecret(t *testing.T) {
 			// key is a bare name; map it to default/<name>#value
 			return "k8s-secret://" + testNamespace + "/" + sanitize(key) + "#value"
 		},
+		// No PointerRef: #key selects an entry of Secret.Data, a Go map, not a
+		// path into a JSON document (see secretValue).
 		Seed:   func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		// k8s.go: "Emit the current snapshot after the watch is established so
@@ -205,8 +207,10 @@ func TestConformanceConfigMap(t *testing.T) {
 	}
 
 	providertest.Run(t, providertest.Config{
-		New:    func() mamori.Provider { return k8sprov.NewConfigMap(k8sprov.WithClient(client)) },
-		Ref:    func(key string) string { return "k8s-cm://" + testNamespace + "/" + sanitize(key) + "#value" },
+		New: func() mamori.Provider { return k8sprov.NewConfigMap(k8sprov.WithClient(client)) },
+		Ref: func(key string) string { return "k8s-cm://" + testNamespace + "/" + sanitize(key) + "#value" },
+		// No PointerRef: #key selects an entry of ConfigMap.Data, a Go map, not a
+		// path into a JSON document (see configMapValue).
 		Seed:   func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		// Same Watch as the Secret case above: snapshot after the watch starts.

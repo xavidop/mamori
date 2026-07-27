@@ -206,7 +206,8 @@ func TestConformance(t *testing.T) {
 				return os.ReadFile(path)
 			}))
 		},
-		Ref: func(key string) string { return "sops://" + pathFor(key) },
+		Ref:        func(key string) string { return "sops://" + pathFor(key) },
+		PointerRef: func(key, frag string) string { return "sops://" + pathFor(key) + frag },
 		// sops.go: the fsnotify watcher is created and w.Add'd before the
 		// goroutine starts, and the baseline is emitted from inside it.
 		WatchDeliversBaseline: true,

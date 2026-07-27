@@ -223,8 +223,9 @@ func mustRef(t *testing.T, s string) mamori.Ref {
 func TestConformance(t *testing.T) {
 	fake := newFakeBackend()
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(withBackend(fake)) },
-		Ref: func(key string) string { return "postgres://app_config/" + key },
+		New:        func() mamori.Provider { return New(withBackend(fake)) },
+		Ref:        func(key string) string { return "postgres://app_config/" + key },
+		PointerRef: func(key, frag string) string { return "postgres://app_config/" + key + frag },
 		// postgres.go: LISTEN is issued before the baseline query, and the fake
 		// models the same queue-from-subscription semantics a real LISTEN has
 		// (see fakeBackend's doc comment).

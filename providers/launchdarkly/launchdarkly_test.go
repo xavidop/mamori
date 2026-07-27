@@ -173,9 +173,10 @@ func TestConformance(t *testing.T) {
 		New: func() mamori.Provider {
 			return New(withClient(fake))
 		},
-		Ref:    func(key string) string { return "launchdarkly://" + key },
-		Seed:   func(_ context.Context, key, val string) error { fake.setString(key, val); return nil },
-		Mutate: func(_ context.Context, key, val string) error { fake.setString(key, val); return nil },
+		Ref:        func(key string) string { return "launchdarkly://" + key },
+		PointerRef: func(key, frag string) string { return "launchdarkly://" + key + frag },
+		Seed:       func(_ context.Context, key, val string) error { fake.setString(key, val); return nil },
+		Mutate:     func(_ context.Context, key, val string) error { fake.setString(key, val); return nil },
 		Fail: func(_ context.Context, key string, err error) error {
 			fake.fail(key, err)
 			return nil

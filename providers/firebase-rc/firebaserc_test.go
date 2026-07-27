@@ -98,8 +98,9 @@ func parse(t *testing.T, raw string) mamori.Ref {
 func TestConformance(t *testing.T) {
 	fake := newFakeBackend()
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(WithFetcher(fake)) },
-		Ref: func(key string) string { return "firebase-rc://" + key },
+		New:        func() mamori.Provider { return New(WithFetcher(fake)) },
+		Ref:        func(key string) string { return "firebase-rc://" + key },
+		PointerRef: func(key, frag string) string { return "firebase-rc://" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

@@ -346,6 +346,8 @@ func TestConformance(t *testing.T) {
 		Ref: func(key string) string {
 			return "doppler://" + testProject + "/" + testConfig + "#" + key
 		},
+		// No PointerRef: #<name> is the secret's name, a required, backend-native
+		// identifier (see Resolve), not a path into a JSON document.
 		Seed: func(_ context.Context, key, val string) error {
 			f.set(testProject, testConfig, key, val)
 			return nil

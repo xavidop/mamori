@@ -128,6 +128,21 @@ func (f *fakeVault) Renew(ctx context.Context, leaseID string, increment int) (*
 
 // --- conformance -----------------------------------------------------------
 
+// conformanceSecretData builds the secret.Data the conformance kit's Seed/
+// Mutate store for val. Most conformance cases seed a plain scalar (e.g.
+// "hello-world"), which is not valid JSON, so it is wrapped under a "value"
+// field and selected via Ref's baked-in #value. JSONPointerSelection instead
+// seeds a JSON object payload; storing that unwrapped lets PointerRef's
+// fragment select directly into it, exactly as a real multi-field Vault
+// secret would be addressed.
+func conformanceSecretData(val string) map[string]interface{} {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(val), &m); err == nil {
+		return m
+	}
+	return map[string]interface{}{"value": val}
+}
+
 func TestConformance(t *testing.T) {
 	fake := newFakeVault()
 	providertest.Run(t, providertest.Config{
@@ -135,12 +150,17 @@ func TestConformance(t *testing.T) {
 		// The conformance kit seeds a single scalar per key; we store it under the
 		// "value" field and select it with #value so Bytes is exactly that scalar.
 		Ref: func(key string) string { return "vault://secret/" + key + "#value" },
+		// PointerRef drops the baked "#value" fragment in favor of the caller's
+		// own, since #key is delegated to mamori.SelectKey (see Resolve) and a
+		// JSON Pointer fragment needs to address the secret's data map directly,
+		// not a value nested one level under it.
+		PointerRef: func(key, frag string) string { return "vault://secret/" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
-			fake.setSecret("secret", key, map[string]interface{}{"value": val})
+			fake.setSecret("secret", key, conformanceSecretData(val))
 			return nil
 		},
 		Mutate: func(_ context.Context, key, val string) error {
-			fake.setSecret("secret", key, map[string]interface{}{"value": val})
+			fake.setSecret("secret", key, conformanceSecretData(val))
 			return nil
 		},
 		Fail: func(_ context.Context, key string, err error) error {

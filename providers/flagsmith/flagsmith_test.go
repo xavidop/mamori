@@ -230,8 +230,9 @@ func TestConformance(t *testing.T) {
 	f := newFake()
 
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return newWithSource(f) },
-		Ref: func(key string) string { return "flagsmith://" + key },
+		New:        func() mamori.Provider { return newWithSource(f) },
+		Ref:        func(key string) string { return "flagsmith://" + key },
+		PointerRef: func(key, frag string) string { return "flagsmith://" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			f.set(key, val)
 			return nil

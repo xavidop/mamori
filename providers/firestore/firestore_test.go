@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -156,6 +157,20 @@ func (s *fakeStream) Stop() {}
 // compile-time check that the fake satisfies the backend interface.
 var _ backend = (*fakeStore)(nil)
 
+// conformanceDoc builds the document Seed/Mutate write for val. Most
+// conformance cases seed a plain scalar (e.g. "hello-world"), which is not
+// valid JSON, so it is wrapped under a "value" field and selected via Ref's
+// baked-in #value. JSONPointerSelection instead seeds a JSON object payload;
+// storing that unwrapped lets PointerRef's fragment select directly into it,
+// exactly as a real multi-field Firestore document would be addressed.
+func conformanceDoc(val string) map[string]interface{} {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(val), &m); err == nil {
+		return m
+	}
+	return map[string]interface{}{"value": val}
+}
+
 func TestConformance(t *testing.T) {
 	store := newFakeStore()
 	const collection = "conform"
@@ -164,15 +179,20 @@ func TestConformance(t *testing.T) {
 		// The document stores the value under a "value" field so a scalar can be
 		// round-tripped through a document-shaped backend.
 		Ref: func(key string) string { return "firestore://" + collection + "/" + key + "#value" },
+		// PointerRef drops the baked "#value" fragment in favor of the caller's
+		// own: #key is delegated to mamori.SelectKey (see valueFor), and a JSON
+		// Pointer fragment needs to address the document directly, not a value
+		// nested one field under it.
+		PointerRef: func(key, frag string) string { return "firestore://" + collection + "/" + key + frag },
 		// firestore.go: the snapshot stream is created before the goroutine
 		// runs, and its first event is the current document.
 		WatchDeliversBaseline: true,
 		Seed: func(_ context.Context, key, val string) error {
-			store.set(collection, key, map[string]interface{}{"value": val})
+			store.set(collection, key, conformanceDoc(val))
 			return nil
 		},
 		Mutate: func(_ context.Context, key, val string) error {
-			store.set(collection, key, map[string]interface{}{"value": val})
+			store.set(collection, key, conformanceDoc(val))
 			return nil
 		},
 		Fail: func(_ context.Context, key string, err error) error {

@@ -262,24 +262,26 @@ func mustParse(t *testing.T, raw string) mamori.Ref {
 func TestConformanceSecretsManager(t *testing.T) {
 	fake := newFakeSM()
 	providertest.Run(t, providertest.Config{
-		New:    func() mamori.Provider { return newSMWithClient(fake) },
-		Ref:    func(key string) string { return schemeSM + "://" + key },
-		Seed:   func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
-		Mutate: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
-		Fail:   func(_ context.Context, key string, err error) error { fake.fail(key, err); return nil },
-		Clear:  func(_ context.Context, key string) error { fake.clear(key); return nil },
+		New:        func() mamori.Provider { return newSMWithClient(fake) },
+		Ref:        func(key string) string { return schemeSM + "://" + key },
+		PointerRef: func(key, frag string) string { return schemeSM + "://" + key + frag },
+		Seed:       func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Mutate:     func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Fail:       func(_ context.Context, key string, err error) error { fake.fail(key, err); return nil },
+		Clear:      func(_ context.Context, key string) error { fake.clear(key); return nil },
 	})
 }
 
 func TestConformanceParameterStore(t *testing.T) {
 	fake := newFakeSSM()
 	providertest.Run(t, providertest.Config{
-		New:    func() mamori.Provider { return newPSWithClient(fake) },
-		Ref:    func(key string) string { return schemePS + "://" + key },
-		Seed:   func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
-		Mutate: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
-		Fail:   func(_ context.Context, key string, err error) error { fake.fail(key, err); return nil },
-		Clear:  func(_ context.Context, key string) error { fake.clear(key); return nil },
+		New:        func() mamori.Provider { return newPSWithClient(fake) },
+		Ref:        func(key string) string { return schemePS + "://" + key },
+		PointerRef: func(key, frag string) string { return schemePS + "://" + key + frag },
+		Seed:       func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Mutate:     func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Fail:       func(_ context.Context, key string, err error) error { fake.fail(key, err); return nil },
+		Clear:      func(_ context.Context, key string) error { fake.clear(key); return nil },
 	})
 }
 

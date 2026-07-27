@@ -209,8 +209,9 @@ func TestResolveContextCancelled(t *testing.T) {
 func TestConformance(t *testing.T) {
 	fake := newFakeVault()
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(WithClient(fake)) },
-		Ref: func(key string) string { return "azure-kv://testvault/" + key },
+		New:        func() mamori.Provider { return New(WithClient(fake)) },
+		Ref:        func(key string) string { return "azure-kv://testvault/" + key },
+		PointerRef: func(key, frag string) string { return "azure-kv://testvault/" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

@@ -110,8 +110,9 @@ func TestConformance(t *testing.T) {
 	fake := newFakeGCS()
 	const bucket = "test-bucket"
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(WithClient(fake)) },
-		Ref: func(key string) string { return "gcs://" + bucket + "/" + key },
+		New:        func() mamori.Provider { return New(WithClient(fake)) },
+		Ref:        func(key string) string { return "gcs://" + bucket + "/" + key },
+		PointerRef: func(key, frag string) string { return "gcs://" + bucket + "/" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			fake.put(bucket, key, val)
 			return nil

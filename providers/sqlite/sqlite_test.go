@@ -160,7 +160,8 @@ func TestConformance(t *testing.T) {
 				return failQueryer{inner: q, reg: reg}
 			}))
 		},
-		Ref: func(key string) string { return "sqlite://cfg/" + key },
+		Ref:        func(key string) string { return "sqlite://cfg/" + key },
+		PointerRef: func(key, frag string) string { return "sqlite://cfg/" + key + frag },
 		// sqlite.go: the fsnotify watch is added before the goroutine starts,
 		// and the baseline emit happens inside it.
 		WatchDeliversBaseline: true,

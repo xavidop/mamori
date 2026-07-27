@@ -130,6 +130,35 @@ type Config struct {
 	// is a hard error, so this exemption is explicit and greppable, never a
 	// silent skip.
 	NoResolveErrors bool
+
+	// PointerRef builds a ref whose #fragment selects a value out of a JSON
+	// payload, given a logical key and the fragment to use (including its
+	// leading '#'). Supply it only when this provider's fragment slot IS a JSON
+	// selector routed through mamori.SelectKey; leave it nil otherwise, and the
+	// JSONPointerSelection case skips.
+	//
+	// It is a builder rather than a bool because Config.Ref is not fragment-free
+	// by convention: several providers bake a fixed fragment into it (vault,
+	// mongodb, firestore, and k8s all produce "...#value"), so the case cannot
+	// simply append its own fragment to Ref's output. A builder lets each
+	// provider say where its selector goes:
+	//
+	//	PointerRef: func(key, frag string) string {
+	//	    return "vault://secret/" + key + frag
+	//	}
+	//
+	// Leaving it nil is not a confession of a gap. A fragment means three
+	// different things across this ecosystem: a JSON selector (most providers),
+	// a backend-native key (a Kubernetes Secret data key, a Doppler secret
+	// name), or nothing at all (providers/mamori never reads ref.Key by design;
+	// a flag provider returning a bare bool has no payload to select from).
+	// Only the first can be tested for pointer support, and the other two are
+	// not defective for failing such a test.
+	//
+	// What this case DOES catch, for a provider that supplies it: hand-rolling a
+	// top-level-only key lookup instead of calling mamori.SelectKey, which
+	// passes every other case in this kit and fails only this one.
+	PointerRef func(key, fragment string) string
 }
 
 func (c Config) key(name string) string {
@@ -164,6 +193,7 @@ func Run(t *testing.T, c Config) {
 	t.Run("Scheme", func(t *testing.T) { testScheme(t, c) })
 	t.Run("ResolveSeeded", func(t *testing.T) { testResolveSeeded(t, c) })
 	t.Run("NotFoundTyped", func(t *testing.T) { testNotFound(t, c) })
+	t.Run("JSONPointerSelection", func(t *testing.T) { testJSONPointerSelection(t, c) })
 	t.Run("ErrorClassification", func(t *testing.T) { RunErrorClassification(t, c) })
 	t.Run("ContextCancel", func(t *testing.T) { testContextCancel(t, c) })
 	t.Run("ConcurrentResolve", func(t *testing.T) { testConcurrentResolve(t, c) })
@@ -268,6 +298,67 @@ func RunErrorClassification(tb testing.TB, c Config) {
 				"errors.Is chain. Underlying error: %v",
 				tc.name, got, tc.want, resolveErr)
 			return
+		}
+	}
+}
+
+// testJSONPointerSelection verifies a provider whose #fragment is a JSON
+// selector routes it through mamori.SelectKey, so nested selection behaves
+// identically everywhere. A provider that hand-rolls a top-level-only key
+// lookup passes every other case in this kit and fails only this one.
+//
+// It skips when Config.PointerRef is nil, because a fragment is not a JSON
+// selector in every provider: it is a backend-native key in some and means
+// nothing in others. See PointerRef's doc comment.
+func testJSONPointerSelection(t *testing.T, c Config) {
+	t.Helper()
+	if c.PointerRef == nil {
+		t.Skip("providertest: provider supplies no PointerRef; its #fragment is not a JSON selector")
+		return
+	}
+	ctx := context.Background()
+	p := c.New()
+	key := c.key("jsonpointer")
+
+	const payload = `{"outer":{"inner":"deep"},"list":[{"n":"zero"},{"n":"one"}],"dotted.key":"literal"}`
+	if err := c.Seed(ctx, key, payload); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	ok := []struct{ frag, want string }{
+		{"#/outer/inner", "deep"},
+		{"#/list/1/n", "one"},
+		{"#dotted.key", "literal"}, // literal fragment, not a path
+	}
+	for _, tc := range ok {
+		ref, err := mamori.ParseRef(c.PointerRef(key, tc.frag))
+		if err != nil {
+			t.Fatalf("ParseRef(%q): %v", tc.frag, err)
+		}
+		v, err := p.Resolve(ctx, ref)
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", tc.frag, err)
+		}
+		if string(v.Bytes) != tc.want {
+			t.Errorf("Resolve(%q) = %q, want %q", tc.frag, v.Bytes, tc.want)
+		}
+	}
+
+	bad := []struct {
+		frag string
+		want error
+	}{
+		{"#/outer/absent", mamori.ErrNotFound},
+		{"#/list/9", mamori.ErrNotFound},
+		{"#/outer/inner/deeper", mamori.ErrInvalid},
+	}
+	for _, tc := range bad {
+		ref, err := mamori.ParseRef(c.PointerRef(key, tc.frag))
+		if err != nil {
+			t.Fatalf("ParseRef(%q): %v", tc.frag, err)
+		}
+		if _, err := p.Resolve(ctx, ref); !errors.Is(err, tc.want) {
+			t.Errorf("Resolve(%q) err = %v, want %v", tc.frag, err, tc.want)
 		}
 	}
 }

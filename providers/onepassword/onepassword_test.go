@@ -406,6 +406,9 @@ func TestConformance(t *testing.T) {
 		Ref: func(key string) string {
 			return "op://" + confVaultName + "/" + confItemTitle + "/" + key
 		},
+		// No PointerRef: the field name is the ref's third path segment (see
+		// parseOpRef), not a fragment. #key has no meaning to this provider at
+		// all; ref.Key is never referenced in Resolve.
 		Seed: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

@@ -142,8 +142,11 @@ func TestConformance(t *testing.T) {
 		return nil
 	}
 	providertest.Run(t, providertest.Config{
-		New:    func() mamori.Provider { return newWithClient(fake) },
-		Ref:    func(key string) string { return "dynamodb://conf/" + key + "#value" },
+		New: func() mamori.Provider { return newWithClient(fake) },
+		Ref: func(key string) string { return "dynamodb://conf/" + key + "#value" },
+		// No PointerRef: #attr selects a DynamoDB attribute from the item's
+		// AttributeValue map, not a path into a JSON document. The item is only
+		// marshalled to JSON when the fragment is empty (see itemBytes).
 		Seed:   seed,
 		Mutate: seed, // put overwrites, so seed doubles as mutate
 		Fail: func(_ context.Context, key string, err error) error {

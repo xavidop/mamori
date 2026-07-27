@@ -121,8 +121,9 @@ func TestConformance(t *testing.T) {
 	fake := newFakeSM()
 	const project = "test-project"
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(WithClient(fake)) },
-		Ref: func(key string) string { return "gcp-sm://" + project + "/" + key },
+		New:        func() mamori.Provider { return New(WithClient(fake)) },
+		Ref:        func(key string) string { return "gcp-sm://" + project + "/" + key },
+		PointerRef: func(key, frag string) string { return "gcp-sm://" + project + "/" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			fake.add(project, key, val)
 			return nil

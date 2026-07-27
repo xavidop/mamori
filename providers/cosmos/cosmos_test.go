@@ -336,6 +336,9 @@ func TestConformance(t *testing.T) {
 		Ref: func(k string) string {
 			return "cosmos://" + confDatabase + "/" + confContainer + "/" + k
 		},
+		PointerRef: func(k, frag string) string {
+			return "cosmos://" + confDatabase + "/" + confContainer + "/" + k + frag
+		},
 		Seed: func(_ context.Context, k, val string) error {
 			fake.put(confDatabase, confContainer, k, val)
 			return nil

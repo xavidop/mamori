@@ -148,7 +148,8 @@ func TestConformance(t *testing.T) {
 		New: func() mamori.Provider {
 			return New(withKV(fake), WithWaitTime(500*time.Millisecond))
 		},
-		Ref: func(key string) string { return "consul://" + key },
+		Ref:        func(key string) string { return "consul://" + key },
+		PointerRef: func(key, frag string) string { return "consul://" + key + frag },
 		// consul.go: the first blocking query (lastIndex == 0) reads and emits
 		// the baseline, and the index it returns is the subscription position,
 		// so nothing written after it can be missed.

@@ -205,10 +205,11 @@ func TestWatchEmitsOnSet(t *testing.T) {
 func TestConformance(t *testing.T) {
 	f := newFakeRedis()
 	providertest.Run(t, providertest.Config{
-		New:    func() mamori.Provider { return New(withRedisAPI(f)) },
-		Ref:    func(key string) string { return "redis://" + key },
-		Seed:   func(_ context.Context, key, val string) error { f.set(key, val); return nil },
-		Mutate: func(_ context.Context, key, val string) error { f.set(key, val); return nil },
+		New:        func() mamori.Provider { return New(withRedisAPI(f)) },
+		Ref:        func(key string) string { return "redis://" + key },
+		PointerRef: func(key, frag string) string { return "redis://" + key + frag },
+		Seed:       func(_ context.Context, key, val string) error { f.set(key, val); return nil },
+		Mutate:     func(_ context.Context, key, val string) error { f.set(key, val); return nil },
 		// redis.go: "Subscribe before emitting the baseline so no notification
 		// is missed between the baseline GET and the start of the read loop."
 		WatchDeliversBaseline: true,

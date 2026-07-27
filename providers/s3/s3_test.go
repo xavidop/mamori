@@ -130,10 +130,11 @@ const testBucket = "mamori-test-bucket"
 func TestConformance(t *testing.T) {
 	fake := newFakeS3()
 	providertest.Run(t, providertest.Config{
-		New:    func() mamori.Provider { return newWithClient(fake) },
-		Ref:    func(key string) string { return scheme + "://" + testBucket + "/" + key },
-		Seed:   func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
-		Mutate: func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
+		New:        func() mamori.Provider { return newWithClient(fake) },
+		Ref:        func(key string) string { return scheme + "://" + testBucket + "/" + key },
+		PointerRef: func(key, frag string) string { return scheme + "://" + testBucket + "/" + key + frag },
+		Seed:       func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
+		Mutate:     func(_ context.Context, key, val string) error { fake.put(testBucket, key, val); return nil },
 		Fail: func(_ context.Context, key string, err error) error {
 			fake.fail(testBucket, key, err)
 			return nil

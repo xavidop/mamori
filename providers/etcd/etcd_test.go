@@ -201,8 +201,9 @@ func TestConformance(t *testing.T) {
 		New: func() mamori.Provider {
 			return New(withClient(fake))
 		},
-		Ref:  func(key string) string { return "etcd://" + key },
-		Seed: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Ref:        func(key string) string { return "etcd://" + key },
+		PointerRef: func(key, frag string) string { return "etcd://" + key + frag },
+		Seed:       func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

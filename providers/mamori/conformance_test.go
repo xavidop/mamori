@@ -298,6 +298,11 @@ func runConformance(t *testing.T, serverOpts []server.Option, endpointFor func(*
 	cfg := providertest.Config{
 		New: func() mamori.Provider { return newClient() },
 		Ref: func(key string) string { return "mamori://" + key },
+		// No PointerRef: ref.Key is never read by this client (see resolve.go).
+		// Field selection for a mamori:// ref is server-side only, decided by how
+		// the operator's Bind maps a name to its upstream ref (decision D9); the
+		// client only ever asks for a binding name, never a fragment within it.
+		//
 		// The server sends a snapshot per subscribed name at subscribe time
 		// (server/handler.go, sendWatchSnapshot), so the first Update the SSE
 		// watch delivers proves the subscription is registered upstream.

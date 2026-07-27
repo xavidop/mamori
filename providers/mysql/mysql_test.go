@@ -462,8 +462,9 @@ func TestConformance(t *testing.T) {
 	f := newFakeDB()
 
 	providertest.Run(t, providertest.Config{
-		New: func() mamori.Provider { return New(withQueryer(f)) },
-		Ref: func(key string) string { return "mysql://kv/" + key },
+		New:        func() mamori.Provider { return New(withQueryer(f)) },
+		Ref:        func(key string) string { return "mysql://kv/" + key },
+		PointerRef: func(key, frag string) string { return "mysql://kv/" + key + frag },
 		Seed: func(_ context.Context, key, val string) error {
 			f.set(key, val)
 			return nil
