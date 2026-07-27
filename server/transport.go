@@ -515,11 +515,12 @@ func (s *Server) Serve(ctx context.Context) error {
 // waiting on it is a data race, not a benign overlap, so this Wait is only
 // sound because of that ordering; see beginListening's doc comment.
 //
-// Note the Wait is reached even when Serve never got as far as spawning
-// anything - a fail-fast bad bind returns before beginListening - which is
-// harmless precisely because no Add was made in that case either: the counter
-// is zero and the Wait returns immediately, while the loops above still
-// release the listeners that DID bind.
+// Note that a Serve which never got as far as spawning anything - a fail-fast
+// bad bind returns before beginListening - is harmless either way, because no
+// Add was made in that case. If some listeners had already bound, the loops
+// above release them and this Wait finds a zero counter and returns at once;
+// if the very first bind failed, entries is empty and the guard at the top of
+// this function returns before the Wait is reached at all.
 //
 // Finally, every Unix listener's socket file is removed, so neither this run
 // nor a restart trips over a stale file left behind (see Unix's doc comment

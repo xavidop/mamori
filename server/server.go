@@ -179,8 +179,11 @@ type Server struct {
 	// theoretical one - see closeTransports and Close's own doc comment.
 	//
 	// resolveMu carries one more job beyond guarding those four fields: it is
-	// the happens-before edge between every WaitGroup Add this Server makes
-	// and the matching Wait in teardown. Both start (for resolveWG) and
+	// the happens-before edge between every Add to either of this Server's
+	// WaitGroup fields and the matching Wait in teardown. (closeTransports
+	// has a third WaitGroup, but it is function-local, so even two concurrent
+	// invocations get separate instances and it needs no such edge.) Both
+	// start (for resolveWG) and
 	// beginListening (for listenWG) Add while holding it, having first seen
 	// closed as false, and teardown takes it before either Wait at a point
 	// where closed is already permanently true - so an Add can never be
