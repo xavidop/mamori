@@ -19,6 +19,7 @@ package providertest
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"sync"
@@ -194,6 +195,7 @@ func Run(t *testing.T, c Config) {
 	t.Run("ResolveSeeded", func(t *testing.T) { testResolveSeeded(t, c) })
 	t.Run("NotFoundTyped", func(t *testing.T) { testNotFound(t, c) })
 	t.Run("JSONPointerSelection", func(t *testing.T) { testJSONPointerSelection(t, c) })
+	t.Run("DecodeOption", func(t *testing.T) { testDecodeOption(t, c) })
 	t.Run("ErrorClassification", func(t *testing.T) { RunErrorClassification(t, c) })
 	t.Run("ContextCancel", func(t *testing.T) { testContextCancel(t, c) })
 	t.Run("ConcurrentResolve", func(t *testing.T) { testConcurrentResolve(t, c) })
@@ -360,6 +362,42 @@ func testJSONPointerSelection(t *testing.T, c Config) {
 		if _, err := p.Resolve(ctx, ref); !errors.Is(err, tc.want) {
 			t.Errorf("Resolve(%q) err = %v, want %v", tc.frag, err, tc.want)
 		}
+	}
+}
+
+// testDecodeOption verifies a provider passes an unrecognized query option
+// through untouched, so core's ?decode= pipeline sees it. Decoding is core's
+// job (applyDecode, run at every point a Value enters the engine); providers
+// never inspect or act on ?decode= themselves. What this case catches is a
+// provider that strips, rewrites, or chokes on a query option it does not
+// recognize - a bug that would pass every other case in this kit yet silently
+// break ?decode= (and any future core-owned option) for that provider's users.
+//
+// The seeded value is itself a base64 string; that is deliberate, not a stand-in
+// for "the decoded form". The provider must hand back exactly what was stored,
+// still encoded, because decoding it here would be the provider doing core's
+// job.
+func testDecodeOption(t *testing.T, c Config) {
+	t.Helper()
+	ctx := context.Background()
+	p := c.New()
+	key := c.key("decodeopt")
+	encoded := base64.StdEncoding.EncodeToString([]byte("plain"))
+
+	if err := c.Seed(ctx, key, encoded); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	ref, err := mamori.ParseRef(c.Ref(key) + "?decode=base64")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	// The provider must resolve normally and ignore the option; core decodes.
+	v, err := p.Resolve(ctx, ref)
+	if err != nil {
+		t.Fatalf("Resolve with an unrecognized query option: %v", err)
+	}
+	if string(v.Bytes) != encoded {
+		t.Errorf("provider returned %q; it must return the stored value untouched and leave ?decode= to core", v.Bytes)
 	}
 }
 

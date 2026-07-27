@@ -83,12 +83,24 @@ const (
 
 // fixedConformanceNames is the complete, static binding table the server is
 // constructed with: one entry per fixed key providertest.go generates
-// (scheme, resolve, ctxcancel, concurrent, version, watch, watchclose, leak)
-// plus "classify", the single reused slot every classify-* case normalizes
-// onto. "absent" is deliberately NOT in this list - see Config.Key below.
+// (scheme, resolve, ctxcancel, concurrent, version, watch, watchclose, leak,
+// decodeopt) plus "classify", the single reused slot every classify-* case
+// normalizes onto. "absent" is deliberately NOT in this list - see Config.Key
+// below.
+//
+// decodeopt backs providertest's DecodeOption case. That case is unconditional
+// (unlike JSONPointerSelection, which skips here because this provider
+// supplies no PointerRef), so unlike a skipped case it always calls Seed, and
+// without a real binding for it Seed's pollUntil times out waiting for a
+// Resolve that can never succeed - not because this client mishandles
+// ?decode=, but because there is no "conformance-decodeopt" binding for the
+// server to answer. Resolve never even looks at ref.Opts (see resolve.go), so
+// an unrecognized query option already passes through untouched by
+// construction; this entry only gives that passthrough a slot to prove itself
+// against.
 var fixedConformanceNames = []string{
 	"scheme", "resolve", "ctxcancel", "concurrent", "version",
-	"watch", "watchclose", "leak", "classify",
+	"watch", "watchclose", "leak", "decodeopt", "classify",
 }
 
 // conformanceKey builds the normalized binding name for a fixed conformance
