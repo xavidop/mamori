@@ -25,7 +25,7 @@ type Config struct {
 	DBPassword secret.String `source:"aws-sm://prod/db-password"`
 	// #/credentials/user is an RFC 6901 JSON Pointer fragment, selecting a
 	// value nested inside the secret's JSON payload rather than a top-level key.
-	DBUser     string        `source:"aws-sm://prod/db#/credentials/user"`
+	DBUser     string        `source:"aws-sm://prod/db-password#/credentials/user"`
 }
 
 func main() {

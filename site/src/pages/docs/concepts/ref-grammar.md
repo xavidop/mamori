@@ -172,15 +172,11 @@ type Config struct {
 
 ## Value decoding (`?decode=`)
 
-Not yet released. A future `?decode=` ref option will apply a declarative,
-per-field transform (`base64`, `gzip`, and similar) to a resolved value before
-it reaches your struct field.
+Not yet released - this section will be filled in when it ships.
 
 ## Ref interpolation (`${VAR}`)
 
-Not yet released. A future `${VAR}` substitution in a `source` tag, supplied
-via a `WithRefVars` option, will let one struct field name a per-environment
-ref without a compile-time constant per environment.
+Not yet released - this section will be filled in when it ships.
 
 ## See also
 
