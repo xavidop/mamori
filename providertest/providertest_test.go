@@ -41,7 +41,11 @@ func (f *fakeBackend) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value
 	if !ok {
 		return mamori.Value{}, mamori.ErrNotFound
 	}
-	return mamori.Value{Bytes: []byte(v), Version: strconv.Itoa(f.version[ref.Path])}, nil
+	selected, err := mamori.SelectKey([]byte(v), ref.Key)
+	if err != nil {
+		return mamori.Value{}, err
+	}
+	return mamori.Value{Bytes: selected, Version: strconv.Itoa(f.version[ref.Path])}, nil
 }
 
 func (f *fakeBackend) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Update, error) {
@@ -306,7 +310,11 @@ func (p *classifyingProvider) Resolve(ctx context.Context, ref mamori.Ref) (mamo
 	if !ok {
 		return mamori.Value{}, fmt.Errorf("%w: %s", mamori.ErrNotFound, ref.Path)
 	}
-	return mamori.Value{Bytes: []byte(v), Version: mamori.VersionHash([]byte(v))}, nil
+	selected, err := mamori.SelectKey([]byte(v), ref.Key)
+	if err != nil {
+		return mamori.Value{}, err
+	}
+	return mamori.Value{Bytes: selected, Version: mamori.VersionHash([]byte(v))}, nil
 }
 
 func (p *classifyingProvider) set(key, val string) {
