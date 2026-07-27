@@ -121,13 +121,19 @@ func TestSelectKeyLiteralDottedKeysUnchanged(t *testing.T) {
 	// Kubernetes TLS secret keys and appear in shipped docs; a dotted key must
 	// never be reinterpreted as a path.
 	payload := []byte(`{"tls.crt":"CERT","tls.key":"KEY","ca.crt":"CA","application.properties":"a=1"}`)
-	for _, key := range []string{"tls.crt", "tls.key", "ca.crt", "application.properties"} {
+	want := map[string]string{
+		"tls.crt":                "CERT",
+		"tls.key":                "KEY",
+		"ca.crt":                 "CA",
+		"application.properties": "a=1",
+	}
+	for key, wantVal := range want {
 		got, err := SelectKey(payload, key)
 		if err != nil {
 			t.Fatalf("SelectKey(%q) unexpected error: %v", key, err)
 		}
-		if len(got) == 0 {
-			t.Errorf("SelectKey(%q) returned empty", key)
+		if string(got) != wantVal {
+			t.Errorf("SelectKey(%q) = %q, want %q", key, got, wantVal)
 		}
 	}
 }
@@ -1704,7 +1710,6 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 package mamori
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -1755,7 +1760,7 @@ func FuzzRefGrammar(f *testing.F) {
 				t.Fatalf("SelectKey(%q) returned both bytes and an error %v", r.Key, err)
 			}
 			// A ref that parsed must render back to something parseable.
-			if _, err := ParseRef(r.String()); err != nil && !strings.HasPrefix(r.String(), "") {
+			if _, err := ParseRef(r.String()); err != nil {
 				t.Fatalf("Ref.String() %q does not re-parse: %v", r.String(), err)
 			}
 		}
