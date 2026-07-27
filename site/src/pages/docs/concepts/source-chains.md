@@ -77,20 +77,29 @@ The rule to hold onto: **`default:` applies only to genuine absence**, never to 
 
 ## The comma-split rule
 
-A comma splits the chain only when the text right after it looks like a new scheme (matches `^[a-zA-Z][a-zA-Z0-9+.-]*:`). A comma anywhere else, inside a query string or an opaque path, stays part of that ref's value:
+A comma splits the chain only when the text right after it looks like a new scheme (matches `^\s*[a-zA-Z][a-zA-Z0-9+.-]*:`). A comma anywhere else, inside a query string or an opaque path, stays part of that ref's value:
 
 ```go
 // Two refs: "env:PORT" and "aws-ps://svc/port"
 Port string `source:"env:PORT,aws-ps://svc/port"`
+
+// The same two refs: whitespace around the separator is ignored
+Port string `source:"env:PORT, aws-ps://svc/port"`
 
 // One ref: the comma in the query string is not a chain separator
 Tags string `source:"consul://kv/tags?filter=a,b"`
 
 // One ref: the comma in the exec: path is not a chain separator
 Report string `source:"exec:echo a,b"`
+
+// Still one ref: a space does not make a comma a separator on its own,
+// because "b" does not look like a scheme
+Report string `source:"exec:echo a, b"`
 ```
 
-Because of that rule, a doubled or trailing comma is not a split point (no scheme follows it) and is kept as part of the adjacent ref's value: `env:A,,env:B` yields a first ref with path `A,`, which resolves not-found and falls through.
+Whitespace around a separator is ignored, so the spaced form yields exactly the same chain as the compact one and neither leaks a stray space into a ref's path. That tolerance is deliberate: writing a list with a space after each comma is the natural thing to do, and a chain that silently collapsed into a single unresolvable ref would fail at resolve time rather than at parse time.
+
+Because of the scheme rule, a doubled or trailing comma is not a split point (no scheme follows it) and is kept as part of the adjacent ref's value: `env:A,,env:B` yields a first ref with path `A,`, which resolves not-found and falls through.
 
 To force a literal comma where it would otherwise split, percent-encode it as `%2C`. mamori does not decode it back; the parsed path keeps the literal `%2C`:
 

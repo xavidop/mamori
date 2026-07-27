@@ -135,6 +135,26 @@ updates:
     directory: "/providers/goff"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:goff]
+  # The client half of the config server: a mamori:// provider that resolves
+  # binding names against a running server rather than an upstream ref.
+  - package-ecosystem: gomod
+    directory: "/providers/mamori"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:mamori]
+
+  # The config server. It concentrates every backend credential its bindings
+  # touch into one process, so it is the highest-blast-radius module here and
+  # the one that least tolerates a stale dependency.
+  - package-ecosystem: gomod
+    directory: "/server"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, server]
+
+  # Extensions
+  - package-ecosystem: gomod
+    directory: "/x/authjwt"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, authjwt]
   - package-ecosystem: gomod
     directory: "/x/otel"
     schedule: { interval: weekly }

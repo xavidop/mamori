@@ -49,9 +49,33 @@ jobs:
       - name: go vet
         working-directory: ${{ matrix.dir }}
         run: go vet ./...
-      - name: go test (race)
+      # -coverpkg=./... measures how much of the whole module each test binary
+      # reaches, not just the package under test, which is the honest number for
+      # a library whose tests deliberately drive it from the outside.
+      - name: go test (race, coverage)
         working-directory: ${{ matrix.dir }}
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+      # Each matrix job owns its own step summary, so this writes a complete
+      # fragment rather than a bare table row with no header.
+      - name: Coverage summary
+        working-directory: ${{ matrix.dir }}
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
+          {
+            echo "### Coverage: \`${{ matrix.dir }}\`"
+            echo
+            echo "**$total** of statements"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Total coverage for ${{ matrix.dir }}: $total"
+      - name: Name the coverage artifact
+        id: slug
+        run: echo "v=$(echo '${{ matrix.dir }}' | sed 's|^\./||; s|/|-|g; s|^\.$|core|')" >> "$GITHUB_OUTPUT"
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ steps.slug.outputs.v }}
+          path: ${{ matrix.dir }}/coverage.out
+          retention-days: 14
 
   lint:
     name: lint ${{ matrix.dir }}
@@ -74,6 +98,94 @@ jobs:
         with:
           version: v2.12.2
           working-directory: ${{ matrix.dir }}
+
+  # The Linux test matrix above cannot see a break in the platform-specific
+  # halves of this repo: peer-credential auth is implemented three times
+  # (authpeercred_{darwin,linux,other}.go), the config server listens on Unix
+  # sockets, and the CLI ships as a Homebrew formula. This job builds and
+  # type-checks those modules on macOS and Windows, and runs the full suite on
+  # macOS where the darwin peercred path is real code rather than the fallback.
+  # Windows stays at build+vet: the socket and uid/gid tests are POSIX-only.
+  cross-platform:
+    name: ${{ matrix.os }} ${{ matrix.dir }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        dir: [".", "server", "cmd/mamori", "x/authjwt"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache-dependency-path: ${{ matrix.dir }}/go.sum
+      - name: go build
+        working-directory: ${{ matrix.dir }}
+        run: go build ./...
+      # vet type-checks the _test.go files too, so a test that only compiles on
+      # Linux fails here rather than silently never running.
+      - name: go vet
+        working-directory: ${{ matrix.dir }}
+        run: go vet ./...
+      - name: go test (race)
+        if: runner.os == 'macOS'
+        working-directory: ${{ matrix.dir }}
+        run: go test -race -count=1 ./...
+
+  # A secrets library with a cloud SDK behind almost every provider needs a
+  # standing answer to "does anything we ship reach a known vulnerability?".
+  # govulncheck is call-graph aware, so an advisory in a module we require but
+  # never call does not fail the build. One job loops every module rather than
+  # fanning out, so a single log shows the whole picture and every module is
+  # reported even after the first failure.
+  govulncheck:
+    name: govulncheck
+    needs: discover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Scan every module
+        run: |
+          # Absolute path: the scan runs from inside each module directory.
+          govulncheck="$(go env GOPATH)/bin/govulncheck"
+          failed=""
+          for dir in $(echo '${{ needs.discover.outputs.dirs }}' | jq -r '.[]'); do
+            echo "::group::govulncheck $dir"
+            if (cd "$dir" && "$govulncheck" ./...); then
+              echo "OK $dir"
+            else
+              echo "::error::govulncheck found a reachable vulnerability in $dir"
+              failed="$failed $dir"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "Modules with reachable vulnerabilities:$failed"
+            exit 1
+          fi
+          echo "No reachable vulnerabilities in any module."
+
+  # dependabot.yml is hand-maintained while the matrix above is discovered, so
+  # the two drift apart silently and a new module never gets a dependency
+  # update. Fail instead.
+  dependabot-coverage:
+    name: Dependabot covers every module
+    needs: discover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - run: pip install --disable-pip-version-check pyyaml
+      - name: Every Go module must have a gomod entry
+        run: python3 .github/scripts/check_dependabot_coverage.py '${{ needs.discover.outputs.dirs }}'
 
   gofmt:
     name: gofmt

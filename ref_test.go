@@ -96,6 +96,21 @@ func TestParseRefs(t *testing.T) {
 			wantSchemes: []string{"env", "env", "aws-sm"},
 		},
 		{
+			name:        "space after the separator still splits",
+			in:          "env:PORT, aws-ps://svc/port",
+			wantSchemes: []string{"env", "aws-ps"},
+		},
+		{
+			name:        "space on both sides of the separator still splits",
+			in:          "env:PORT , aws-ps://svc/port",
+			wantSchemes: []string{"env", "aws-ps"},
+		},
+		{
+			name:        "spaces around every separator in a three-ref chain",
+			in:          "env:A, env:B, aws-sm://c",
+			wantSchemes: []string{"env", "env", "aws-sm"},
+		},
+		{
 			name:    "empty",
 			in:      "",
 			wantErr: true,
@@ -123,6 +138,66 @@ func TestParseRefs(t *testing.T) {
 			}
 		})
 	}
+
+	// A chain written the way a human writes a list - with a space after each
+	// comma - must produce the same refs as the compact form. Getting this
+	// wrong is silent: the whole tail collapses into the first ref's path, that
+	// ref resolves not-found, and the field quietly takes its onfail policy
+	// instead of consulting the rest of the chain.
+	t.Run("spaced separator yields the same refs as the compact form", func(t *testing.T) {
+		compact, err := ParseRefs("env:PORT,aws-ps://svc/port")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		spaced, err := ParseRefs("env:PORT, aws-ps://svc/port")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(spaced) != len(compact) {
+			t.Fatalf("spaced form got %d refs %+v, compact form got %d", len(spaced), spaced, len(compact))
+		}
+		for i := range compact {
+			if spaced[i].Scheme != compact[i].Scheme || spaced[i].Path != compact[i].Path {
+				t.Errorf("refs[%d] = scheme %q path %q, want scheme %q path %q",
+					i, spaced[i].Scheme, spaced[i].Path, compact[i].Scheme, compact[i].Path)
+			}
+		}
+	})
+
+	t.Run("spaced separator does not leak whitespace into the path", func(t *testing.T) {
+		refs, err := ParseRefs("env:PORT , aws-ps://svc/port")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(refs) != 2 {
+			t.Fatalf("got %d refs %+v, want 2", len(refs), refs)
+		}
+		if refs[0].Path != "PORT" {
+			t.Errorf("refs[0].Path = %q, want %q", refs[0].Path, "PORT")
+		}
+		if refs[1].Path != "svc/port" {
+			t.Errorf("refs[1].Path = %q, want %q", refs[1].Path, "svc/port")
+		}
+		if refs[1].Raw != "aws-ps://svc/port" {
+			t.Errorf("refs[1].Raw = %q, want %q", refs[1].Raw, "aws-ps://svc/port")
+		}
+	})
+
+	t.Run("space before a non-scheme word is still not a separator", func(t *testing.T) {
+		// "exec:echo a, b" is one command whose argument list happens to contain
+		// a comma and a space. Nothing after the comma looks like a scheme, so
+		// it must stay a single ref exactly as "exec:echo a,b" does.
+		refs, err := ParseRefs("exec:echo a, b")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(refs) != 1 {
+			t.Fatalf("got %d refs %+v, want 1", len(refs), refs)
+		}
+		if refs[0].Path != "echo a, b" {
+			t.Errorf("Path = %q, want %q", refs[0].Path, "echo a, b")
+		}
+	})
 
 	t.Run("query comma preserved in tags opt", func(t *testing.T) {
 		refs, err := ParseRefs("vault://kv?tags=a,b")

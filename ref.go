@@ -108,7 +108,15 @@ func ParseRef(tag string) (Ref, error) {
 // schemeStart matches a scheme-like token at the start of a string, e.g.
 // "aws-sm:" or "env:". It is how ParseRefs decides a comma is a chain
 // separator rather than a comma inside a path or query.
-var schemeStart = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*:`)
+//
+// Leading whitespace is skipped so that a chain written the way a human writes
+// a list - `env:PORT, aws-ps://svc/port` - splits identically to its compact
+// form. Without that, the space would stop the scheme from matching, the whole
+// tail would collapse into the first ref's path, and the resulting broken ref
+// would fail silently at resolve time rather than at parse time. Whitespace
+// alone is never enough: what follows it must still look like a scheme, so
+// `exec:echo a, b` stays the single ref it has always been.
+var schemeStart = regexp.MustCompile(`^\s*[a-zA-Z][a-zA-Z0-9+.\-]*:`)
 
 // ParseRefs parses a `source` tag that may hold a comma-separated precedence
 // chain of refs, e.g. "env:PORT,aws-ps://svc/port". This is the entry point
@@ -122,6 +130,12 @@ var schemeStart = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*:`)
 // or an opaque exec: path (exec:echo a,b) is preserved as part of that ref. To
 // force a literal comma that would otherwise be read as a separator,
 // percent-encode it as %2C.
+//
+// Whitespace around a separator is ignored, so the spaced form
+// "env:PORT, aws-ps://svc/port" yields exactly the same chain as the compact
+// "env:PORT,aws-ps://svc/port". A space does not by itself make a comma a
+// separator: what follows it must still look like a scheme, so
+// "exec:echo a, b" remains one ref.
 //
 // Because of that rule, a doubled or trailing comma is not a split point (no
 // scheme token follows it) and is instead kept as part of the adjacent ref's
