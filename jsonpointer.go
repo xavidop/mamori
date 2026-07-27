@@ -119,22 +119,34 @@ func unescapeToken(tok string) (string, error) {
 	return b.String(), nil
 }
 
-// arrayIndex parses an RFC 6901 array index: either "0", or a non-zero digit
-// followed by digits. A leading zero is rejected rather than silently accepted
-// so that "/05" fails loudly instead of aliasing "/5". The "-" token, which
-// RFC 6901 defines as one-past-the-end for JSON Patch's add operation, can
-// never address an existing value and is rejected for the same reason.
+// arrayIndex parses an RFC 6901 array index. The grammar is digits only,
+// "0" / (%x31-39 *DIGIT): no sign character is permitted at all, so a leading
+// zero is rejected rather than silently accepted (so that "/05" fails loudly
+// instead of aliasing "/5"), and this validates that every byte of tok is an
+// ASCII digit before calling strconv.Atoi, rather than leaning on Atoi's sign
+// tolerance plus post-hoc guards. Atoi alone would accept "+1" as 1 and "-0"
+// as 0 (Go's int has no negative zero for an i < 0 check to catch), letting a
+// pointer like "/replicas/+1" silently address a real element instead of
+// failing loudly. The "-" token, which RFC 6901 defines as one-past-the-end
+// for JSON Patch's add operation, can never address an existing value and is
+// rejected for the same reason.
 func arrayIndex(tok string) (int, error) {
-	switch {
-	case tok == "-":
+	switch tok {
+	case "-":
 		return 0, fmt.Errorf("token %q addresses one past the end of the array and can never select a value: %w", tok, ErrInvalid)
-	case tok == "":
+	case "":
 		return 0, fmt.Errorf("empty array index token: %w", ErrInvalid)
-	case len(tok) > 1 && tok[0] == '0':
+	}
+	for i := 0; i < len(tok); i++ {
+		if tok[i] < '0' || tok[i] > '9' {
+			return 0, fmt.Errorf("token %q is not an array index: %w", tok, ErrInvalid)
+		}
+	}
+	if len(tok) > 1 && tok[0] == '0' {
 		return 0, fmt.Errorf("array index %q has a leading zero: %w", tok, ErrInvalid)
 	}
 	i, err := strconv.Atoi(tok)
-	if err != nil || i < 0 {
+	if err != nil {
 		return 0, fmt.Errorf("token %q is not an array index: %w", tok, ErrInvalid)
 	}
 	return i, nil
