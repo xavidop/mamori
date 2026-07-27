@@ -38,7 +38,21 @@ func TestWatchCoalescing(t *testing.T) {
 	wp.push("a", "2", "a2")
 	wp.push("b", "2", "b2")
 	wp.push("c", "2", "c2")
-	waitPending(clk)
+	// All three updates must reach the reconciler before the clock advances.
+	// Waiting for the debounce timer alone would not be enough here: the first
+	// update arms it and the other two only re-arm the same deadline, so a
+	// timer-count wait can be satisfied while b and c are still in flight and
+	// the flush would then coalesce fewer than three fields. The published
+	// report is the stronger observable - the reconciler stores it after
+	// folding in each update, which is after it has armed the timer - so
+	// waiting for all three versions to appear there orders both.
+	waitUntil(t, 2*time.Second, "all three pushed versions observed", func() bool {
+		seen := map[string]bool{}
+		for _, f := range w.Status().Fields {
+			seen[f.Version] = true
+		}
+		return seen["a2"] && seen["b2"] && seen["c2"]
+	})
 	clk.Advance(defaultDebounce)
 
 	select {
@@ -86,8 +100,14 @@ func TestWatchSerializedDispatch(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		ver := "v" + string(rune('a'+i))
 		wp.push("prod/db#password", "p"+ver, ver)
-		waitPending(clk)
+		blockUntilTimers(t, clk, 1)
 		clk.Advance(defaultDebounce)
+		// Wait for this round's flush before pushing again. Otherwise the next
+		// push can reach the reconciler before it has taken the tick this
+		// Advance just delivered, which re-arms the debounce at a deadline
+		// already in the past: a timer that fires immediately and is therefore
+		// never pending for the next blockUntilTimers to observe.
+		waitFlushed(t, w, uint64(i+2))
 	}
 	// Wait for delivery.
 	deadline := time.Now().Add(2 * time.Second)
@@ -127,9 +147,13 @@ func TestWatchDropOldest(t *testing.T) {
 	for i := 2; i <= 5; i++ {
 		ver := "v" + string(rune('0'+i))
 		wp.push("prod/db#password", "p"+ver, ver)
-		waitPending(clk)
+		blockUntilTimers(t, clk, 1)
 		clk.Advance(defaultDebounce)
-		time.Sleep(20 * time.Millisecond)
+		// Each round must flush (and enqueue its Change) before the next push,
+		// both so the queue-depth-1 drop-oldest path is exercised one event at
+		// a time and so the next debounce is armed from an empty pending batch
+		// - see the same wait in TestWatchSerializedDispatch.
+		waitFlushed(t, w, uint64(i))
 	}
 	close(gate) // release the blocked first delivery
 
@@ -200,8 +224,12 @@ func TestWatchBackoffRetainsLastGood(t *testing.T) {
 	if w.Get().V != "good" {
 		t.Fatalf("initial V = %q, want good", w.Get().V)
 	}
-	// Trigger a poll that fails.
-	time.Sleep(20 * time.Millisecond)
+	// Trigger a poll that fails. This provider is not watchable, so the field
+	// is driven by the polling adapter, which arms its interval timer only
+	// after its own baseline resolve has been delivered - wait for that
+	// registration rather than guessing at a sleep, or Advance can run first
+	// and leave the timer with a deadline it will never reach.
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(11 * time.Second)
 
 	select {
@@ -234,9 +262,12 @@ func TestWatchShutdownNoLeak(t *testing.T) {
 		t.Fatal(err)
 	}
 	wp.push("prod/db#password", "new", "v2")
-	waitPending(clk)
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(defaultDebounce)
-	time.Sleep(30 * time.Millisecond)
+	// Close while an update has actually been through the reconciler, which is
+	// the shutdown this test is about; waiting for the flush rather than
+	// sleeping is what guarantees the update got that far.
+	waitFlushed(t, w, 2)
 
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

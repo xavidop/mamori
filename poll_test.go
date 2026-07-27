@@ -66,12 +66,16 @@ func TestPollInitialThenChange(t *testing.T) {
 
 	drainOne(t, ch, "v1") // initial baseline
 
-	// Unchanged across a tick -> no update.
+	// Unchanged across a tick -> no update. The poll goroutine arms its
+	// interval timer only after the baseline above is delivered, so wait for
+	// that registration: Advance fires nothing that is not already armed.
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(11 * time.Second)
 	noUpdate(t, ch)
 
 	// Changed value -> one update.
 	p.setVal(Value{Bytes: []byte("v2"), Version: "2"})
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(11 * time.Second)
 	drainOne(t, ch, "v2")
 
@@ -109,6 +113,12 @@ func TestPollNotAfterEarlyRefresh(t *testing.T) {
 	// Change the value; a refresh should happen before the lease NotAfter,
 	// well before the 1h poll interval.
 	p.setVal(Value{Bytes: []byte("lease2"), Version: "2", NotAfter: start.Add(4 * time.Second)})
+	// The lease-refresh timer is armed by the poll goroutine only after the
+	// baseline above is delivered, and Advance fires nothing that is not
+	// already armed. Without this the advance can outrun the registration,
+	// leaving the timer with a deadline in the test's own past that never
+	// fires - which is exactly the flake this test used to show in CI.
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(2 * time.Second)
 	drainOne(t, ch, "lease2")
 }

@@ -3,6 +3,7 @@ package mamori
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -103,6 +104,25 @@ type watchConfig struct {
 	Level    string        `source:"w://cfg/level" default:"info" validate:"oneof=debug info warn error"`
 }
 
+// waitFlushed waits until the reconciler has applied snapshot version want.
+// It is the counterpart to blockUntilTimers for the other half of a debounce
+// round trip: blockUntilTimers orders the test's Advance after the timer is
+// armed, and this orders whatever the test does next after the flush that
+// Advance triggered. A test that pushes repeatedly needs both, because pushing
+// again while the previous tick is still unconsumed re-arms the debounce with
+// a deadline already in the past - a timer that fires immediately and so never
+// becomes pending for the next blockUntilTimers to see.
+//
+// The published report is what makes this observable: flush stores it last,
+// after bumping the version and enqueuing the Change, so a report carrying
+// version want proves the whole round completed.
+func waitFlushed[T any](t *testing.T, w *Watcher[T], want uint64) {
+	t.Helper()
+	waitUntil(t, 2*time.Second, fmt.Sprintf("reconciler to apply snapshot version %d", want), func() bool {
+		return w.Status().Live >= want
+	})
+}
+
 func TestWatchInitialAndNoStartupEvent(t *testing.T) {
 	clk := NewFakeClock(time.Time{})
 	wp := newWatchProvider("w")
@@ -148,8 +168,9 @@ func TestWatchAppliesValidUpdate(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	wp.push("prod/db#password", "new", "v2")
-	// Let the update reach the reconciler, then advance past the debounce window.
-	waitPending(clk)
+	// Let the update reach the reconciler and arm its debounce timer, then
+	// advance past the debounce window.
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(defaultDebounce)
 
 	select {
@@ -193,7 +214,7 @@ func TestWatchRejectsInvalidUpdateAtomically(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	wp.push("cfg/level", "BOGUS", "l2") // fails oneof validation
-	waitPending(clk)
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(defaultDebounce)
 
 	select {
@@ -214,7 +235,3 @@ func TestWatchRejectsInvalidUpdateAtomically(t *testing.T) {
 		t.Errorf("Get().Level = %q, want info (last good)", w.Get().Level)
 	}
 }
-
-// waitPending gives the reconciler goroutine a moment to consume the pushed
-// update and arm its debounce timer against the fake clock before we advance.
-func waitPending(_ *FakeClock) { time.Sleep(30 * time.Millisecond) }

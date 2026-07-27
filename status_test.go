@@ -300,7 +300,7 @@ func TestStatusSnapshotVersionAdvances(t *testing.T) {
 	}
 
 	wp.push("cfg/level", "debug", "l2")
-	waitPending(clk)
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(defaultDebounce)
 
 	deadline := time.Now().Add(2 * time.Second)

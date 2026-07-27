@@ -58,8 +58,12 @@ func TestHandleErrToleratesNotFoundOnDefaultField(t *testing.T) {
 
 	// Give the reconciler goroutine time to consume the update. There is no
 	// externally observable state change to poll for in the tolerated case
-	// (that is the point of the fix), so this mirrors waitPending's fixed
-	// delay used elsewhere in this package for a single update hop.
+	// (that is the point of the fix): the assertion below is that nothing
+	// happened, and a tolerated not-found arms no timer and moves no version,
+	// so there is nothing for blockUntilTimers or waitFlushed to wait on. A
+	// fixed delay is the honest shape for a negative assertion - unlike an
+	// Advance, it can only make this test miss a regression, never invent a
+	// failure.
 	time.Sleep(50 * time.Millisecond)
 
 	rep := w.Status()

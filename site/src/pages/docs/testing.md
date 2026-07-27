@@ -223,17 +223,28 @@ Unlike `Load`, `Doctor` never aborts on the first failure, so one run reports ev
 `mamoritest.Provider` delivers changes natively, not on a poll timer. To drive time itself (for example, testing `mamori.WithPollInterval` against a provider that only polls), inject `mamori.NewFakeClock` with `mamori.WithClock` and advance it manually:
 
 ```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
 clk := mamori.NewFakeClock(time.Time{})
 
-w, err := mamori.Watch[Config](context.Background(),
+w, err := mamori.Watch[Config](ctx,
 	mamori.WithProvider(p),
 	mamori.WithClock(clk),
 	mamori.WithPollInterval(30*time.Second),
 )
 // ... err check, defer w.Close()
 
+// Wait for the poll goroutine to arm its timer before advancing.
+if err := clk.BlockUntil(ctx, 1); err != nil {
+	t.Fatal(err)
+}
 clk.Advance(30 * time.Second) // fires the next poll tick deterministically
 ```
+
+That `BlockUntil` is not optional politeness - it is what makes the test deterministic. `Advance` fires only the timers already registered when it runs, and the watch goroutine arms its next timer *after* delivering the previous value, computing the deadline from whatever `Now()` says at that moment. Advance ahead of the registration and the timer is created with a deadline in the time you have already skipped past: it never fires, and the test blocks until some unrelated timeout with nothing to point at.
+
+`BlockUntil(ctx, n)` returns once at least `n` timers are armed on the clock, or `ctx.Err()` if they never are - so an expectation that is simply wrong fails on your own deadline instead of hanging. Reach for it before **every** `Advance` meant to fire a timer belonging to another goroutine. Sleeping first only makes the race rarer.
 
 ## How it works
 

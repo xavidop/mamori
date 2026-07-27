@@ -43,6 +43,18 @@ func (p *wrefStaticProvider) setVal(v mamori.Value) {
 	p.mu.Unlock()
 }
 
+// wrefBlockUntilTimers waits for n timers to be armed on clk before the caller
+// advances it. It is the external-test-package twin of the internal helper of
+// the same shape; see mamori.FakeClock.BlockUntil for the race it closes.
+func wrefBlockUntilTimers(t *testing.T, clk *mamori.FakeClock, n int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := clk.BlockUntil(ctx, n); err != nil {
+		t.Fatalf("waiting for %d pending timer(s) on the fake clock: %v", n, err)
+	}
+}
+
 func wrefDrainOne(t *testing.T, ch <-chan mamori.Update, wantBytes string) {
 	t.Helper()
 	select {
@@ -113,12 +125,16 @@ func TestWatchRefPollsNonWatchableProvider(t *testing.T) {
 
 	wrefDrainOne(t, ch, "v1") // initial baseline, exactly as pollWatch emits
 
-	// Unchanged across a tick -> no update.
+	// Unchanged across a tick -> no update. The polling adapter arms its
+	// interval timer only after the baseline above is delivered, so wait for
+	// that registration: Advance fires nothing that is not already armed.
+	wrefBlockUntilTimers(t, clk, 1)
 	clk.Advance(11 * time.Second)
 	wrefNoUpdate(t, ch)
 
 	// Changed value -> one update, only after the poll interval elapses.
 	p.setVal(mamori.Value{Bytes: []byte("v2"), Version: "2"})
+	wrefBlockUntilTimers(t, clk, 1)
 	clk.Advance(11 * time.Second)
 	wrefDrainOne(t, ch, "v2")
 

@@ -1,6 +1,7 @@
 package mamori
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -63,12 +64,18 @@ func SystemClock() Clock { return systemClock{} }
 
 // FakeClock is a manually-driven Clock for deterministic tests. Advance moves
 // time forward, firing any timers/tickers whose deadline is reached.
+//
+// Advance only ever fires the timers that are already registered when it runs,
+// so a test that advances the clock on behalf of another goroutine must first
+// wait for that goroutine to arm its timer. BlockUntil is how to wait; see its
+// doc comment for the race it closes.
 type FakeClock struct {
-	mu      sync.Mutex
-	now     time.Time
-	waiters []*waiter
-	tickers []*fakeTicker
-	nextID  int
+	mu       sync.Mutex
+	now      time.Time
+	waiters  []*waiter
+	tickers  []*fakeTicker
+	blockers []*blocker
+	nextID   int
 }
 
 type waiter struct {
@@ -76,6 +83,14 @@ type waiter struct {
 	deadline time.Time
 	ch       chan time.Time
 	fired    bool
+}
+
+// blocker is one outstanding BlockUntil call: ch is closed once at least want
+// timers are pending. It carries no deadline of its own - the caller's context
+// is what bounds the wait.
+type blocker struct {
+	want int
+	ch   chan struct{}
 }
 
 type fakeTicker struct {
@@ -113,6 +128,7 @@ func (c *FakeClock) NewTimer(d time.Duration) *Timer {
 		w.fired = true
 	} else {
 		c.waiters = append(c.waiters, w)
+		c.notifyBlockersLocked()
 	}
 	id := w.id
 	return &Timer{C: w.ch, stop: func() bool { return c.removeWaiter(id) }}
@@ -133,6 +149,98 @@ func (c *FakeClock) NewTicker(d time.Duration) *Ticker {
 	c.tickers = append(c.tickers, t)
 	id := t.id
 	return &Ticker{C: t.ch, stop: func() { c.stopTicker(id) }}
+}
+
+// BlockUntil waits until at least n timers are pending on the clock - that is,
+// until n calls to NewTimer or After (across any goroutine) have registered a
+// deadline that has not yet fired and has not been stopped - and returns nil.
+// It returns ctx.Err() if the context is done first, so a test that is wrong
+// about what it is waiting for fails on its own deadline with a clear message
+// instead of hanging until the package test timeout.
+//
+// It exists because Advance is not a synchronization point. Advance fires only
+// the timers already registered at the moment it runs, and a test typically
+// advances the clock on behalf of a goroutine that arms its own timers: the
+// polling watch adapter, the reconciler's debounce. Nothing orders that
+// goroutine's NewTimer call against the test's Advance call. Lose that race and
+// the goroutine registers its timer just after Advance walked the waiter list,
+// computing its deadline from the already-advanced now - so the deadline lands
+// in the future the test believes it has already passed, the timer never fires,
+// and the test waits for an event that can no longer happen. The failure is
+// silent at the point it happens and only surfaces later, as a timeout in a
+// receive that looks unrelated.
+//
+// Blocking on the registration first is what makes the ordering real:
+//
+//	clk.BlockUntil(ctx, 1) // the watched goroutine has armed its timer
+//	clk.Advance(2 * time.Second)
+//
+// The alternative - sleeping long enough to usually win the race - trades a
+// deterministic test for a slow flaky one, which is the whole thing FakeClock
+// exists to avoid.
+//
+// Two properties are worth knowing before choosing n. Only timers count, not
+// tickers, and a NewTimer(d) with d <= 0 fires immediately without ever
+// becoming pending, so it never counts. And n is compared against the
+// instantaneous pending set, not a running total: firing a timer (Advance) or
+// stopping it (Timer.Stop) drops the count again, so n describes what should be
+// armed right now, not how many have been armed since the clock was created.
+func (c *FakeClock) BlockUntil(ctx context.Context, n int) error {
+	c.mu.Lock()
+	if len(c.waiters) >= n {
+		c.mu.Unlock()
+		return nil
+	}
+	b := &blocker{want: n, ch: make(chan struct{})}
+	c.blockers = append(c.blockers, b)
+	c.mu.Unlock()
+
+	select {
+	case <-b.ch:
+		return nil
+	case <-ctx.Done():
+		// notifyBlockersLocked closes ch while holding the lock, so taking the
+		// lock here orders this against any concurrent satisfaction: if the
+		// count was reached before ctx expired, removeBlocker will not find b
+		// and the recheck below sees the closed channel. Report success in that
+		// case rather than a spurious error.
+		c.removeBlocker(b)
+		select {
+		case <-b.ch:
+			return nil
+		default:
+			return ctx.Err()
+		}
+	}
+}
+
+// notifyBlockersLocked releases every BlockUntil call whose count has now been
+// reached. It must be called with c.mu held, and only after c.waiters grows:
+// the count never has to be rechecked when a timer fires or is stopped, since
+// that can only lower it. Closing under the lock is what makes a racing
+// BlockUntil's ctx.Done path able to tell "satisfied" from "timed out".
+func (c *FakeClock) notifyBlockersLocked() {
+	n := len(c.waiters)
+	kept := c.blockers[:0]
+	for _, b := range c.blockers {
+		if n >= b.want {
+			close(b.ch)
+			continue
+		}
+		kept = append(kept, b)
+	}
+	c.blockers = kept
+}
+
+func (c *FakeClock) removeBlocker(target *blocker) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, b := range c.blockers {
+		if b == target {
+			c.blockers = append(c.blockers[:i], c.blockers[i+1:]...)
+			return
+		}
+	}
 }
 
 func (c *FakeClock) removeWaiter(id int) bool {
