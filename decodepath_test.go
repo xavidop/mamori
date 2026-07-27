@@ -320,7 +320,7 @@ func TestDecodeAppliesOnChainSeed(t *testing.T) {
 	o := defaultOptions()
 	WithProvider(a)(o)
 	WithProvider(b)(o)
-	specs, err := fieldSpecs(reflect.TypeOf(cfg{}))
+	specs, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 	if err != nil {
 		t.Fatalf("fieldSpecs: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestDecodeFailureOnChainSeedStopsWalk(t *testing.T) {
 	o := defaultOptions()
 	WithProvider(a)(o)
 	WithProvider(b)(o)
-	specs, err := fieldSpecs(reflect.TypeOf(cfg{}))
+	specs, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 	if err != nil {
 		t.Fatalf("fieldSpecs: %v", err)
 	}

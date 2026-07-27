@@ -14,7 +14,7 @@ func TestWalkSpecsChain(t *testing.T) {
 		type cfg struct {
 			Port string `source:"env:A,env:B" default:"x"`
 		}
-		specs, err := fieldSpecs(reflect.TypeOf(cfg{}))
+		specs, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 		if err != nil {
 			t.Fatalf("fieldSpecs: unexpected error: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestWalkSpecsChain(t *testing.T) {
 		type cfg struct {
 			Port string `source:"env:PORT"`
 		}
-		specs, err := fieldSpecs(reflect.TypeOf(cfg{}))
+		specs, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 		if err != nil {
 			t.Fatalf("fieldSpecs: unexpected error: %v", err)
 		}
@@ -56,7 +56,7 @@ func TestWalkSpecsChain(t *testing.T) {
 		type cfg struct {
 			Port string `source:"env:PORT" onfail:"default"`
 		}
-		_, err := fieldSpecs(reflect.TypeOf(cfg{}))
+		_, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 		if err == nil {
 			t.Fatal("fieldSpecs: expected error, got nil")
 		}
@@ -69,7 +69,7 @@ func TestWalkSpecsChain(t *testing.T) {
 		type cfg struct {
 			Port string `source:"env:PORT" default:"8080" onfail:"default"`
 		}
-		specs, err := fieldSpecs(reflect.TypeOf(cfg{}))
+		specs, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 		if err != nil {
 			t.Fatalf("fieldSpecs: unexpected error: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestWalkSpecsChain(t *testing.T) {
 		type cfg struct {
 			Port string `source:"env:PORT" onfail:"fail"`
 		}
-		specs, err := fieldSpecs(reflect.TypeOf(cfg{}))
+		specs, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 		if err != nil {
 			t.Fatalf("fieldSpecs: unexpected error: %v", err)
 		}
@@ -95,7 +95,7 @@ func TestWalkSpecsChain(t *testing.T) {
 		type cfg struct {
 			Port string `source:"env:PORT" onfail:"bogus"`
 		}
-		_, err := fieldSpecs(reflect.TypeOf(cfg{}))
+		_, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 		if err == nil {
 			t.Fatal("fieldSpecs: expected error, got nil")
 		}
@@ -106,7 +106,7 @@ func TestFieldSpecsRejectsUnknownDecodeCoding(t *testing.T) {
 	type cfg struct {
 		A string `source:"env:A?decode=rot13"`
 	}
-	_, err := fieldSpecs(reflect.TypeOf(cfg{}))
+	_, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 	if err == nil {
 		t.Fatal("want an error for an unknown decode coding, got nil")
 	}
@@ -128,7 +128,7 @@ func TestFieldSpecsRejectsUnknownDecodeCodingInLowerChainPosition(t *testing.T) 
 	type cfg struct {
 		A string `source:"env:A,env:B?decode=rot13"`
 	}
-	_, err := fieldSpecs(reflect.TypeOf(cfg{}))
+	_, err := fieldSpecs(reflect.TypeOf(cfg{}), nil)
 	if err == nil {
 		t.Fatal("want an error for an unknown decode coding on the second chain position, got nil")
 	}
@@ -144,7 +144,7 @@ func TestFieldSpecsAcceptsKnownDecodeCodings(t *testing.T) {
 	type cfg struct {
 		A string `source:"env:A?decode=base64,gzip"`
 	}
-	if _, err := fieldSpecs(reflect.TypeOf(cfg{})); err != nil {
+	if _, err := fieldSpecs(reflect.TypeOf(cfg{}), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

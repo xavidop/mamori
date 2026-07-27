@@ -26,7 +26,7 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 		opt(o)
 	}
 	var cfg T
-	specs, err := fieldSpecs(reflect.TypeOf(cfg))
+	specs, err := fieldSpecs(reflect.TypeOf(cfg), o.refVars)
 	if err != nil {
 		return Report{}, err
 	}

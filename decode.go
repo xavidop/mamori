@@ -58,14 +58,14 @@ var (
 // specs. Nested structs without a `source` tag are recursed into (their fields
 // carry their own sources); a struct field WITH a `source` tag must also carry a
 // `flatten` tag and is treated as a single decoded payload.
-func fieldSpecs(t reflect.Type) ([]fieldSpec, error) {
+func fieldSpecs(t reflect.Type, vars map[string]string) ([]fieldSpec, error) {
 	if t.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("mamori: config type %s is not a struct", t)
 	}
-	return walkSpecs(t, "", nil)
+	return walkSpecs(t, "", nil, vars)
 }
 
-func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) {
+func walkSpecs(t reflect.Type, prefix string, index []int, vars map[string]string) ([]fieldSpec, error) {
 	var specs []fieldSpec
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
@@ -89,7 +89,7 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 
 		// A plain nested struct (no source) is a container: recurse.
 		if isLeafStruct && !hasSource {
-			child, err := walkSpecs(f.Type, path, idx)
+			child, err := walkSpecs(f.Type, path, idx, vars)
 			if err != nil {
 				return nil, err
 			}
@@ -101,6 +101,11 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 			// No source and not a container struct: nothing to resolve. Skip
 			// (leaves the zero value / allows manual population).
 			continue
+		}
+
+		source, err := expandRefVars(source, vars)
+		if err != nil {
+			return nil, fmt.Errorf("mamori: field %s: %w", path, err)
 		}
 
 		refs, err := ParseRefs(source)

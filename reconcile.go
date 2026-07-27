@@ -32,7 +32,8 @@ type options struct {
 	backoffMax   time.Duration
 	meter        Meter
 	tracer       Tracer
-	historyN     int // snapshots retained beyond the current one; 0 = current only
+	historyN     int               // snapshots retained beyond the current one; 0 = current only
+	refVars      map[string]string // ${VAR} expansion for source tags; nil means none
 
 	// admin server config, consumed only by Watch (see adminhttp.go). Load
 	// accepts the same Option values but has no watcher to run a server
@@ -213,7 +214,7 @@ func Load[T any](ctx context.Context, opts ...Option) (T, error) {
 func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	var cfg T
 	t := reflect.TypeOf(cfg)
-	specs, err := fieldSpecs(t)
+	specs, err := fieldSpecs(t, o.refVars)
 	if err != nil {
 		return cfg, nil, err
 	}
