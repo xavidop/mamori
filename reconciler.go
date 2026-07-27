@@ -663,10 +663,24 @@ func refDebounceOverride(ref Ref) (time.Duration, bool) {
 }
 
 // recordSourceUpdate stores up as the latest state of one position in a
-// field's precedence chain (see srcState), applying the field's Sensitive
-// flag to a delivered value exactly as the pre-chain single-source path
-// always did. It is called on every srcUpdate, before the chain's winner is
-// recomputed.
+// field's precedence chain (see srcState), applying the ref's ?decode=
+// pipeline and then the field's Sensitive flag to a delivered value exactly as
+// the pre-chain single-source path always did. It is called on every
+// srcUpdate, before the chain's winner is recomputed.
+//
+// This is the single funnel every watch-delivered value passes through -
+// start's per-position forwarders feed it from a native WatchableProvider and
+// from the polling adapter alike (see watchRef) - which is why the decode
+// belongs here rather than in either of those. Without it a field with
+// ?decode= would resolve correctly at Load (resolveRef decodes) and then hand
+// the application raw, undecoded bytes from its first update onward: a bug
+// that passes every startup-only test and first appears in production at the
+// moment a secret rotates.
+//
+// Decoding here, rather than later at the winner or at flush, means it happens
+// exactly once and before the value becomes engine state, so recomputeWinner,
+// buildReport, buildCandidate, and the published snapshot all agree on the
+// same decoded bytes.
 func (e *engine[T]) recordSourceUpdate(specIdx, pos int, up Update, sensitive bool) {
 	st := &e.sources[specIdx][pos]
 	st.seen = true
@@ -675,7 +689,22 @@ func (e *engine[T]) recordSourceUpdate(specIdx, pos int, up Update, sensitive bo
 		st.value = Value{}
 		return
 	}
-	val := up.Value
+	// A decode failure is recorded exactly like a transient resolve failure
+	// delivered by the source itself: this position carries the error and no
+	// value, recomputeWinner stops the chain walk here (ErrInvalid is not
+	// ErrNotFound, so it does not fall through to a lower-precedence source),
+	// and loop applies the field's OnFail policy - keeplast by default, which
+	// leaves Get() serving the last good snapshot. Storing Value{} rather than
+	// the raw bytes is what makes "keep the last good value" true: a stored
+	// raw value could win a later recompute and reach the application
+	// undecoded, which is the exact outcome this whole path exists to prevent.
+	dec, err := applyDecode(e.specs[specIdx].Refs[pos], up.Value)
+	if err != nil {
+		st.err = err
+		st.value = Value{}
+		return
+	}
+	val := dec
 	if sensitive {
 		val.Sensitive = true
 	}
@@ -755,6 +784,18 @@ func (e *engine[T]) recomputeWinner(specIdx int) (val Value, pos int, err error)
 // live watch update's raw error is wrapped, so a chain's seeded state and
 // its later-observed state can never format an error differently depending
 // on which one happened to win.
+//
+// Calling Resolve directly does mean this bypasses resolveRef's ?decode=
+// handling, so it applies the pipeline itself - it is a fourth place a Value
+// becomes state that can reach the application, alongside resolveRef,
+// resolveBatchScheme, and recordSourceUpdate. Skipping it here would not be merely
+// cosmetic: if the source value changes between Watch's initial Load and this
+// seed (a rotation racing startup), the seeded state carries the RAW bytes
+// under the NEW version. Any other position's first update then triggers a
+// recompute that publishes those raw bytes, and when the winning position's
+// own watch baseline arrives - same new version, correctly decoded -
+// markChanged discards it as unchanged, leaving the field permanently
+// corrupted rather than transiently so.
 func (e *engine[T]) seedChainSources(ctx context.Context, spec fieldSpec) []srcState {
 	st := make([]srcState, len(spec.Refs))
 	for i, ref := range spec.Refs {
@@ -768,6 +809,14 @@ func (e *engine[T]) seedChainSources(ctx context.Context, spec fieldSpec) []srcS
 			break
 		}
 		val, err := p.Resolve(ctx, ref)
+		if err == nil {
+			// A decode failure is a non-not-found error, so it falls into the
+			// same branch below as a permission denial: this position is
+			// seeded as terminal and the walk stops, rather than sliding down
+			// to a lower-precedence source on the strength of a
+			// misconfigured coding.
+			val, err = applyDecode(ref, val)
+		}
 		if err == nil {
 			if spec.Sensitive {
 				val.Sensitive = true

@@ -137,6 +137,20 @@ func resolveChain(ctx context.Context, refs []Ref, o *options) (Value, int, erro
 // tracer/meter observability for the call and wrapping any failure -
 // including an unregistered scheme, which can never resolve for this process
 // - as a *ProviderError tagged with that ref's scheme and redacted form.
+//
+// It applies the ref's ?decode= pipeline before returning, so every caller
+// downstream (resolveChain, and through it Load, Doctor, and the reconciler's
+// re-resolves) sees decoded bytes and nothing has to remember to decode. The
+// decode happens after the observability calls deliberately: the tracer span
+// and the meter's latency both describe the provider round trip, and folding a
+// local CPU-bound transform into that measurement would misattribute it to the
+// backend. A decode failure is reported as a *ProviderError for the same ref,
+// because from every caller's point of view this ref did not yield a usable
+// value - and because ErrInvalid is a non-not-found error, it stops a
+// precedence chain's walk rather than falling through to a lower-priority
+// source (resolveChain case 3). Sliding down to a different source because the
+// declared encoding is wrong would hide the misconfiguration behind whatever
+// answered next.
 func resolveRef(ctx context.Context, ref Ref, o *options) (Value, error) {
 	p, ok := o.provider(ref.Scheme)
 	if !ok {
@@ -152,6 +166,10 @@ func resolveRef(ctx context.Context, ref Ref, o *options) (Value, error) {
 	val, err := p.Resolve(sctx, ref)
 	finish(err)
 	o.meter.RecordResolve(ref.Scheme, o.clock.Now().Sub(start), err)
+	if err != nil {
+		return Value{}, &ProviderError{Scheme: ref.Scheme, Ref: redactRef(ref), Err: err}
+	}
+	val, err = applyDecode(ref, val)
 	if err != nil {
 		return Value{}, &ProviderError{Scheme: ref.Scheme, Ref: redactRef(ref), Err: err}
 	}
@@ -189,6 +207,22 @@ func applyOnFail(r *resolved, terminal error) error {
 	return terminal
 }
 
+// resolveBatchScheme resolves every single-ref spec of one batch-capable
+// scheme in a single provider call, then applies each ref's own ?decode=
+// pipeline to its result.
+//
+// The decode cannot be inherited from resolveRef here: a single-ref field
+// whose scheme implements BatchProvider never goes through resolveRef at all
+// (see resolveAll's grouping), so this is an independent entry point for a
+// Value and needs its own wiring. Decoding is per-ref rather than per-batch
+// because the batch groups by scheme only - two fields of the same scheme can
+// declare completely different codings, or none.
+//
+// A decode failure fails the whole Load rather than defaulting the field:
+// resolveAll is fail-fast on any non-not-found error, and a wrongly declared
+// encoding is a configuration bug, not an absent value. Note this deliberately
+// does not consult applyDefault - only a genuinely missing key (the !ok branch
+// above it) does.
 func resolveBatchScheme(ctx context.Context, bp BatchProvider, scheme string, idxs []int, out []resolved, o *options) error {
 	refs := make([]Ref, 0, len(idxs))
 	for _, i := range idxs {
@@ -209,7 +243,11 @@ func resolveBatchScheme(ctx context.Context, bp BatchProvider, scheme string, id
 			}
 			continue
 		}
-		setResolved(r, val)
+		dec, derr := applyDecode(r.spec.Refs[0], val)
+		if derr != nil {
+			return &ProviderError{Scheme: scheme, Ref: redactRef(r.spec.Refs[0]), Err: derr}
+		}
+		setResolved(r, dec)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -22,6 +23,22 @@ type decodeStep struct {
 // stated property of the project layout, and an extension point here would
 // duplicate WithDecodeHook, which already exists one layer down for arbitrary
 // per-type conversion.
+//
+// The whitespace handling here is deliberately asymmetric, and the asymmetry
+// is load-bearing rather than an oversight: base64, base64url, and hex trim
+// surrounding whitespace, gzip does not.
+//
+// The textual codings need the trim because stored values routinely pick up a
+// trailing newline - `base64 < key.pem > secret` writes one, most editors add
+// one on save, and several backends' CLIs round-trip through a file - and
+// rejecting a secret over an invisible byte is a miserable failure to debug.
+//
+// gzip must NOT be trimmed, because its payload is binary: a valid gzip stream
+// can legitimately begin or end with bytes whose numeric values are ASCII
+// whitespace (the 4-byte CRC32 and 4-byte ISIZE trailer are raw little-endian
+// integers, so a trailer ending in 0x0a, 0x0d, 0x09, or 0x20 is entirely
+// ordinary). Trimming those would silently corrupt a valid stream into a CRC
+// or length mismatch. Please do not "fix" the inconsistency by trimming here.
 var decodeCodings = map[string]func([]byte) ([]byte, error){
 	"base64":    func(b []byte) ([]byte, error) { return base64.StdEncoding.DecodeString(string(bytes.TrimSpace(b))) },
 	"base64url": func(b []byte) ([]byte, error) { return base64.URLEncoding.DecodeString(string(bytes.TrimSpace(b))) },
@@ -30,13 +47,49 @@ var decodeCodings = map[string]func([]byte) ([]byte, error){
 	"trim":      func(b []byte) ([]byte, error) { return bytes.TrimSpace(b), nil },
 }
 
+// maxGzipDecoded bounds how many bytes one gzip coding will produce. gzip is
+// the only coding here whose output is not linear in its input: base64 and hex
+// shrink, trim cannot grow, but a few hundred bytes of gzip can expand to
+// gigabytes. Since mamori resolves from remote backends whose contents an
+// operator may not fully control - an S3 object, a Secrets Manager entry, a
+// config server's response - an unbounded io.ReadAll here is a
+// denial-of-service reachable by whoever can write the stored value.
+//
+// 16 MiB is chosen to sit far above every realistic payload and far below
+// anything that threatens a process. The backends mamori reads from impose
+// their own, much tighter ceilings on a single value: 64 KiB for AWS Secrets
+// Manager and GCP Secret Manager, 25 KiB for Azure Key Vault, 512 KiB for
+// Consul KV, 1 MiB for a Kubernetes Secret, ~1.5 MiB for an etcd value. The
+// unbounded sources are the local ones (file:, exec:, dotenv:), and a 16 MiB
+// decompressed application config or secret bundle from those is already well
+// past anything this library is meant to carry. That leaves roughly a 16x
+// margin over the most permissive remote backend while capping a bomb's
+// expansion at a single, recoverable allocation.
+//
+// Exceeding it is an error, never a truncation. Handing an application 16 MiB
+// of a longer secret would be worse than failing: a silently truncated key or
+// certificate fails later, somewhere else, in a way that looks like anything
+// but a decode problem.
+const maxGzipDecoded = 16 << 20 // 16 MiB
+
 func gunzip(b []byte) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = zr.Close() }()
-	return io.ReadAll(zr)
+	// Read one byte past the cap so "expanded to exactly the cap" stays legal
+	// and is still distinguishable from "expanded past it": io.LimitReader
+	// alone reports a clean io.EOF at its limit, which io.ReadAll cannot tell
+	// apart from a stream that genuinely ended there.
+	out, err := io.ReadAll(io.LimitReader(zr, maxGzipDecoded+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxGzipDecoded {
+		return nil, fmt.Errorf("payload expands past the %d-byte gzip decompression limit: %w", maxGzipDecoded, ErrInvalid)
+	}
+	return out, nil
 }
 
 // parseDecodePipeline turns a ?decode= option value into an ordered pipeline.
@@ -89,6 +142,14 @@ func applyDecode(ref Ref, v Value) (Value, error) {
 	for _, s := range steps {
 		b, err = s.fn(b)
 		if err != nil {
+			// A coding that already classified its own failure (gunzip's
+			// decompression bound) is wrapped once; everything else - the
+			// stdlib's own base64/hex errors, which carry no mamori sentinel -
+			// gets the two-verb form so the classification is always present
+			// exactly once in the chain rather than repeated in the message.
+			if errors.Is(err, ErrInvalid) {
+				return Value{}, fmt.Errorf("mamori: ref %q: %s decode failed: %w", redactRef(ref), s.name, err)
+			}
 			return Value{}, fmt.Errorf("mamori: ref %q: %s decode failed: %w: %w", redactRef(ref), s.name, ErrInvalid, err)
 		}
 	}

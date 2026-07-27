@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 )
 
 func gz(t *testing.T, b []byte) []byte {
@@ -89,10 +90,12 @@ func TestApplyDecodePreservesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	notAfter := time.Date(2031, 4, 5, 6, 7, 8, 0, time.UTC)
 	in := Value{
 		Bytes:     []byte(base64.StdEncoding.EncodeToString([]byte("v"))),
 		Version:   "abc123",
 		Sensitive: true,
+		NotAfter:  notAfter,
 		Metadata:  map[string]string{"k": "v"},
 	}
 	got, err := applyDecode(ref, in)
@@ -101,6 +104,9 @@ func TestApplyDecodePreservesMetadata(t *testing.T) {
 	}
 	if got.Version != "abc123" {
 		t.Errorf("Version = %q, want abc123 (the provider revision describes the source, not the decoded form)", got.Version)
+	}
+	if !got.NotAfter.Equal(notAfter) {
+		t.Errorf("NotAfter = %v, want %v (expiry describes the source value and must survive decoding)", got.NotAfter, notAfter)
 	}
 	if !got.Sensitive {
 		t.Error("Sensitive was lost across the decode pipeline")
@@ -121,6 +127,52 @@ func TestApplyDecodeNoOptIsPassthrough(t *testing.T) {
 	}
 	if string(got.Bytes) != "raw" {
 		t.Errorf("= %q, want raw", got.Bytes)
+	}
+}
+
+// TestGunzipRejectsDecompressionBomb feeds gunzip a payload that is tiny on
+// the wire and enormous once expanded. mamori reads from remote backends an
+// operator may not fully control (an S3 object, a config server response), so
+// an unbounded io.ReadAll here would let a crafted value exhaust the process's
+// memory. The bound must be a loud error rather than a silent truncation: a
+// truncated secret handed to the application is worse than a failed resolve.
+func TestGunzipRejectsDecompressionBomb(t *testing.T) {
+	bomb := gz(t, make([]byte, maxGzipDecoded+1)) // zeroes compress to a few hundred bytes
+	if len(bomb) > 64*1024 {
+		t.Fatalf("bomb is %d bytes on the wire; the test wants a genuinely small payload", len(bomb))
+	}
+
+	out, err := gunzip(bomb)
+	if err == nil {
+		t.Fatalf("gunzip accepted a %d-byte expansion (returned %d bytes); it must be bounded", maxGzipDecoded+1, len(out))
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("err = %v, want one wrapping ErrInvalid", err)
+	}
+	if out != nil {
+		t.Errorf("gunzip returned %d bytes alongside the error; a truncated payload must never reach the caller", len(out))
+	}
+
+	// The same bomb through the public pipeline must fail the same way, so the
+	// bound is real for every caller and not just a direct gunzip call.
+	ref, err := ParseRef("env:X?decode=gzip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyDecode(ref, Value{Bytes: bomb}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("applyDecode err = %v, want one wrapping ErrInvalid", err)
+	}
+}
+
+// TestGunzipAcceptsPayloadAtTheLimit pins that the bound is off-by-one-free:
+// a payload expanding to exactly the cap is legal, only one byte more is not.
+func TestGunzipAcceptsPayloadAtTheLimit(t *testing.T) {
+	out, err := gunzip(gz(t, make([]byte, maxGzipDecoded)))
+	if err != nil {
+		t.Fatalf("gunzip rejected a payload of exactly the limit: %v", err)
+	}
+	if len(out) != maxGzipDecoded {
+		t.Errorf("len = %d, want %d", len(out), maxGzipDecoded)
 	}
 }
 
