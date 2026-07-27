@@ -59,6 +59,10 @@ type Config struct {
     // A file-backed value, hot-reloaded via fsnotify
     TLSCert    []byte        `source:"file:///etc/tls/tls.crt"`
 
+    // ?decode=base64 declares the stored value is base64; core decodes it
+    // back to raw bytes before TLSKey is populated
+    TLSKey     []byte        `source:"aws-sm://prod/tls#key?decode=base64"`
+
     // A nested struct decoded from one JSON secret
     Redis      RedisConfig   `source:"aws-sm://prod/redis" flatten:"json"`
 }
@@ -84,6 +88,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 
 - **Typed & tag-driven** - one struct, multiple sources, generics API (`Load[T]` / `Watch[T]`).
 - **Nested selection** - `#/credentials/password` is an RFC 6901 JSON Pointer, addressing a value at any depth through objects and array elements; any other fragment (`#ca.crt`, `#tls.key`) stays a literal top-level key, exactly as before.
+- **Value decoding** - `?decode=base64,gzip` runs a stdlib-only pipeline (`base64`, `base64url`, `hex`, `gzip`, `trim`) over a resolved value before it reaches your struct field, left to right, outermost wrapper first; a bad payload is a loud `ErrInvalid`, never a silent passthrough.
 - **Precedence chains** - `source:"env:PORT,aws-ps://svc/port"` tries sources in priority order: the first to yield a value wins, not-found falls through to the next, and a real error stops the walk and applies the field's `onfail` policy instead of silently sliding to a lower-priority source. Every position is watched, so precedence is live.
 - **Reconciled at runtime** - native watch where the backend supports it (Kubernetes informers, Consul blocking queries, fsnotify), polling with jitter everywhere else, and lease-aware pre-expiry refresh for Vault.
 - **Atomic & validated** - an update that fails validation is *rejected*; `Get()` keeps returning the last good config. Config never enters a broken state mid-flight.

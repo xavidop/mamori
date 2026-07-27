@@ -22,10 +22,13 @@ import (
 
 type Config struct {
 	Port       string        `source:"env:PORT" default:"8080"`
-	DBPassword secret.String `source:"aws-sm://prod/db-password"`
+	DBPassword secret.String `source:"aws-sm://prod/db-password#password"`
 	// #/credentials/user is an RFC 6901 JSON Pointer fragment, selecting a
 	// value nested inside the secret's JSON payload rather than a top-level key.
 	DBUser     string        `source:"aws-sm://prod/db-password#/credentials/user"`
+	// ?decode=base64 declares the stored value is base64; core decodes it
+	// back to raw bytes before TLSKey is populated.
+	TLSKey     []byte        `source:"aws-sm://prod/tls#key?decode=base64"`
 }
 
 func main() {
@@ -42,6 +45,8 @@ func main() {
 ```
 
 One call resolves every ref, applies defaults, validates, and returns a fully typed `Config`.
+
+`TLSKey`'s `?decode=base64` is a ref query option, not a struct tag: it tells core the resolved value is encoded, so it is decoded (left to right, outermost wrapper first for a comma-separated list like `?decode=base64,gzip`) before the field is populated. A field's `default:` value is exempt - it is used as-is, undecoded, since it is a literal you wrote rather than an encoded payload from a backend. See [Ref grammar](/docs/concepts/ref-grammar/#value-decoding-decode) for the full coding table and failure semantics.
 
 ## Load config once
 
@@ -62,6 +67,6 @@ Batch-capable providers (for example AWS Secrets Manager) are resolved in a sing
 ## See also
 
 - [Concepts](/docs/concepts/) for refs, the tag grammar, and error kinds.
-- [Ref grammar](/docs/concepts/ref-grammar/) for the full `#key` fragment grammar, including nested JSON Pointer selection.
+- [Ref grammar](/docs/concepts/ref-grammar/) for the full `#key` fragment grammar, including nested JSON Pointer selection and `?decode=` value transforms.
 - [Validation](/docs/validation/) for the defaults and validation rules applied on every load.
 - [Observability](/docs/observability/) for `Status`, `Health`, `Doctor`, and the read-only HTTP surface.

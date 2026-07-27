@@ -5,7 +5,7 @@ title: Conformance
 
 # Conformance
 
-`github.com/xavidop/mamori/providertest` runs one function that exercises resolution, not-found typing, error classification, nested JSON Pointer selection (opt-in), `Version` monotonicity, concurrency, context cancellation, native watch, goroutine hygiene (goleak), and a no-payload-logging assertion. Every provider must pass it.
+`github.com/xavidop/mamori/providertest` runs one function that exercises resolution, not-found typing, nested JSON Pointer selection (opt-in), `?decode=` option passthrough, error classification, `Version` monotonicity, concurrency, context cancellation, native watch, goroutine hygiene (goleak), and a no-payload-logging assertion. Every provider must pass it.
 
 ## Run the conformance case
 
@@ -48,6 +48,14 @@ Supply `PointerRef` only when your provider's fragment slot **is** a JSON select
 
 `PointerRef` is a ref *builder*, not a boolean, because `Config.Ref` is not fragment-free by convention - several providers bake a fixed fragment into it (`vault://secret/<key>#value`, and the same shape in `mongodb`, `firestore`, and `k8s`), so appending a second fragment to `Ref`'s output would produce a doubled, unparseable fragment. The builder lets each provider say exactly where its selector goes.
 
+## `DecodeOption`
+
+Decoding a resolved value (`?decode=base64`, `?decode=base64,gzip`, ...) is entirely core's job: `applyDecode` runs on every `Value` at every point it enters the engine, and no provider ever inspects or acts on `?decode=` itself. Unlike `JSONPointerSelection`, this case is **not opt-in** - it runs unconditionally for every provider.
+
+What it catches is narrower and easy to miss otherwise: a provider that strips, rewrites, or errors on a query option it does not recognize. That bug would pass every other case in this kit and still silently break `?decode=` (and any future core-owned option) for that provider's users. The rule it enforces:
+
+**A provider must pass an unrecognized query option through untouched.** `DecodeOption` seeds a value that is itself a base64 string, resolves it through a ref carrying `?decode=base64`, and asserts the provider hands back exactly the stored (still-encoded) bytes - proving the provider read `ref.Path`/`ref.Key` and ignored the option rather than rejecting it or trying to interpret it itself.
+
 ## Build and test the module
 
 Build and test each module independently with the workspace disabled, exactly as CI does:
@@ -69,6 +77,7 @@ Or from the repo root, `make test` / `make lint` run every module.
 - [ ] `Value.Version` is set and changes when the value changes; secret-bearing values set `Sensitive: true`.
 - [ ] `#key` uses `mamori.SelectKey`; the payload is never logged.
 - [ ] If your fragment is a JSON selector, supply `providertest.Config.PointerRef` so `JSONPointerSelection` runs; otherwise leave it `nil` with a comment naming why (backend-native key, facet selector, or unused).
+- [ ] `Resolve` passes an unrecognized query option (e.g. `?decode=`) through untouched rather than stripping, rewriting, or erroring on it; `DecodeOption` proves this and runs unconditionally.
 - [ ] `Watch` is implemented only for native-push backends, closes on `ctx` cancel, and leaks no goroutines.
 - [ ] A client interface is injected so `providertest.Run` passes against a fake; live tests are behind `//go:build integration`.
 - [ ] `go build`, `go vet`, and `go test` are clean with `GOWORK=off`; the README documents scheme, ref grammar, and auth.

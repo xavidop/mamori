@@ -172,7 +172,131 @@ type Config struct {
 
 ## Value decoding (`?decode=`)
 
-Not yet released - this section will be filled in when it ships.
+`?decode=` is a ref query option declaring that a resolved value is encoded, so
+core decodes it before it reaches your struct field:
+
+```go
+type Config struct {
+	// The Secrets Manager entry holds base64 text; decode it back to raw
+	// bytes before TLSKey is populated.
+	TLSKey []byte `source:"aws-sm://prod/tls#key?decode=base64"`
+
+	// Stacked codings: the stored value is base64 of a gzip stream.
+	Bundle []byte `source:"aws-sm://prod/bundle?decode=base64,gzip"`
+}
+```
+
+### Codings
+
+| Coding | Applies |
+| --- | --- |
+| `base64` | `encoding/base64`, standard alphabet, padded (`base64.StdEncoding`) |
+| `base64url` | `encoding/base64`, URL-safe alphabet (`base64.URLEncoding`) |
+| `hex` | `encoding/hex` |
+| `gzip` | `compress/gzip` - decompresses, output capped at 16 MiB |
+| `trim` | strips leading/trailing whitespace |
+
+This is a **closed set**, all stdlib, with no extension point: core's minimal
+dependency set (validator, mapstructure, fsnotify) is a stated property of the
+project layout, and an open coding registry here would duplicate
+`WithDecodeHook`, which already exists one layer down for arbitrary per-type
+conversion.
+
+The whitespace handling is deliberately asymmetric: `base64`, `base64url`, and
+`hex` trim surrounding whitespace before decoding - a trailing newline from
+`base64 < key.pem > secret`, an editor's save, or a round trip through a
+backend's CLI is common, and rejecting a secret over an invisible byte is a
+miserable failure to debug. `gzip` does **not** trim, because its payload is
+binary: a valid gzip stream can legitimately end in bytes whose numeric values
+are ASCII whitespace (the trailing CRC32/ISIZE bytes are raw integers, not
+text), and trimming them would silently corrupt the stream. A genuinely
+whitespace-padded gzip payload has its own explicit escape hatch instead:
+`?decode=trim,gzip` trims first, then gunzips.
+
+`gzip`'s decompressed output is capped at 16 MiB. Exceeding it is a loud
+`ErrInvalid`, never a truncation - handing an application a silently
+truncated secret or certificate would fail later, somewhere else, in a way
+that looks like anything but a decode problem. The cap is a constant with no
+option to override it: a legitimate payload above it is realistically only
+possible from an unbounded local source (`file:`, `exec:`), and the remedy
+there is to not declare `?decode=gzip` and gunzip in application code instead.
+
+### Ordering: left to right, outermost wrapper first
+
+Codings apply in the order written, outermost wrapper first: `?decode=base64,gzip`
+means the stored value is base64 **of** gzip **of** the payload, so it is
+base64-decoded first, then gunzipped.
+
+This is why the option is named `decode` rather than `encoding`. HTTP's
+`Content-Encoding` header lists codings in the order they were *applied*, and a
+client decodes that list in *reverse*. Naming this option after the action
+instead removes any question of which direction the list reads: unlike
+`Content-Encoding`, `?decode=`'s list reads exactly as written, left to right,
+first coding first.
+
+### Failure is loud: `ErrInvalid`, never a silent passthrough
+
+A payload that fails a decode step - malformed base64, a truncated gzip
+stream, and so on - wraps `ErrInvalid`. There is no silent passthrough of the
+raw, still-encoded bytes: a decode failure is a non-not-found error, so it
+stops a precedence chain's walk exactly like any other real error (a
+`default:` does not silently mask it - see below). See
+[Error kinds](/docs/concepts/error-kinds/) for how `ErrInvalid` maps onto
+`mamori.ErrorKind`.
+
+An unrecognized coding name is rejected up front, at spec-walk time, so a typo
+(`?decode=base64,gzp`) fails at `Load`, `Watch`, or `Doctor` rather than on
+some later poll tick. Every ref in a precedence chain is validated this way,
+not just the one that ultimately wins - a typo in a lower-precedence fallback
+ref would otherwise stay silent until that ref actually won.
+
+### `Version` is untouched
+
+Decoding only transforms `Value.Bytes`. `Version`, `Sensitive`, `NotAfter`,
+and `Metadata` all carry through unchanged, so change detection keeps
+comparing the provider's own revision - not the decoded bytes - exactly as it
+does for a field with no `?decode=` at all.
+
+### Decoding runs after `#key` selection
+
+Decode applies to whatever `#key` already selected (or the whole payload, if
+there is no fragment) - not the other way around. `#tls.crt?decode=base64`
+means "select `tls.crt` from the payload, then base64-decode what was
+selected."
+
+That ordering has a consequence: `#key` cannot select a field *out of* what
+decoding produces. If a JSON Pointer needs to look inside a payload that only
+exists after decoding - a base64-encoded JSON document, for instance - drop
+the `#key`, decode the whole payload, and use `flatten:"json"` to do the
+selection afterward:
+
+```go
+type Creds struct {
+	User     string        `mapstructure:"user"`
+	Password secret.String `mapstructure:"password"`
+}
+
+type Config struct {
+	// No #key: the whole entry is base64. It decodes to a JSON object, and
+	// flatten:"json" does the field selection ?decode= could not.
+	Creds Creds `source:"aws-sm://prod/bundle?decode=base64" flatten:"json"`
+}
+```
+
+### `?decode=` and `default:`
+
+A field whose refs all report not-found falls back to its `default:` tag
+value, used **as-is, undecoded** - even if the field also carries `?decode=`.
+A default is a literal you wrote in the tag, not an encoded payload from a
+backend, so running it through the decode pipeline would be wrong far more
+often than right. Write the default already in its final, decoded form.
+
+### `?decode=` is not redacted
+
+`decode` is not on the list of query options [`Status()`](/docs/observability/)
+and `mamori doctor` redact, so it stays visible in a `Report`. That is
+deliberate: an operator debugging a garbled value needs to see that a
+decoding step is in play, and `?decode=` alone is not itself sensitive.
 
 ## Ref interpolation (`${VAR}`)
 

@@ -76,6 +76,13 @@ Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) 
    selector on an evaluated result, or unused - the case skips rather than
    failing.
 
+   The kit also runs `DecodeOption` unconditionally (no opt-in, no config
+   field to wire): it asserts your `Resolve` passes an unrecognized query
+   option like `?decode=base64` through untouched, since decoding a resolved
+   value is entirely core's job (`applyDecode`), not the provider's. This
+   normally requires no extra work - it only fails if your provider inspects,
+   strips, or rejects query options it does not itself recognize.
+
 6. Add a `README.md` documenting schemes, ref grammar, auth, and what is verified vs needs a live backend. A provider that passes `providertest` gets listed in the root README with a badge.
 7. If you classified errors beyond not-found (step 3), also: add an `## Error classification` section to the module's `README.md`, mirror it onto the module's docs-site page, and flip that module's row in both coverage tables (the root `README.md` and `site/src/pages/docs/providers/index.md`).
 

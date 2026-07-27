@@ -53,6 +53,16 @@ Rules to hold onto:
   literal top-level key, exactly as before: `source:"k8s-secret://prod/tls#ca.crt"`.
   Do not restructure a secret or add application-code plumbing to reach a
   nested field when a pointer fragment already reaches it directly.
+- `?decode=` declares a resolved value is encoded, so core decodes it before
+  the field is populated: `source:"aws-sm://prod/tls#key?decode=base64"`.
+  Codings are `base64`, `base64url`, `hex`, `gzip`, `trim` - a closed,
+  stdlib-only set - applied left to right, outermost wrapper first:
+  `?decode=base64,gzip` reads as "base64 of gzip", so it is base64-decoded
+  then gunzipped. Decode runs *after* `#key` selection, so it cannot reach
+  into a payload that only exists once decoded - drop the `#key`, decode the
+  whole payload, and use `flatten:"json"` for that case instead. A bad
+  payload is a loud `ErrInvalid`, never silently passed through; a field's
+  `default:` value is exempt - it is used as-is, undecoded.
 
 ## Watch for live changes
 
