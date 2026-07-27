@@ -177,6 +177,15 @@ type Server struct {
 	// Close and start need their own explicit synchronization; a plain field
 	// would otherwise be a genuine data race between the two, not merely a
 	// theoretical one - see closeTransports and Close's own doc comment.
+	//
+	// resolveMu carries one more job beyond guarding those four fields: it is
+	// the happens-before edge between every WaitGroup Add this Server makes
+	// and the matching Wait in teardown. Both start (for resolveWG) and
+	// beginListening (for listenWG) Add while holding it, having first seen
+	// closed as false, and teardown takes it before either Wait at a point
+	// where closed is already permanently true - so an Add can never be
+	// concurrent with a Wait, which for a WaitGroup is a data race rather
+	// than a benign overlap. See beginListening's doc comment in resolve.go.
 	resolved      map[string]*resolverState
 	resolveCancel context.CancelFunc
 	servingCtx    context.Context
@@ -205,6 +214,19 @@ type Server struct {
 	// listener's Serve goroutine to actually exit, mirroring resolveWG above
 	// for the transport half of the lifecycle. They stay nil/zero until
 	// Serve runs.
+	//
+	// listenWG is added to under resolveMu, not entriesMu, even though it is
+	// otherwise transport state. That is not an oversight in the split: its
+	// Add has to be ordered against the listenWG.Wait that Close's teardown
+	// reaches through closeTransports (a positive Add made when a WaitGroup's
+	// counter is zero must happen before a Wait, or it is a data race and, on
+	// an unlucky interleaving without the race detector, a WaitGroup misuse
+	// panic), and the only thing that can supply that ordering is the closed
+	// flag below, which resolveMu guards. So Serve makes its Adds inside the
+	// same resolveMu critical section as its final closed check - see
+	// beginListening in resolve.go - exactly as start makes resolveWG's Adds
+	// inside its own. entriesMu could not do this job: teardown's snapshot of
+	// entries deliberately does not hold it across the Wait.
 	entries   []*listenerEntry
 	entriesMu sync.Mutex
 	listenWG  sync.WaitGroup

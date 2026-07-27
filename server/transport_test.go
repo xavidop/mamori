@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -951,5 +953,102 @@ func TestCloseWaitsForInFlightClose(t *testing.T) {
 	// And it must have actually waited, rather than racing through by luck.
 	if elapsed < grace/2 {
 		t.Errorf("Close returned in %v, too fast to have waited for the in-flight teardown (grace %v)", elapsed, grace)
+	}
+}
+
+// closeRaceIterations is how many Serve/Close races
+// TestCloseRacingServeSetupNeverRacesListenWG drives. The window it aims at
+// is a handful of instructions wide, so a single attempt proves nothing: at
+// 25 iterations the pre-fix code was caught by -race on 20 of 20 local runs,
+// and this leaves an order of magnitude of headroom on top of that for a
+// slower or busier CI machine without making the test itself slow (the whole
+// loop is well under a second even under -race).
+const closeRaceIterations = 250
+
+// TestCloseRacingServeSetupNeverRacesListenWG is the regression test for a
+// Close that lands in the sliver of Serve between "the listener is bound and
+// visible" and "the goroutine that will serve it has been registered with
+// s.listenWG".
+//
+// Serve is documented to run in the background (`go s.Serve(ctx)`) with Close
+// driven independently, so this interleaving is ordinary usage, not an abuse:
+// every test in this file that does `go s.Serve(ctx)` + `defer s.Close()` is
+// one instance of it, and TestUnixSocketHasRequestedMode is the one that
+// happened to lose the coin flip on CI.
+//
+// What used to go wrong: Serve called s.listenWG.Add(1) with no
+// synchronization against Close, while Close -> teardown -> closeTransports
+// called s.listenWG.Wait(). sync.WaitGroup requires that "calls with a
+// positive delta that occur when the counter is zero must happen before a
+// Wait", and nothing in the code established that ordering. Under -race that
+// is reported as a write (Wait) racing a read (Add) on the WaitGroup's
+// internal semaphore word; without -race, sync itself can panic with
+// "WaitGroup misuse: Add called concurrently with Wait". The fix moves the
+// Add into the same resolveMu-guarded, closed-checked transition Serve
+// already made before spawning anything (beginListening, resolve.go), which
+// is exactly how start's resolveWG.Add calls have always been ordered against
+// the same teardown.
+//
+// The loop closes as soon as Addrs() reports the listener, because that is
+// the first moment an outside goroutine can observe Serve's progress and is
+// therefore the tightest aim at the window. Each iteration also asserts the
+// documented contracts still hold: Serve returns either nil or errClosed
+// (never a bind failure from a socket the previous iteration failed to clean
+// up), and Close always reports success. goleak covers the other half - that
+// no interleaving leaves a listener goroutine, a watch goroutine, or a
+// channel waiter behind.
+func TestCloseRacingServeSetupNeverRacesListenWG(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	sockPath := shortSocketPath(t)
+
+	for i := 0; i < closeRaceIterations; i++ {
+		p := mamoritest.NewProvider("udsrace")
+		p.Set("k", "v1")
+
+		s, err := New(
+			WithPolicy(AllowAll()),
+			NoAuth(),
+			Bind("b", "udsrace://k"),
+			WithProvider(p),
+			Unix(sockPath, 0o600),
+		)
+		if err != nil {
+			t.Fatalf("iteration %d: New: %v", i, err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		var serveErr error
+		go func() {
+			defer wg.Done()
+			serveErr = s.Serve(ctx)
+		}()
+
+		var closeErr error
+		go func() {
+			defer wg.Done()
+			// Spin rather than sleep: a sleep of any length lands after the
+			// window in nearly every iteration, which is precisely why the
+			// existing tests only reproduced this on an unlucky CI run.
+			deadline := time.Now().Add(transportTestWait)
+			for len(s.Addrs()) == 0 && time.Now().Before(deadline) {
+				runtime.Gosched()
+			}
+			closeErr = s.Close()
+		}()
+
+		wg.Wait()
+		cancel()
+
+		if serveErr != nil && !errors.Is(serveErr, errClosed) {
+			t.Fatalf("iteration %d: Serve = %v, want nil or errClosed", i, serveErr)
+		}
+		if closeErr != nil {
+			t.Fatalf("iteration %d: Close = %v, want nil", i, closeErr)
+		}
 	}
 }

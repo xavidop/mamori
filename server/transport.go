@@ -371,11 +371,14 @@ func (s *Server) Addrs() []net.Addr {
 // no subsequent Close could ever reach). A Close that instead arrives
 // concurrently, WHILE Serve is still binding listeners below, is handled
 // from the other end: once every configured listener has been bound, Serve
-// checks isClosed one more time and, if a concurrent Close raced in and beat
-// it, tears down everything it just built itself (teardown, resolve.go)
-// before returning errClosed - see Close's own doc comment (resolve.go) for
-// why that self-teardown, rather than relying on the racing Close, is what
-// actually reclaims the listeners in that interleaving.
+// makes one more closed check (beginListening, resolve.go) and, if a
+// concurrent Close raced in and beat it, tears down everything it just built
+// itself (teardown, resolve.go) before returning errClosed - see Close's own
+// doc comment (resolve.go) for why that self-teardown, rather than relying on
+// the racing Close, is what actually reclaims the listeners in that
+// interleaving. That same call is where the listener goroutines below are
+// counted into s.listenWG, so that Close's teardown can never be waiting on
+// that WaitGroup while Serve is still adding to it.
 func (s *Server) Serve(ctx context.Context) error {
 	if s.noAuth && s.hasTCP {
 		return errNoAuthOnTCP
@@ -403,6 +406,8 @@ func (s *Server) Serve(ctx context.Context) error {
 		s.addEntry(&listenerEntry{ln: ln, srv: s.newHTTPServer(handler, false)})
 	}
 
+	entries := s.snapshotEntries()
+
 	// Close may have already raced in concurrently with the setup above -
 	// Serve is meant to run in the background (`go s.Serve(ctx)`) with Close
 	// driven independently, e.g. from a signal handler (see resolveMu's doc
@@ -412,12 +417,20 @@ func (s *Server) Serve(ctx context.Context) error {
 	// considers itself done and will never run again on its own. Detect
 	// that here and tear down everything just built ourselves, via the same
 	// teardown Close itself uses, rather than leaving it orphaned.
-	if s.isClosed() {
+	//
+	// The same call also registers the goroutines spawned just below with
+	// s.listenWG, because that registration must be ordered against the
+	// s.listenWG.Wait a concurrent Close's teardown reaches through
+	// closeTransports, and this closed check is the only place that ordering
+	// can be established - see beginListening's doc comment (resolve.go) for
+	// why the check and the Add have to be one critical section rather than
+	// two. Nothing between here and the spawn loop may return early: the Adds
+	// are already made, and only the loop's own deferred Done calls balance
+	// them.
+	if !s.beginListening(entries) {
 		s.teardown()
 		return errClosed
 	}
-
-	entries := s.snapshotEntries()
 
 	// errCh is fully buffered (one slot per entry) so every listener
 	// goroutine below can always send its result and return, even if Serve
@@ -427,7 +440,6 @@ func (s *Server) Serve(ctx context.Context) error {
 	// report a result nobody consumes, which goleak would catch as a leak.
 	errCh := make(chan error, len(entries))
 	for _, e := range entries {
-		s.listenWG.Add(1)
 		go func(e *listenerEntry) {
 			defer s.listenWG.Done()
 			err := e.srv.Serve(e.ln)
@@ -465,7 +477,7 @@ func (s *Server) Serve(ctx context.Context) error {
 // resolver goroutines - see this file's package doc comment for why the two
 // halves share one Close, and Close's own doc comment (resolve.go) for how
 // this can also be invoked directly by Serve itself, when Serve's post-setup
-// isClosed check finds a concurrent Close already ran.
+// beginListening check finds a concurrent Close already ran.
 //
 // Every entry's http.Server is offered a graceful Shutdown first, all of
 // them concurrently, sharing ONE bounded deadline (shutdownGrace) rather
@@ -493,7 +505,21 @@ func (s *Server) Serve(ctx context.Context) error {
 // It then waits on s.listenWG so every srv.Serve(ln) goroutine Serve started
 // has actually returned before this function does - the transport half of
 // the goleak-clean contract Close's own doc comment (resolve.go) promises,
-// mirrored here the same way resolveWG covers the resolver goroutines.
+// mirrored here the same way resolveWG covers the resolver goroutines. That
+// mirroring extends to how the Wait is synchronized, which is not optional:
+// Serve counts its listener goroutines in beginListening (resolve.go), under
+// resolveMu and behind the same closed check that gates start's own
+// resolveWG.Add calls, so by the time teardown - this function's only caller
+// - has taken resolveMu, every Add either already happened or never will.
+// Adding to a WaitGroup whose counter is zero while another goroutine is
+// waiting on it is a data race, not a benign overlap, so this Wait is only
+// sound because of that ordering; see beginListening's doc comment.
+//
+// Note the Wait is reached even when Serve never got as far as spawning
+// anything - a fail-fast bad bind returns before beginListening - which is
+// harmless precisely because no Add was made in that case either: the counter
+// is zero and the Wait returns immediately, while the loops above still
+// release the listeners that DID bind.
 //
 // Finally, every Unix listener's socket file is removed, so neither this run
 // nor a restart trips over a stale file left behind (see Unix's doc comment

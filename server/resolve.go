@@ -192,6 +192,12 @@ var errClosed = fmt.Errorf("mamori/server: server is closed")
 // and start then sees closed already true and refuses outright (errClosed,
 // below) - spawning nothing at all. There is no window in between where a
 // goroutine could be spawned uncounted or a resolveCancel left unreadable.
+//
+// That every resolveWG.Add below is made under resolveMu, behind the closed
+// check above, is also exactly what keeps teardown's resolveWG.Wait from
+// being a data race in its own right: see teardown's doc comment for why a
+// positive Add concurrent with a Wait is one, and beginListening for the same
+// rule applied to Serve's listener goroutines.
 func (s *Server) start(ctx context.Context) error {
 	s.resolveMu.Lock()
 	defer s.resolveMu.Unlock()
@@ -400,11 +406,24 @@ func (s *Server) readiness() (state string, ready bool) {
 // listener bind, say - can still observe closed as false and find nothing
 // yet to tear down, the same way a Close-before-Serve does. Serve handles
 // that case from its own end: once it finishes creating everything it is
-// going to create, it checks isClosed one more time and, if Close raced in
-// and beat it, tears down what it just built itself via teardown below (see
-// Serve's doc comment in transport.go) - teardown is safe to invoke from
-// both places, even concurrently, since closeTransports, cancel, and
-// resolveWG.Wait are each safe to call more than once.
+// going to create, it makes one more closed check (beginListening, below)
+// and, if Close raced in and beat it, tears down what it just built itself
+// via teardown below (see Serve's doc comment in transport.go) - teardown is
+// safe to invoke from both places, even concurrently, since closeTransports,
+// cancel, and the two WaitGroup Waits are each safe to call more than once.
+//
+// Repeat-safety is not the whole of what those two Waits need, though, and
+// the distinction is worth stating because it is easy to conflate: a
+// WaitGroup tolerates concurrent and repeated WAITS, but a positive Add made
+// while the counter is zero must happen before a Wait, so what actually keeps
+// teardown's resolveWG.Wait and listenWG.Wait sound is that no Add can ever
+// be concurrent with them. Both WaitGroups get that from this same closed
+// flag: every resolveWG.Add is made by start, and every listenWG.Add by
+// beginListening, each under resolveMu having first observed closed as false,
+// while teardown only ever runs once closed is already permanently true. So
+// for either WaitGroup, any Add either precedes teardown's own resolveMu
+// acquisition (and therefore happens-before its Wait) or never happens at
+// all.
 func (s *Server) Close() error {
 	s.resolveMu.Lock()
 	if s.closed {
@@ -454,17 +473,52 @@ func (s *Server) Close() error {
 	return nil
 }
 
-// isClosed reports whether Close has already made its idempotent closed
-// transition, under the same resolveMu that guards closed and resolveCancel.
-// Serve (transport.go) calls this once it finishes binding every configured
-// listener, to detect a Close that raced in and fired before there was
-// anything to tear down yet - see Close's own doc comment above for why that
-// ordering is possible and how Serve is expected to respond (teardown,
-// below).
-func (s *Server) isClosed() bool {
+// beginListening is Serve's counterpart to start's own closed check: the one
+// transition, made once Serve has bound every configured listener and
+// immediately before it spawns a goroutine for any of them, that both asks
+// whether Close already ran and - if it did not - registers the goroutines
+// Serve is about to spawn with s.listenWG. It reports false when Close got
+// there first, which is Serve's cue to tear down what it just built itself
+// (teardown, below) and return errClosed; see Close's doc comment above for
+// why a Close can arrive mid-setup and find nothing to tear down yet, and
+// Serve's own doc comment (transport.go) for the other half.
+//
+// The check and the Add have to be ONE resolveMu critical section, not a
+// check followed by an unsynchronized Add, and that is the whole point of
+// this function rather than a plain "is it closed?" predicate.
+// sync.WaitGroup's contract is that a positive Add made when the counter is
+// zero must happen before a Wait, and teardown (below) reaches
+// s.listenWG.Wait via closeTransports. Fusing them under resolveMu makes the
+// two mutually exclusive by construction, because closed is already
+// permanently true by the time any teardown runs (Close sets it before
+// calling teardown, and Serve only calls teardown having observed it here):
+// either this critical section runs first, in which case every Add
+// happens-before teardown's own resolveMu acquisition and therefore before
+// the Wait, or teardown's runs first, in which case this one observes closed,
+// adds nothing, and spawns nothing - so the Wait it will do can only ever see
+// a counter that is zero and can never grow again. There is no window in
+// between where a listener goroutine could be counted concurrently with the
+// Wait that is supposed to be counting it.
+//
+// That is deliberately the same rule start (above) already follows for
+// s.resolveWG, whose Add calls are likewise made under resolveMu behind a
+// closed check - see start's resolveMu paragraph. Serve's listener goroutines
+// were the half that had been left out.
+//
+// Every Add made here is matched by a Done: the spawn loop it guards runs
+// immediately afterward over the same entries slice, cannot fail, and cannot
+// return early, and each goroutine it starts defers s.listenWG.Done. A Serve
+// that returns BEFORE reaching here - the fail-fast bad-bind path - therefore
+// leaves the counter at zero, so a later Close's Wait returns at once rather
+// than blocking forever on goroutines that were never started.
+func (s *Server) beginListening(entries []*listenerEntry) bool {
 	s.resolveMu.Lock()
 	defer s.resolveMu.Unlock()
-	return s.closed
+	if s.closed {
+		return false
+	}
+	s.listenWG.Add(len(entries))
+	return true
 }
 
 // teardown does Close's actual shutdown work: FIRST cancel servingCtx (so
@@ -477,12 +531,24 @@ func (s *Server) isClosed() bool {
 // the context start derived, then wait for resolveWG). It is split out from
 // Close's idempotent closed transition so that Serve (transport.go) can
 // invoke this exact same teardown itself, unconditionally, when its own
-// post-setup isClosed check finds that Close already ran (and, being
+// post-setup beginListening check finds that Close already ran (and, being
 // idempotent, will never run again) - see Close's doc comment above. Every
-// step here is safe to overlap or repeat: a context.CancelFunc, closeTransports,
-// and resolveWG.Wait are each safe to call more than once, including
-// concurrently with themselves - so both callers' invocations composing all
-// of this together stays safe too.
+// step here is safe to overlap or repeat: a context.CancelFunc,
+// closeTransports, and both WaitGroup Waits are each safe to call more than
+// once, including concurrently with themselves - so both callers' invocations
+// composing all of this together stays safe too.
+//
+// Both callers also guarantee the precondition the two Waits actually depend
+// on, which repeat-safety alone does not supply: closed is already true
+// whenever this runs (Close sets it before calling here; Serve calls here
+// only having observed it in beginListening), and every Add to either
+// WaitGroup is made under resolveMu behind a check of that same flag - by
+// start for resolveWG, by beginListening for listenWG. So the resolveMu
+// acquisition immediately below is the ordering point: any Add at all either
+// happened before it, and so happens-before the Waits, or will never happen.
+// See Close's doc comment above for why an Add racing a Wait would be a data
+// race (and, without the race detector, a WaitGroup misuse panic) rather than
+// a harmless overlap.
 func (s *Server) teardown() {
 	s.resolveMu.Lock()
 	servingCancel := s.servingCancel
