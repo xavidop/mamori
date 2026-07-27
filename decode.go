@@ -108,6 +108,15 @@ func walkSpecs(t reflect.Type, prefix string, index []int) ([]fieldSpec, error) 
 			return nil, fmt.Errorf("mamori: field %s: %w", path, err)
 		}
 
+		// Every ref in the chain is validated, not just the first: a typo in a
+		// lower-precedence position would otherwise stay silent until that
+		// position actually won.
+		for _, r := range refs {
+			if _, err := parseDecodePipeline(r.Opt("decode")); err != nil {
+				return nil, fmt.Errorf("mamori: field %s: %w", path, err)
+			}
+		}
+
 		onFail := onFailKeepLast
 		if hasOnFail {
 			switch onFailTag {

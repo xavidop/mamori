@@ -101,3 +101,28 @@ func TestWalkSpecsChain(t *testing.T) {
 		}
 	})
 }
+
+func TestFieldSpecsRejectsUnknownDecodeCoding(t *testing.T) {
+	type cfg struct {
+		A string `source:"env:A?decode=rot13"`
+	}
+	_, err := fieldSpecs(reflect.TypeOf(cfg{}))
+	if err == nil {
+		t.Fatal("want an error for an unknown decode coding, got nil")
+	}
+	if !strings.Contains(err.Error(), "rot13") {
+		t.Errorf("error %q should name the offending coding", err)
+	}
+	if !strings.Contains(err.Error(), "A") {
+		t.Errorf("error %q should name the offending field", err)
+	}
+}
+
+func TestFieldSpecsAcceptsKnownDecodeCodings(t *testing.T) {
+	type cfg struct {
+		A string `source:"env:A?decode=base64,gzip"`
+	}
+	if _, err := fieldSpecs(reflect.TypeOf(cfg{})); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
