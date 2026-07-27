@@ -158,11 +158,37 @@ struct field without a second rule.
 
 ### 5.5 Blast radius
 
-All 26 provider files calling `mamori.SelectKey` inherit this with no change. Providers
-that do their own key lookup because their backend is natively keyed (the
-Kubernetes provider reads `Secret.Data`, a Go map) are unaffected and keep
-literal-key semantics, which is correct for them: a Kubernetes Secret has no
-nesting to point into.
+All 26 provider files calling `mamori.SelectKey` inherit this with no change.
+
+**The fragment slot does not mean the same thing in every provider.** This was
+underestimated in the first draft of this spec and is recorded here because the
+conformance case depends on it. Three distinct meanings exist today:
+
+1. **A JSON selector.** `aws-sm`, `s3`, `consul`, `redis`, and most others treat
+   the fragment as a key into a JSON payload and route it through `SelectKey`.
+   These gain pointer support.
+2. **A backend-native key.** The Kubernetes provider reads `Secret.Data`, a Go
+   map, so `#ca.crt` names a map entry, not a JSON path. Doppler's fragment
+   names the secret itself. These correctly do their own lookup and gain
+   nothing, because there is no document to point into.
+3. **Nothing.** `providers/mamori`'s client never reads `ref.Key` at all;
+   per decision D9 of the operational-layer spec, field selection is
+   server-side only. Feature-flag providers returning a bare `bool` or `string`
+   (`unleash`, `split`, `flipt`) have no payload to select from either.
+
+Only category 1 can be conformance-tested for pointer support, and a provider
+in category 2 or 3 is not defective for failing such a test. The conformance
+case is therefore **opt-in**: `providertest.Config.PointerRef` is supplied only
+by a provider whose fragment slot is a JSON selector, and the case skips when it
+is nil.
+
+`PointerRef` is a ref *builder* rather than a boolean because
+`providertest.Config.Ref` is not fragment-free by convention. Several providers
+bake a fixed fragment into it (`vault://secret/<key>#value` at
+`providers/vault/vault_test.go:137`; the same shape in `mongodb`, `firestore`,
+and `k8s`), so appending a second fragment to `Ref`'s output would produce
+`vault://secret/x#value#/outer/inner`. A builder lets each provider say where
+its selector goes.
 
 ## 6. Feature 2: `?decode=` value transforms
 
@@ -334,11 +360,14 @@ error rather than an injection vector, and it is documented alongside
 - **Interpolation tests**: expansion in scheme, path, fragment, and query
   position; `$$` escaping; unset-variable error text; merge order across two
   `WithRefVars` calls; expansion inside a chain.
-- **Two new `providertest` cases**: `JSONPointerSelection` and
-  `DecodeOption`, with a `providertest.Config.NoStructuredPayload bool` opt-out
-  for providers whose values are never JSON documents, following the existing
-  `NoResolveErrors` precedent (`providertest/providertest.go:97`) of an explicit,
-  greppable declaration rather than a silent skip.
+- **Two new `providertest` cases**: `JSONPointerSelection` and `DecodeOption`.
+  `JSONPointerSelection` is opt-in via `providertest.Config.PointerRef`
+  (see 5.5): a provider supplies a builder saying how to construct a ref whose
+  fragment is a JSON selector, and the case skips when it is nil, because a
+  provider whose fragment slot is a backend-native key is not defective for
+  lacking pointer support. `DecodeOption` needs no opt-out: `?decode=` is a
+  query option every provider must pass through untouched regardless of what
+  its fragment means.
 - **A fuzz target over `ParseRef` + `SelectKey`.** The repo has no fuzzing
   today; a grammar this size with hand-rolled parsing warrants one, and it costs
   a single `FuzzRefGrammar` function.
