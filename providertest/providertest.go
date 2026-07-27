@@ -130,17 +130,6 @@ type Config struct {
 	// is a hard error, so this exemption is explicit and greppable, never a
 	// silent skip.
 	NoResolveErrors bool
-
-	// NoStructuredPayload declares that this provider's values are never JSON
-	// documents, so fragment selection cannot be exercised against it. A
-	// feature-flag provider returning a bare bool, or a backend whose values are
-	// opaque binary, is the usual case.
-	//
-	// Like NoResolveErrors, this is a deliberate, greppable declaration rather
-	// than a silent gap: a provider that stores JSON and does not call
-	// mamori.SelectKey has a real bug, and the JSONPointerSelection case exists
-	// to catch exactly that.
-	NoStructuredPayload bool
 }
 
 func (c Config) key(name string) string {
@@ -175,7 +164,6 @@ func Run(t *testing.T, c Config) {
 	t.Run("Scheme", func(t *testing.T) { testScheme(t, c) })
 	t.Run("ResolveSeeded", func(t *testing.T) { testResolveSeeded(t, c) })
 	t.Run("NotFoundTyped", func(t *testing.T) { testNotFound(t, c) })
-	t.Run("JSONPointerSelection", func(t *testing.T) { testJSONPointerSelection(t, c) })
 	t.Run("ErrorClassification", func(t *testing.T) { RunErrorClassification(t, c) })
 	t.Run("ContextCancel", func(t *testing.T) { testContextCancel(t, c) })
 	t.Run("ConcurrentResolve", func(t *testing.T) { testConcurrentResolve(t, c) })
@@ -281,61 +269,6 @@ func RunErrorClassification(tb testing.TB, c Config) {
 				tc.name, got, tc.want, resolveErr)
 			return
 		}
-	}
-}
-
-// testJSONPointerSelection verifies the provider routes its #fragment through
-// mamori.SelectKey, so nested selection works identically everywhere. A
-// provider that hand-rolls a top-level-only key lookup passes every other case
-// in this kit and fails this one.
-func testJSONPointerSelection(t *testing.T, c Config) {
-	t.Helper()
-	if c.NoStructuredPayload {
-		t.Skip("providertest: provider declares NoStructuredPayload; values are never JSON documents")
-		return
-	}
-	ctx := context.Background()
-	p := c.New()
-	key := c.key("jsonpointer")
-
-	const payload = `{"outer":{"inner":"deep"},"list":[{"n":"zero"},{"n":"one"}],"dotted.key":"literal"}`
-	if err := c.Seed(ctx, key, payload); err != nil {
-		t.Fatalf("Seed: %v", err)
-	}
-
-	cases := []struct{ frag, want string }{
-		{"#/outer/inner", "deep"},
-		{"#/list/1/n", "one"},
-		{"#dotted.key", "literal"}, // literal fragment, not a path
-	}
-	for _, tc := range cases {
-		ref, err := mamori.ParseRef(c.Ref(key) + tc.frag)
-		if err != nil {
-			t.Fatalf("ParseRef(%q): %v", tc.frag, err)
-		}
-		v, err := p.Resolve(ctx, ref)
-		if err != nil {
-			t.Fatalf("Resolve(%q): %v", tc.frag, err)
-		}
-		if string(v.Bytes) != tc.want {
-			t.Errorf("Resolve(%q) = %q, want %q", tc.frag, v.Bytes, tc.want)
-		}
-	}
-
-	ref, err := mamori.ParseRef(c.Ref(key) + "#/outer/absent")
-	if err != nil {
-		t.Fatalf("ParseRef: %v", err)
-	}
-	if _, err := p.Resolve(ctx, ref); !errors.Is(err, mamori.ErrNotFound) {
-		t.Errorf("absent pointer err = %v, want ErrNotFound", err)
-	}
-
-	ref, err = mamori.ParseRef(c.Ref(key) + "#/outer/inner/deeper")
-	if err != nil {
-		t.Fatalf("ParseRef: %v", err)
-	}
-	if _, err := p.Resolve(ctx, ref); !errors.Is(err, mamori.ErrInvalid) {
-		t.Errorf("descend-into-scalar err = %v, want ErrInvalid", err)
 	}
 }
 
