@@ -88,7 +88,9 @@ func TestDecodeAppliesOnWatchUpdate(t *testing.T) {
 	}
 
 	p.push("a", b64("second"), "v2")
-	waitPending(clk)
+	// Let the update reach the reconciler and arm its debounce timer, then
+	// advance past the debounce window.
+	blockUntilTimers(t, clk, 1)
 	clk.Advance(defaultDebounce)
 
 	select {
@@ -132,9 +134,14 @@ func TestDecodeFailureOnWatchKeepsLastGoodValue(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	p.push("a", "!!! not base64 !!!", "v2")
-	waitPending(clk)
-	clk.Advance(defaultDebounce)
-
+	// No clock handshake here, deliberately, and the asymmetry with the
+	// success-path test above is the point: a decode failure never reaches the
+	// debounce timer. recordSourceUpdate stores it as the chain position's
+	// error, recomputeWinner stops the walk there, and the error is dispatched
+	// to OnError directly - no candidate snapshot is built, so nothing is
+	// coalesced and no timer is ever armed. Waiting for one (or advancing the
+	// clock past a debounce window that will never open) would hang until the
+	// budget expired.
 	select {
 	case e := <-errs:
 		if !errors.Is(e, ErrInvalid) {
