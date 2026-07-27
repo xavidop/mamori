@@ -16,9 +16,9 @@ func TestExpandRefVars(t *testing.T) {
 		{"aws-sm://a#${SVC}", "aws-sm://a#checkout"},
 		{"env:PORT,aws-ps://${SVC}/port", "env:PORT,aws-ps://checkout/port"},
 		{"env:NO_VARS_HERE", "env:NO_VARS_HERE"},
-		{"exec:echo $HOME", "exec:echo $HOME"},   // bare $ is left alone
-		{"exec:echo $$HOME", "exec:echo $HOME"},  // $$ is a literal $
-		{"aws-sm://${EMPTY}x", "aws-sm://x"},     // defined-but-empty is legal
+		{"exec:echo $HOME", "exec:echo $HOME"},  // bare $ is left alone
+		{"exec:echo $$HOME", "exec:echo $HOME"}, // $$ is a literal $
+		{"aws-sm://${EMPTY}x", "aws-sm://x"},    // defined-but-empty is legal
 	}
 	for _, tt := range tests {
 		got, err := expandRefVars(tt.in, vars)
