@@ -679,8 +679,9 @@ func refDebounceOverride(ref Ref) (time.Duration, bool) {
 //
 // Decoding here, rather than later at the winner or at flush, means it happens
 // exactly once and before the value becomes engine state, so recomputeWinner,
-// buildReport, buildCandidate, and the published snapshot all agree on the
-// same decoded bytes.
+// buildCandidate, and the published snapshot all agree on the same decoded
+// bytes. (buildReport is unaffected either way: it reads only Version, never
+// the bytes - and Version is exactly what applyDecode leaves untouched.)
 func (e *engine[T]) recordSourceUpdate(specIdx, pos int, up Update, sensitive bool) {
 	st := &e.sources[specIdx][pos]
 	st.seen = true
@@ -788,14 +789,29 @@ func (e *engine[T]) recomputeWinner(specIdx int) (val Value, pos int, err error)
 // Calling Resolve directly does mean this bypasses resolveRef's ?decode=
 // handling, so it applies the pipeline itself - it is a fourth place a Value
 // becomes state that can reach the application, alongside resolveRef,
-// resolveBatchScheme, and recordSourceUpdate. Skipping it here would not be merely
-// cosmetic: if the source value changes between Watch's initial Load and this
-// seed (a rotation racing startup), the seeded state carries the RAW bytes
-// under the NEW version. Any other position's first update then triggers a
-// recompute that publishes those raw bytes, and when the winning position's
-// own watch baseline arrives - same new version, correctly decoded -
-// markChanged discards it as unchanged, leaving the field permanently
-// corrupted rather than transiently so.
+// resolveBatchScheme, and recordSourceUpdate. Skipping it here would not be
+// merely cosmetic, and it goes wrong in two different ways depending on
+// whether the winning position's provider supplies a Version:
+//
+//   - Version-less provider (Value.changed falls back to comparing bytes):
+//     the seeded RAW bytes differ from the decoded bytes Load just stored, so
+//     no rotation is needed at all. Any other position reporting in first at
+//     startup triggers a recompute that publishes the raw bytes, and the
+//     application sees a Change carrying an undecoded value. It heals when the
+//     winning position's own watch baseline arrives (raw vs decoded bytes
+//     differ again), so this one is a startup flap - but a flap the
+//     application has already been handed and may have acted on.
+//
+//   - Versioned provider: it takes a rotation landing between Watch's initial
+//     Load and this seed. The seeded state then carries the RAW bytes under
+//     the NEW version, another position's first update publishes them, and the
+//     winning position's own baseline - same new version, correctly decoded -
+//     is discarded by markChanged as unchanged. This is the worse case,
+//     because nothing corrects it until the next revision change at that
+//     position. On a 90-day rotation schedule that is a quarter of serving
+//     undecoded bytes. It is not permanent - the following rotation produces a
+//     version the stale raw value does not match, and the field heals - but
+//     "eventually, at the next rotation" is not a recovery story worth having.
 func (e *engine[T]) seedChainSources(ctx context.Context, spec fieldSpec) []srcState {
 	st := make([]srcState, len(spec.Refs))
 	for i, ref := range spec.Refs {

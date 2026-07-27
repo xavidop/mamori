@@ -18,13 +18,25 @@ import (
 // those entry points, so wiring any single site while missing another leaves a
 // red test rather than a silent production bug.
 //
-// The tests live in package mamori (not mamori_test) for two reasons: the
+// The tests live in package mamori (not mamori_test), which forces the use of
+// the watchProvider fake from watch_test.go rather than mamoritest.Provider.
+// The dispositive reason is a hard constraint, not a preference: the
 // chain-seeding entry point is only reachable through the unexported
-// engine.seedChainSources, and the watchProvider fake from watch_test.go can
-// seed a value silently (set) and push an update separately (push), which is
-// what makes "decoded on load but not on update" observable at all. A
-// mamoritest.Provider always publishes a baseline on subscribe, so a missing
-// decode on the update path would be masked by the baseline replay.
+// engine.seedChainSources, so the file must be in package mamori, and
+// mamoritest imports mamori, so importing it here would be an import cycle.
+//
+// Being able to set a value silently (set) and push an update separately
+// (push), with explicit control of each Value's Version, is a genuine
+// secondary benefit - it is what lets the tests below state exactly which
+// revision each assertion is about. It is NOT, however, required to catch the
+// core bug: a mamoritest.Provider would catch it too. Its baseline-on-subscribe
+// replays the stored bytes under VersionHash of those same bytes, which equals
+// the Version the decoded Load value already carries (applyDecode preserves
+// Version), so markChanged drops the raw baseline as unchanged and the first
+// real Set still surfaces the undecoded bytes. Verified by running exactly
+// that test with the decode removed from recordSourceUpdate: it fails on
+// A = "c2Vjb25k". Recorded here because an earlier version of this comment
+// claimed the opposite.
 
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
@@ -223,6 +235,56 @@ func TestDecodeFailureOnBatchResolveFailsLoad(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInvalid) {
 		t.Errorf("err = %v, want one wrapping ErrInvalid", err)
+	}
+}
+
+// TestDecodeFailureOnBatchResolveHonorsOnFail pins that the batch path applies
+// the field's onfail policy to a decode failure exactly as the non-batch path
+// does. Whether a scheme's provider happens to implement BatchProvider is an
+// implementation detail the user did not choose and cannot see from the struct
+// tag, so it must not decide whether onfail:"default" is honored or ignored.
+func TestDecodeFailureOnBatchResolveHonorsOnFail(t *testing.T) {
+	type cfg struct {
+		A string `source:"decbo://a?decode=base64" default:"fallback" onfail:"default"`
+	}
+	p := &batchDecodeProvider{scheme: "decbo", data: map[string]string{"a": "!!! not base64 !!!"}}
+
+	got, err := Load[cfg](context.Background(), WithProvider(p))
+	if err != nil {
+		t.Fatalf("Load: %v (onfail:\"default\" must absorb a decode failure on the batch path, as it does on the non-batch path)", err)
+	}
+	if got.A != "fallback" {
+		t.Errorf("A = %q, want fallback", got.A)
+	}
+}
+
+// TestDecodeFailureOnFailAgreesAcrossBatchAndSingleResolve is the equivalence
+// this task's batch wiring has to preserve: the same struct tag and the same
+// undecodable payload must produce the same outcome whether the scheme's
+// provider implements BatchProvider or only Resolve.
+func TestDecodeFailureOnFailAgreesAcrossBatchAndSingleResolve(t *testing.T) {
+	type batchCfg struct {
+		A string `source:"decbe://a?decode=base64" default:"fallback" onfail:"default"`
+	}
+	type singleCfg struct {
+		A string `source:"decse://a?decode=base64" default:"fallback" onfail:"default"`
+	}
+
+	batched := &batchDecodeProvider{scheme: "decbe", data: map[string]string{"a": "!!! not base64 !!!"}}
+	single := newWatchProvider("decse")
+	single.set("a", "!!! not base64 !!!", "v1")
+
+	gotBatch, batchErr := Load[batchCfg](context.Background(), WithProvider(batched))
+	gotSingle, singleErr := Load[singleCfg](context.Background(), WithProvider(single))
+
+	if (batchErr == nil) != (singleErr == nil) {
+		t.Fatalf("batch err = %v but single-resolve err = %v; the two paths must agree on whether onfail applies", batchErr, singleErr)
+	}
+	if batchErr != nil {
+		t.Fatalf("both paths failed: %v", batchErr)
+	}
+	if gotBatch.A != gotSingle.A {
+		t.Errorf("batch A = %q but single-resolve A = %q; the two paths must agree", gotBatch.A, gotSingle.A)
 	}
 }
 

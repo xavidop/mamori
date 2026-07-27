@@ -218,11 +218,25 @@ func applyOnFail(r *resolved, terminal error) error {
 // because the batch groups by scheme only - two fields of the same scheme can
 // declare completely different codings, or none.
 //
-// A decode failure fails the whole Load rather than defaulting the field:
-// resolveAll is fail-fast on any non-not-found error, and a wrongly declared
-// encoding is a configuration bug, not an absent value. Note this deliberately
-// does not consult applyDefault - only a genuinely missing key (the !ok branch
-// above it) does.
+// A decode failure is routed through applyOnFail, exactly as resolveOne routes
+// the terminal error of a non-batch resolve. Whether a scheme's provider
+// happens to implement BatchProvider is an implementation detail the operator
+// did not choose and cannot see from the struct tag, so it must not decide
+// whether the field's `onfail` policy is honored: without this, a field tagged
+// onfail:"default" would fall back to its default on a provider that only
+// implements Resolve and fail the whole Load on one that also implements
+// ResolveBatch, for the same tag and the same undecodable payload.
+//
+// applyOnFail, not applyDefault, is the right counterpart here. The two are
+// not interchangeable: applyDefault applies `default:` on genuine absence,
+// which is the !ok branch above, while applyOnFail applies `default:` to an
+// error only when the field explicitly opted in with onfail:"default". A
+// decode failure is an error, not an absence, so a bare `default:` tag must
+// not silently absorb it - that is the same footgun applyOnFail's own doc
+// comment exists to prevent. With the default onFailKeepLast (or
+// onfail:"fail") applyOnFail returns the error unchanged and the Load still
+// fails fast, which is the previous behavior for every field that did not opt
+// in.
 func resolveBatchScheme(ctx context.Context, bp BatchProvider, scheme string, idxs []int, out []resolved, o *options) error {
 	refs := make([]Ref, 0, len(idxs))
 	for _, i := range idxs {
@@ -245,7 +259,11 @@ func resolveBatchScheme(ctx context.Context, bp BatchProvider, scheme string, id
 		}
 		dec, derr := applyDecode(r.spec.Refs[0], val)
 		if derr != nil {
-			return &ProviderError{Scheme: scheme, Ref: redactRef(r.spec.Refs[0]), Err: derr}
+			pe := &ProviderError{Scheme: scheme, Ref: redactRef(r.spec.Refs[0]), Err: derr}
+			if err := applyOnFail(r, pe); err != nil {
+				return err
+			}
+			continue
 		}
 		setResolved(r, dec)
 	}

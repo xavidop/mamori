@@ -34,11 +34,16 @@ type decodeStep struct {
 // rejecting a secret over an invisible byte is a miserable failure to debug.
 //
 // gzip must NOT be trimmed, because its payload is binary: a valid gzip stream
-// can legitimately begin or end with bytes whose numeric values are ASCII
-// whitespace (the 4-byte CRC32 and 4-byte ISIZE trailer are raw little-endian
-// integers, so a trailer ending in 0x0a, 0x0d, 0x09, or 0x20 is entirely
-// ordinary). Trimming those would silently corrupt a valid stream into a CRC
-// or length mismatch. Please do not "fix" the inconsistency by trimming here.
+// can legitimately END with bytes whose numeric values are ASCII whitespace.
+// The 4-byte CRC32 and 4-byte ISIZE trailer are raw little-endian integers, so
+// a trailer ending in 0x0a, 0x0d, 0x09, or 0x20 is entirely ordinary, and
+// trimming it would silently corrupt a valid stream into a CRC or length
+// mismatch. (The leading bytes are not at risk - a gzip stream always starts
+// with the magic 0x1f 0x8b - but the trailing case alone settles it.)
+//
+// Please do not "fix" the inconsistency by trimming here. A genuinely
+// whitespace-padded gzip payload already has an explicit escape hatch that
+// does not put every other gzip value at risk: ?decode=trim,gzip.
 var decodeCodings = map[string]func([]byte) ([]byte, error){
 	"base64":    func(b []byte) ([]byte, error) { return base64.StdEncoding.DecodeString(string(bytes.TrimSpace(b))) },
 	"base64url": func(b []byte) ([]byte, error) { return base64.URLEncoding.DecodeString(string(bytes.TrimSpace(b))) },
@@ -70,6 +75,13 @@ var decodeCodings = map[string]func([]byte) ([]byte, error){
 // of a longer secret would be worse than failing: a silently truncated key or
 // certificate fails later, somewhere else, in a way that looks like anything
 // but a decode problem.
+//
+// The cap is deliberately a constant with no Option to override it, so a
+// legitimate payload above it - realistically only from an unbounded local
+// source like file: or exec: - has no escape hatch short of not declaring
+// ?decode=gzip and gunzipping in application code. That is the accepted cost
+// of not growing the public API for a case no supported backend can even
+// produce; raising the constant is the intended response if one ever appears.
 const maxGzipDecoded = 16 << 20 // 16 MiB
 
 func gunzip(b []byte) ([]byte, error) {
