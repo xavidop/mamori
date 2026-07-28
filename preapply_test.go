@@ -3,8 +3,11 @@ package mamori
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 func TestPreApplyOptionStoresTypedFunc(t *testing.T) {
@@ -42,5 +45,430 @@ func TestPreApplyErrorWrapsAndReports(t *testing.T) {
 	var pe *PreApplyError
 	if !errors.As(error(err), &pe) {
 		t.Error("errors.As must reach *PreApplyError")
+	}
+}
+
+// TestPreApplyRejectionKeepsLastGood pins the core contract: a rejected
+// candidate leaves Get, OnChange, and the served config exactly as they were.
+func TestPreApplyRejectionKeepsLastGood(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pa://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("pa")
+	p.set("a", "first", "v1")
+
+	changed := make(chan cfg, 4)
+	errs := make(chan error, 4)
+	reject := errors.New("credential does not work")
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if ev.New.A == "second" {
+				return reject
+			}
+			return nil
+		}),
+		OnChange(func(ev Change[cfg]) { changed <- ev.New }),
+		OnError(func(e error) { errs <- e }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	p.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	select {
+	case e := <-errs:
+		if !errors.Is(e, reject) {
+			t.Errorf("error = %v, want one wrapping the hook's error", e)
+		}
+		var pe *PreApplyError
+		if !errors.As(e, &pe) {
+			t.Errorf("error = %v, want a *PreApplyError", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no error delivered for a rejected candidate")
+	}
+	select {
+	case ev := <-changed:
+		t.Fatalf("OnChange fired for a rejected candidate: %+v", ev)
+	default:
+	}
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q, want first (last good must survive a rejection)", got)
+	}
+}
+
+// TestPreApplyRejectionIsRetriedOnNextChange is the regression test for the
+// e.applied rollback. buildCandidate advances e.applied as a side effect, so a
+// rejection that does not roll it back leaves every rejected field looking
+// already-applied: the next flush computes an empty diff and the value is
+// never retried, with Get silently serving stale config forever.
+//
+// Here the hook rejects "bad" and accepts anything else. Recovery to "good"
+// alone does NOT pin the rollback: without it the engine has already recorded
+// v2 as applied, so v3's diff still computes and the recovery happens anyway.
+// What separates the two worlds is the OldVersion the recovery's own diff
+// carries. It is the engine reporting, in the only place e.applied is
+// observable from outside, which version it believes it last applied: v1 when
+// the rejected v2 was rolled back, v2 when it was left advanced - the exact
+// wrong belief that strands a value that arrives without a further version
+// bump behind it.
+func TestPreApplyRejectionIsRetriedOnNextChange(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pr://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("pr")
+	p.set("a", "first", "v1")
+
+	changed := make(chan Change[cfg], 4)
+	errs := make(chan error, 4)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if ev.New.A == "bad" {
+				return errors.New("rejected")
+			}
+			return nil
+		}),
+		OnChange(func(ev Change[cfg]) { changed <- ev }),
+		OnError(func(e error) { errs <- e }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	p.push("a", "bad", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	select {
+	case <-errs:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no rejection for the bad value")
+	}
+
+	// The rejected version must not be recorded as applied: a good value now
+	// has to be applied, and its diff has to start from the last version that
+	// really was applied.
+	p.push("a", "good", "v3")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	select {
+	case got := <-changed:
+		if got.New.A != "good" {
+			t.Errorf("after recovery A = %q, want good", got.New.A)
+		}
+		if len(got.Fields) != 1 {
+			t.Fatalf("recovery Fields = %+v, want exactly one entry for A", got.Fields)
+		}
+		if got.Fields[0].OldVersion != "v1" {
+			t.Errorf("recovery OldVersion = %q, want v1: the rejected v2 was never applied, "+
+				"so leaving e.applied advanced past it is exactly the staleness bug",
+				got.Fields[0].OldVersion)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine did not recover after a rejection")
+	}
+	if got := w.Get().A; got != "good" {
+		t.Errorf("Get().A = %q, want good", got)
+	}
+	select {
+	case e := <-errs:
+		t.Errorf("second error after a clean recovery: %v", e)
+	default:
+	}
+}
+
+// TestPreApplyRejectedValueIsStillGatedOnALaterFlush is the other half of the
+// rollback, and the one with teeth: a rejected value is NOT withdrawn from
+// e.observed, so it stays in every candidate built afterwards. Leaving
+// e.applied advanced hides it from the very next diff, and a hook written the
+// way PreApply's own documentation recommends - verify only what Changed -
+// then waves the whole candidate through on some unrelated field's flush. The
+// rejected credential reaches Get without anything ever having verified it,
+// which is worse than the staleness the rollback's other half prevents.
+func TestPreApplyRejectedValueIsStillGatedOnALaterFlush(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"px://a"`
+		B string `source:"px://b"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("px")
+	p.set("a", "first", "a1")
+	p.set("b", "first", "b1")
+
+	changed := make(chan Change[cfg], 4)
+	errs := make(chan error, 4)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if !ev.Changed("A") {
+				return nil // the documented "only check what actually rotated" shape
+			}
+			if ev.New.A == "bad" {
+				return errors.New("credential does not work")
+			}
+			return nil
+		}),
+		OnChange(func(ev Change[cfg]) { changed <- ev }),
+		OnError(func(e error) { errs <- e }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	p.push("a", "bad", "a2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	select {
+	case <-errs:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no rejection for the bad value")
+	}
+
+	// An unrelated field changes. A is still "bad" and still unverified, so
+	// this candidate must still be refused - which only happens if A is still
+	// in the diff the hook is handed.
+	p.push("b", "second", "b2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	select {
+	case <-errs:
+	case ev := <-changed:
+		t.Fatalf("an unrelated field's flush applied the still-rejected A=%q; "+
+			"the gate never saw it because Fields = %+v", ev.New.A, ev.Fields)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no rejection for the candidate still carrying the bad value")
+	}
+	if got := w.Get(); got.A != "first" || got.B != "first" {
+		t.Errorf("Get() = %+v, want both fields at their last good values", got)
+	}
+
+	// A recovers. B's change was held back by the rejection, not lost, so the
+	// single Change that lands now must carry both fields.
+	p.push("a", "good", "a3")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	select {
+	case ev := <-changed:
+		if ev.New.A != "good" || ev.New.B != "second" {
+			t.Errorf("recovered config = %+v, want A=good B=second", ev.New)
+		}
+		if !ev.Changed("A") || !ev.Changed("B") {
+			t.Errorf("recovery Fields = %+v, want both A and B: B's held-back change must "+
+				"not be stranded by A's rejection", ev.Fields)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine did not recover after a rejection")
+	}
+}
+
+// TestPreApplyRollsBackAppliedVersions asserts the rollback directly against
+// engine state, since the behavioral test above cannot distinguish "rolled
+// back" from "the next diff happened to compute anyway".
+func TestPreApplyRollsBackAppliedVersions(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pb://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("pb")
+	p.set("a", "first", "v1")
+
+	errs := make(chan error, 4)
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if ev.New.A == "second" {
+				return errors.New("no")
+			}
+			return nil
+		}),
+		OnError(func(e error) { errs <- e }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	p.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	select {
+	case <-errs:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no rejection")
+	}
+
+	// Status reports the field's observed version, and the snapshot version
+	// must NOT have advanced past the last applied one.
+	rep := w.Status()
+	if rep.Snapshot != 1 {
+		t.Errorf("Snapshot = %d, want 1 (a rejected candidate must not advance the served snapshot)", rep.Snapshot)
+	}
+	if rep.Live != 1 {
+		t.Errorf("Live = %d, want 1 (a rejected candidate is not a reconciled snapshot at all)", rep.Live)
+	}
+}
+
+// TestPreApplyGatesWhilePinned pins where the gate sits relative to flush's
+// pinned branch. A pin freezes what Get returns; it does not stop the engine
+// reconciling and advancing Live, and Unpin then applies the newest such
+// snapshot wholesale, gating nothing itself. A gate that ran only on the
+// unpinned branch would make Unpin the one path able to publish a candidate
+// nothing ever verified - which is exactly the failure a rotation gate exists
+// to prevent, arriving at the least expected moment.
+func TestPreApplyGatesWhilePinned(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pp://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("pp")
+	p.set("a", "first", "v1")
+
+	changed := make(chan Change[cfg], 4)
+	errs := make(chan error, 4)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if ev.New.A == "bad" {
+				return errors.New("credential does not work")
+			}
+			return nil
+		}),
+		OnChange(func(ev Change[cfg]) { changed <- ev }),
+		OnError(func(e error) { errs <- e }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	w.PinCurrent()
+
+	p.push("a", "bad", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	select {
+	case <-errs:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a pinned watcher still reconciles, so it must still gate what it reconciles")
+	}
+	if rep := w.Status(); rep.Live != 1 {
+		t.Errorf("Live = %d, want 1: a refused candidate is not a reconciled snapshot, pinned or not", rep.Live)
+	}
+
+	w.Unpin()
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q after Unpin, want first: Unpin must never publish a candidate the gate refused", got)
+	}
+	select {
+	case ev := <-changed:
+		t.Fatalf("Unpin emitted a Change for a refused candidate: %+v", ev.Fields)
+	default:
+	}
+}
+
+// TestPreApplyTimeoutIsARejection pins decision D4.
+func TestPreApplyTimeoutIsARejection(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pt://a"`
+	}
+	p := newWatchProvider("pt")
+	p.set("a", "first", "v1")
+
+	release := make(chan struct{})
+	errs := make(chan error, 4)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p),
+		WithPreApplyTimeout(50*time.Millisecond),
+		PreApply(func(ctx context.Context, ev Change[cfg]) error {
+			if ev.New.A != "second" {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+				return nil
+			}
+		}),
+		OnError(func(e error) { errs <- e }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { close(release); _ = w.Close() }()
+
+	p.push("a", "second", "v2")
+
+	select {
+	case e := <-errs:
+		if !errors.Is(e, context.DeadlineExceeded) {
+			t.Errorf("error = %v, want one wrapping context.DeadlineExceeded", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hook that never returns must be rejected on timeout, not awaited")
+	}
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q, want first (a timed-out hook must not apply)", got)
+	}
+}
+
+// TestPreApplyNotCalledWhenNothingChanged guards against spending a network
+// round trip on every poll tick.
+func TestPreApplyNotCalledWhenNothingChanged(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pn://a"`
+	}
+	p := newWatchProvider("pn")
+	p.set("a", "only", "v1")
+
+	var calls atomic.Int32
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(context.Context, Change[cfg]) error {
+			calls.Add(1)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	// Re-push the identical version: buildCandidate computes an empty diff and
+	// must not reach the gate at all.
+	before := calls.Load()
+	p.push("a", "only", "v1")
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != before {
+		t.Errorf("hook called %d extra times for an unchanged value, want 0", got-before)
 	}
 }
