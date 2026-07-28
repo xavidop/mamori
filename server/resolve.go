@@ -372,7 +372,7 @@ func (s *Server) readiness() (state string, ready bool) {
 
 // Close shuts this Server down completely: every listener Serve bound
 // (transport.go's closeTransports - gracefully, bounded by shutdownGrace,
-// unlinking any Unix socket file afterward), then every binding's upstream
+// unlinking any Unix socket file first), then every binding's upstream
 // watch (cancel, then wg.Wait, mirroring Watcher.Close in reconciler.go).
 // Transports are torn down first so that no HTTP handler goroutine can still
 // be calling lookup (resolve.go) while the resolver goroutines it reads from
