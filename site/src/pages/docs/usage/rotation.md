@@ -75,9 +75,9 @@ Exceeding the budget is a **rejection, not an acceptance**. On timeout, mamori d
 
 ## Do not call back into the same Watcher
 
-The hook runs on the reconciler goroutine, which is what lets it block the swap in the first place. That has one consequence you have to design around: `Get()` is a lock-free atomic load, so it is safe to call from inside the hook, but `Pin`, `PinCurrent`, and `Unpin` are commands sent to, and serviced by, that very same goroutine. Calling one of them from inside a `PreApply` hook asks for a reply that only the goroutine it is currently occupying could ever send.
+The hook runs on the reconciler goroutine, which is what lets it block the swap in the first place. That has one consequence you have to design around: `Get()` is a lock-free atomic load, so it is safe to call from inside the hook, but `Pin`, `PinCurrent`, `Unpin`, and `Refresh` are commands sent to, and serviced by, that very same goroutine. Calling one of them from inside a `PreApply` hook asks for a reply that only the goroutine it is currently occupying could ever send.
 
-`WithPreApplyTimeout` does not rescue this. The timeout only cancels the `ctx` handed to the hook; `Pin`, `PinCurrent`, and `Unpin` take no `ctx` at all, so there is nothing for the timeout to cancel on their side.
+`WithPreApplyTimeout` does not rescue this. The timeout only cancels the `ctx` handed to the hook; `Pin`, `PinCurrent`, and `Unpin` take no `ctx` at all, and `Refresh` takes the *caller's* `ctx`, not the hook's, so there is nothing on any of their sides for the hook's timeout to cancel.
 
 **mamori detects this and fails the call instead.** Until it did, a hook stuck this way wedged the whole watcher permanently, not just its own check: no reconciliation, no `OnChange`, no `OnError`, nothing until something outside the hook cancelled the watcher (`w.Close()`, or the parent context passed to `Watch`). Now the call returns immediately, changes no pin state, and the hook carries on:
 
@@ -87,6 +87,7 @@ The hook runs on the reconciler goroutine, which is what lets it block the swap 
 | `Pin(v)` | Returns `ErrReentrantCall`. Nothing is pinned. |
 | `PinCurrent()` | Returns `0`. Versions start at 1, so `0` never collides with a real one. Nothing is pinned. |
 | `Unpin()` | Does nothing. Its signature has no error to return, so it leaves the watcher pinned and `Pinned()` still reports so. |
+| `Refresh(ctx)` | Returns `ErrReentrantCall`. Nothing is re-resolved, no matter what `ctx` is - see [Forcing an immediate refresh](#forcing-an-immediate-refresh) below. |
 
 ```go
 mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
@@ -134,10 +135,53 @@ State the cost as plainly as the benefit: a retained snapshot holds a full copy 
 
 ## Forcing an immediate refresh
 
-A way to force mamori to re-resolve right now, ahead of the next poll, is not available yet in this release.
+```go
+func (w *Watcher[T]) Refresh(ctx context.Context) error
+```
+
+`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals and per-ref backoff, and **blocks until the resulting snapshot has been applied or rejected**. That block is deliberate, not something to route around: a SIGHUP handler wants to know whether the reload it just triggered actually worked, not merely that a request for one was queued.
+
+```go
+sighup := make(chan os.Signal, 1)
+signal.Notify(sighup, syscall.SIGHUP)
+
+for range sighup {
+	if err := w.Refresh(ctx); err != nil {
+		log.Printf("reload rejected, still serving the previous config: %v", err)
+		continue
+	}
+	log.Println("reload applied")
+}
+```
+
+`Refresh` returns `nil` in the two cases that both mean "`Get()` is current": a snapshot was applied, or nothing had actually changed. It returns the rejection reason in every other case:
+
+- a field failed validation,
+- `PreApply` rejected the candidate - a `*PreApplyError`, exactly as in [What a rejection does](#what-a-rejection-does) above,
+- or a field is blocked by `onfail:"fail"` and stayed blocked.
+
+**`Refresh` does not bypass `PreApply`.** A forced refresh is gated exactly like any other reconciliation. Skipping the gate on the one call an operator reaches for right after a rotation - the moment a gate matters most - would defeat the point of having it.
+
+`ctx` bounds the wait, not the work. Cancelling it makes `Refresh` return `ctx.Err()` and stop waiting, but the command already handed to the reconciler still re-resolves and applies (or is rejected) as usual - there is no way to recall it, and no half-applied snapshot either way. Called after `Close`, `Refresh` returns the same closed-watcher error `Pin` does.
+
+While the watcher is pinned, a refresh still re-resolves, still runs the `PreApply` gate, and still advances `Live` and history - it just does not move `Get()`, which is what the pin is for. It returns `nil` in that case too: the candidate was applied as far as the pin allows, and `Unpin` will publish it. `Refresh` never silently unpins for you.
+
+### The reentrancy hazard applies to `Refresh` too
+
+`Refresh` is serviced by the reconciler goroutine - the same one a `PreApply` hook occupies for the duration of its call. Calling `w.Refresh` from inside your own hook would ask that goroutine to service a command while it is busy being the hook, so it is refused rather than left to hang, exactly like `Pin`, `PinCurrent`, and `Unpin`: it returns `ErrReentrantCall` immediately, having re-resolved nothing. Giving it its own `ctx` does not rescue it - `Refresh(context.Background())`, the obvious thing to reach for, would simply block until `Close`, since nothing else would ever free the goroutine it is waiting on.
+
+### What running it actually costs
+
+`Refresh` runs *on* the reconciler goroutine, not merely through it. For however long the walk over every field takes, `Pin`/`Unpin` go unserviced, watch updates back up on their channel, the debounce timer cannot be observed firing, and no new `Report` is published. That is the honest cost of a synchronous, whole-config re-resolve, which is why `Refresh` is for an operator-triggered reload - a SIGHUP, an admin action - not something to call in a hot path or a loop.
+
+Its round trips also bypass the same resolve path a watch-delivered update goes through, so they are invisible to a configured [`WithTracer`](/docs/opentelemetry/) span and [`WithMeter`](/docs/opentelemetry/) resolve metric, and they skip `BatchProvider` grouping - a scheme that normally batches several fields into one round trip pays one round trip per field here instead. That cost is inherited from the same per-chain seeding walk `Watch` already runs once at startup; `Refresh` simply runs it for every field, on demand, which is the whole point of a forced refresh.
+
+For a field resolved through a `mamori://` ref, `Refresh` re-reads the [config server's](/docs/server/) current value - it does not reach past the server to force its upstream to re-resolve. See [Config server](/docs/server/#refresh-re-reads-the-server-not-the-upstream) for why that boundary exists and what is planned for it. If you want an HTTP-triggered refresh instead of a SIGHUP, there is also no route for one on the [admin endpoint](/docs/observability/admin/#no-post-refresh) - a different, simpler reason: that surface is deliberately read-only. Mount your own handler there instead.
 
 ## See also
 
 - [Watch for changes](/docs/usage/watching/) for `Watch`, `Get`, `OnChange`, and `OnError`.
 - [Snapshots and pinning](/docs/usage/snapshots/) for `WithHistory`, `History`, and pinning.
 - [Loading and watching](/docs/usage/) for the option walkthrough.
+- [Admin endpoint](/docs/observability/admin/) for why there is no `POST /refresh` there, and how to mount your own authorized one.
+- [Config server](/docs/server/) for what `Refresh` means, and does not mean, for a `mamori://`-resolved field.

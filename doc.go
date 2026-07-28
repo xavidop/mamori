@@ -66,6 +66,11 @@
 // same gate runs on the initial load too, so a bad configured credential fails
 // at startup rather than at the first rotation.
 //
+// [Watcher.Refresh] forces an immediate re-resolve of every field, bypassing
+// poll intervals and backoff, and blocks until the resulting snapshot has been
+// applied or rejected - through the same [PreApply] gate, never around it - so
+// a SIGHUP handler knows whether the reload it triggered actually worked.
+//
 // # Providers
 //
 // Sources are pluggable via the Provider SPI and registered with [Register]

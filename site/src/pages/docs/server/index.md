@@ -92,6 +92,14 @@ curl --unix-socket /run/mamori/server.sock \
   http://unix/v1/values/db-password
 ```
 
+## Refresh re-reads the server, not the upstream
+
+A client watching a `mamori://`-resolved field can call `w.Refresh(ctx)` on its own `Watcher` at any time (see [Rotation safety](/docs/usage/rotation/#forcing-an-immediate-refresh)). For that field, `Refresh` re-reads whatever value this server currently holds - a fresh round trip over `mamori://`, past any client-side cache - which is genuinely useful right after a dropped stream. **It does not reach past this server to make it re-resolve its own upstream.** The server already watches its upstream continuously, on its own schedule, regardless of any client's `Refresh`; a client re-reading it is just another read of a value that is already as fresh as that watch keeps it.
+
+Upstream propagation - a client's `Refresh` forcing this server to go fetch a fresh value from Vault, AWS, or GCP right now, ahead of its own watch - is a real, wanted feature, not a rejected one. It is planned, here in the config server rather than on the [admin endpoint](/docs/observability/admin/#no-post-refresh), and it will be **`Policy`-gated** when it ships: available to callers a policy explicitly grants it to, not to every caller merely authorized to read a binding's value. It has its own spec still to come; there is no route, verb, or `Policy` surface for it today.
+
+The gate has to exist because of what this server is *for*. Its entire value proposition, stated at the top of this page, is that N consumers cost one upstream watch rather than N. An ungated client-triggered upstream refresh inverts exactly that: N clients across M bindings would turn into N×M on-demand calls against backends that are typically rate-limited and billed per call - and every one of those N callers would need nothing more than the read authorization it already has to trigger all of them. Gating this behind `Policy`, once it ships, is what keeps "may read a binding's value" and "may force an upstream round trip on every reader's behalf" from collapsing into the same permission.
+
 ## Blast radius
 
 **A config server is deliberately the highest-blast-radius piece of mamori.** A single `Load` or `Watch` caller holds only the credentials it was given; a config server, by design, concentrates every backend credential its bindings touch into one process, reachable by every consumer it serves. Compromising it is strictly worse than compromising any one consumer.
@@ -116,4 +124,4 @@ These mitigations narrow how the concentration can be abused, not the concentrat
 
 ## See also
 
-[Auth](/docs/auth/) covers every shipped `Authenticator`, including `PeerCred`. [Providers: mamori](/docs/providers/mamori/) is the `mamori://` client that resolves bindings against this server. [Security](/docs/security/) covers the blast-radius point in the context of both HTTP surfaces. [Observability](/docs/observability/) covers `WithAdminHTTP`, the metadata-only sibling that answers "is my config healthy" rather than "give me a value."
+[Auth](/docs/auth/) covers every shipped `Authenticator`, including `PeerCred`. [Providers: mamori](/docs/providers/mamori/) is the `mamori://` client that resolves bindings against this server. [Security](/docs/security/) covers the blast-radius point in the context of both HTTP surfaces. [Observability](/docs/observability/) covers `WithAdminHTTP`, the metadata-only sibling that answers "is my config healthy" rather than "give me a value." [Rotation safety](/docs/usage/rotation/) covers `w.Refresh` itself, including what it means for a field resolved through this server.

@@ -115,8 +115,26 @@ mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
 
 Rules to hold onto:
 - `WithPreApplyTimeout` bounds the hook, defaulting to 10s. It cannot be disabled, and exceeding it is a **rejection**, not an acceptance - mamori does not know the candidate works, so it does not apply it.
-- The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, and `w.Unpin` are commands serviced by that same goroutine, and the timeout does not rescue them, since it only cancels the hook's `ctx`, which those methods do not take. Never call back into the same `Watcher` from a `PreApply` hook. mamori detects it if you do, and refuses the call rather than hanging: `Pin` returns `ErrReentrantCall`, `PinCurrent` returns `0` (versions start at 1), and `Unpin` does nothing and leaves the watcher pinned. Calls from any other goroutine are unaffected.
+- The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, `w.Unpin`, and `w.Refresh` are commands serviced by that same goroutine, and the timeout does not rescue them - `Pin`/`PinCurrent`/`Unpin` take no `ctx` at all, and `Refresh` takes the caller's `ctx`, not the hook's. Never call back into the same `Watcher` from a `PreApply` hook. mamori detects it if you do, and refuses the call rather than hanging: `Pin` and `Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0` (versions start at 1), and `Unpin` does nothing and leaves the watcher pinned. Calls from any other goroutine are unaffected.
 - A hook typed for a different config than the one passed to `Watch[T]`/`Load[T]` fails `Watch` and `Load` outright (an error wrapping `ErrInvalid`), rather than silently leaving the gate open.
+
+## Force an immediate refresh
+
+`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals and per-ref backoff, and **blocks until the result is applied or rejected** - which is the point: a SIGHUP handler wants to know whether the reload it triggered actually worked, not just that it was requested.
+
+```go
+for range sighupCh {
+	if err := w.Refresh(ctx); err != nil {
+		log.Printf("reload rejected: %v", err) // validation, PreApply, or onfail:"fail"
+	}
+}
+```
+
+- It returns `nil` when a snapshot was applied *and* when nothing had changed; both mean `Get()` is current.
+- It still runs `PreApply` - a forced refresh is gated exactly like any other one, never bypassed.
+- Cancelling `ctx` stops the wait and returns `ctx.Err()`, but the reconciler still finishes re-resolving and applying (or rejecting) what it already started; there is no half-applied snapshot.
+- It runs on the reconciler goroutine, so for its duration `Pin`/`Unpin` wait, watch updates queue up, and no new `Report` is published - reach for it from an operator trigger (SIGHUP, an authorized admin route), not a hot path.
+- For a `mamori://` field, `Refresh` re-reads the config server's current value; it does not force that server to re-fetch its own upstream (see the [config server docs](https://mamorigo.dev/docs/server) for why that stays gated).
 
 ## Choosing a provider
 

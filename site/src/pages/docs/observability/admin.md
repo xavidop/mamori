@@ -46,6 +46,28 @@ mux.Handle("/admin/", mamori.Handler(w, mamori.HandlerPrefix("/admin")))
 
 `HandlerMiddleware` wraps the handler with a non-authentication concern such as request logging. It runs outside `HandlerPrefix`'s stripping and outside any `WithAuth` check, in the order the options are given. Authentication itself, `WithAuth` and the shipped schemes, is covered on the [Auth](/docs/auth/) page.
 
+## No `POST /refresh`
+
+There is no route here that triggers a reload, and there will not be one. `GET /` and `GET /healthz` are the whole surface - every other path and method is `404` - and both only ever read `w.Status()`, never write anything. That is a deliberate security property, not a missing feature: this endpoint exists to report on a watcher that already handles secret material, and a mutating route on it would let anyone who can merely *observe* that material also *trigger* a fresh resolve of it, on demand. Read access and reload access are different privileges, and this surface only ever grants the first.
+
+If you want an HTTP-triggered refresh, mount one yourself on the same `mux`, gated by whatever authorization you already trust for an administrative action - it does not have to be, and generally should not be, the same `Authenticator` guarding the read-only `Report` above:
+
+```go
+mux.HandleFunc("/refresh", func(rw http.ResponseWriter, r *http.Request) {
+	if !authorizedForReload(r) { // your own check, not mamori's
+		http.Error(rw, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := w.Refresh(r.Context()); err != nil {
+		http.Error(rw, err.Error(), http.StatusConflict)
+		return
+	}
+	rw.WriteHeader(http.StatusNoContent)
+})
+```
+
+`w.Refresh` itself - what it does, why it blocks, and what it returns - is covered in [Rotation safety](/docs/usage/rotation/#forcing-an-immediate-refresh).
+
 ## Run a standalone server with WithAdminHTTP
 
 ```go
@@ -96,5 +118,6 @@ An unauthenticated caller, such as a kubelet probe, always gets a bare status (`
 
 - [Observability overview](/docs/observability/) - `Status`, `Health`, and the `Report` shape.
 - [Doctor](/docs/observability/doctor/) - the pre-deploy counterpart to these live endpoints.
+- [Rotation safety](/docs/usage/rotation/) - `PreApply` and `w.Refresh`, which a hand-rolled `/refresh` route above would call.
 - [Config server](/docs/server/) - serves resolved config *values*, not metadata.
 - [Auth](/docs/auth/) - `WithAuth`, the shipped schemes, and credential rotation.
