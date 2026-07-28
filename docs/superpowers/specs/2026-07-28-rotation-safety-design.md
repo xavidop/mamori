@@ -50,10 +50,10 @@ interval.
   upstream change or poll produces a fresh candidate. Adding retry state to the
   reconciler is a separate design with its own timing questions.
 - **No mutating route on the admin endpoint.** See D5.
-- **No refresh verb in the config server's wire protocol**, and no upstream
-  propagation from a client's `Refresh`. See D8. Client-to-server re-fetch
-  already works and needs no change; client-to-upstream is deliberately
-  refused.
+- **No refresh verb in the config server's wire protocol in THIS spec.** See D8.
+  Client-to-server re-fetch already works and needs no change. Client-to-upstream
+  propagation is wanted and is coming, `Policy`-gated, in its own spec; it is
+  out of scope here, not refused.
 - **`PreApply` is not a second validator.** Struct validation stays where it is.
   `PreApply` exists for checks that need I/O, which is precisely why it needs a
   timeout and the `Validator` does not.
@@ -69,7 +69,7 @@ interval.
 | D5 | **No `POST /refresh` on the admin endpoint** | `Handler`'s doc comment states it serves exactly `GET /` and `GET /healthz`, that every other path and method is 404, and that there is no route which serves or changes configuration. That read-only property is a security feature of a surface which reports on secret material. A caller who wants a refresh endpoint can mount one on their own mux calling `w.Refresh`, with their own authorization. |
 | D6 | `Refresh` **blocks until the resulting candidate has been applied or rejected**, and returns the rejection reason | A `Refresh` that returned as soon as the request was queued would be untestable and useless in a SIGHUP handler, which wants to know whether the reload worked. |
 | D7 | `PreApply` runs on the **initial load** too, and a rejection fails `Watch` | `Watch` is already fail-fast on its initial `Load`. A hook that verifies a credential should verify the first one as well; discovering at startup that the configured credential does not work is strictly better than discovering it on the first rotation. |
-| D8 | A client's `Refresh` **re-fetches from the config server but does not propagate upstream**, and the wire protocol gains no refresh verb | Re-fetching already works with no change: `providers/mamori`'s `Resolve` does a fresh `GET` per call with no client-side cache, so `Refresh` on a `mamori://` field re-reads the server's current value. That is useful after a dropped stream and is safe, being just another read. Propagating upstream is the part to refuse. The server's entire value proposition is that N consumers cost one upstream watch rather than N; a client-triggered upstream refresh inverts it, turning N clients across M bindings into N*M on-demand calls against rate-limited, per-call-billed backends, triggerable by anyone merely authorized to read. It is also largely unnecessary, since the server already watches upstream continuously and its cache is as fresh as that watch. An operator-facing, `Policy`-gated server refresh is a defensible feature; it is a different feature, and belongs in its own spec. |
+| D8 | A client's `Refresh` **re-fetches from the config server. Upstream propagation is a real feature, deliberately deferred to its own spec, NOT refused.** This spec's scope ends at the client. | Re-fetching already works with no change: `providers/mamori`'s `Resolve` does a fresh `GET` per call with no client-side cache, so `Refresh` on a `mamori://` field re-reads the server's current value. That is useful after a dropped stream and is safe, being just another read. Propagating upstream is genuinely wanted (owner's call, 2026-07-28) but must be **`Policy`-gated rather than available to every reader**: the server exists so that N consumers cost one upstream watch rather than N, and an ungated client-triggered refresh inverts that, turning N clients across M bindings into N*M on-demand calls against rate-limited, per-call-billed backends. Authorization, not refusal, is the answer. It touches the wire protocol, the `Policy` surface, and the client, so it is its own spec and follows this one. |
 
 ## 5. Feature 1: `PreApply`
 
