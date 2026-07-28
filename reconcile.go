@@ -191,7 +191,25 @@ func WithMeter(m Meter) Option { return func(o *options) { o.meter = m } }
 // WithTracer installs a tracing sink (see the x/otel module for an OTel adapter).
 func WithTracer(t Tracer) Option { return func(o *options) { o.tracer = t } }
 
-// OnError installs a callback for runtime resolve/validation/stale errors.
+// OnError installs a callback for runtime resolve/validation/stale errors, and
+// for a candidate a PreApply gate rejected.
+//
+// Unlike OnChange, it runs INLINE on the reconciler goroutine rather than on the
+// dispatch queue: errors are delivered, never dropped, which the drop-oldest
+// queue OnChange uses could not promise. Two things follow, and both are the
+// caller's to design around:
+//
+// It blocks reconciliation for as long as it runs. Log, count, notify - do not
+// do I/O with no deadline here, and do not wait on something that is itself
+// waiting on this watcher.
+//
+// It must not call back into the same Watcher. Get is safe (it is a lock-free
+// atomic load), but Pin, PinCurrent, Unpin and Refresh are commands serviced by
+// the very goroutine this callback is occupying, so they would wait for
+// themselves. mamori detects that and refuses the call - see [ErrReentrantCall],
+// which spells out what each one returns. "The reload was rejected, retry it" is
+// the tempting thing to write here; issue it from another goroutine, or let the
+// next reconciliation do it.
 func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn } }
 
 // provider resolves the provider for a scheme, preferring explicit providers
@@ -278,10 +296,17 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// lastGood/cfg without a further gate of its own (see Watch in
 	// reconciler.go), so gating here costs exactly one hook invocation for the
 	// initial configuration, not two.
+	// Guarded on the hook, because nothing else ever reads this slice: it exists
+	// solely to populate the Change handed to the gate. Without the guard every
+	// Load and every Watch allocates one FieldChange per resolved field for a
+	// hook that is not there - which is the common case, since PreApply is
+	// opt-in.
 	var fields []FieldChange
-	for _, r := range res {
-		if r.set {
-			fields = append(fields, FieldChange{Path: r.spec.Path, NewVersion: r.value.Version})
+	if hook != nil {
+		for _, r := range res {
+			if r.set {
+				fields = append(fields, FieldChange{Path: r.spec.Path, NewVersion: r.value.Version})
+			}
 		}
 	}
 	// The reentrancy mark is nil here, and that is not an oversight: this gate

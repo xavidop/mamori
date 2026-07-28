@@ -45,14 +45,16 @@ const defaultPreApplyTimeout = 10 * time.Second
 //
 // It must not call back into the same Watcher, and mamori now catches it when
 // it does. Get is lock-free and safe here - it Loads a pointer the reconciler
-// already published, and reads the snapshot this candidate would supersede,
-// which is usually what a hook wants. Pin, PinCurrent, Unpin and Refresh are
-// not: they are serviced by the very goroutine the hook is occupying, so
-// sendPin (pin.go) would be waiting for a receiver that cannot exist until this
-// hook returns. That used to block until Close - no reconciliation, no
-// OnChange, no OnError, no diagnostic of any kind, and the hook's own timeout
-// does not rescue it, because the hook is parked inside sendPin, which never
-// looks at the context this hook was given.
+// already published, so it returns whatever Get returns anywhere else at this
+// instant: the snapshot this candidate would supersede, unless the watcher is
+// pinned, in which case it is the pinned one and the candidate supersedes
+// something else. Pin, PinCurrent, Unpin and Refresh are not safe: they are
+// serviced by the very goroutine the hook is occupying, so sendPin (pin.go)
+// would be waiting for a receiver that cannot exist until this hook returns.
+// That used to block until Close - no reconciliation, no OnChange, no OnError,
+// no diagnostic of any kind, and the hook's own timeout does not rescue it,
+// because the hook is parked inside sendPin, which never looks at the context
+// this hook was given.
 //
 // It is now detected instead, per call, and the hook keeps running:
 //
@@ -66,6 +68,11 @@ const defaultPreApplyTimeout = 10 * time.Second
 // The detection is keyed on which goroutine is inside the hook, not merely that
 // one is, so a Pin issued from an unrelated goroutine that happens to overlap a
 // hook is untouched: it waits its turn and is serviced normally, as before.
+//
+// An OnError callback is in the same position and gets the same treatment - it
+// too runs inline on the reconciler goroutine. See ErrReentrantCall for the
+// whole of that rule; OnChange, which is delivered from the dispatch queue on
+// its own goroutine, is not affected by any of it.
 //
 // It is typed to the same T passed to Watch, and runs on the initial load as
 // well as on every subsequent update, so a credential that does not work is
@@ -88,8 +95,24 @@ func PreApply[T any](fn func(ctx context.Context, ev Change[T]) error) Option {
 // therefore stalls updates - loudly, emitting a *PreApplyError once per
 // attempt - rather than quietly serving unverified configuration. That is the
 // intended trade.
+//
+// A zero or negative d clamps to the default rather than being honored, the way
+// WithHistory clamps a negative n. It cannot mean "no bound", because the bound
+// is what keeps a hook from wedging the reconciler goroutine, and honoring it
+// literally is worse still: context.WithTimeout(parent, 0) returns a context
+// that is ALREADY expired, so every candidate would be refused on the deadline
+// check - including the initial load, which would make Watch and Load fail at
+// startup with a DeadlineExceeded a caller writing WithPreApplyTimeout(0) is
+// unlikely to read as "you disabled the gate". Elsewhere in this package a zero
+// duration disables a feature (WithStale), so the one reading a caller is most
+// likely to have in mind is the one meaning this option cannot express at all.
 func WithPreApplyTimeout(d time.Duration) Option {
-	return func(o *options) { o.preApplyTimeout = d }
+	return func(o *options) {
+		if d <= 0 {
+			d = defaultPreApplyTimeout
+		}
+		o.preApplyTimeout = d
+	}
 }
 
 // PreApplyError is delivered to OnError when a PreApply hook rejects a
@@ -133,8 +156,7 @@ func runPreApply[T any](parent context.Context, hook func(context.Context, Chang
 		return nil
 	}
 	if mark != nil {
-		defer mark.Store(0)
-		mark.Store(goroutineID())
+		defer armReentrancy(mark)()
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -150,6 +172,34 @@ func runPreApply[T any](parent context.Context, hook func(context.Context, Chang
 	return nil
 }
 
+// armReentrancy marks mark with the calling goroutine's ID and returns the
+// function that unmarks it, for use as `defer armReentrancy(mark)()` around a
+// user callback this package runs INLINE on the reconciler goroutine. While the
+// mark is set, sendPinCtx (pin.go) refuses a control-channel command issued from
+// that same goroutine, which is the only caller that can never be answered.
+//
+// Two callbacks need this, and they are exactly the two that run there:
+// runPreApply's hook, and emitErr's OnError (reconciler.go). OnChange does not,
+// and must not have it - it runs on the dispatch goroutine, which receives from
+// a queue rather than occupying the reconciler, so a Pin or Refresh from inside
+// OnChange is an ordinary caller waiting its ordinary turn.
+//
+// It restores the PREVIOUS value rather than storing 0, which is what makes it
+// safe to arm in more than one place. emitErr is reachable from inside flush's
+// PreApply rejection path, so an inner frame that cleared the mark outright
+// could unguard the remainder of an outer callback and quietly bring back the
+// hang this detection exists to convert into an error. Restoring costs one extra
+// word and removes the ordering dependency entirely; see TestArmReentrancyNests.
+//
+// Deferring the disarm rather than writing it after the call is what makes the
+// mark's lifetime a property of THIS call rather than of the callback's
+// cooperation: a callback that panics cannot leave the mark set, which would
+// otherwise reject every later command issued from the reconciler goroutine.
+func armReentrancy(mark *atomic.Uint64) func() {
+	prev := mark.Swap(goroutineID())
+	return func() { mark.Store(prev) }
+}
+
 // goroutineIDPrefix is the fixed opening of runtime.Stack's first line, which
 // is documented to be "goroutine N [status]:" for the running goroutine.
 const goroutineIDPrefix = "goroutine "
@@ -161,20 +211,34 @@ const goroutineIDPrefix = "goroutine "
 // of the one place the runtime does print it: the header line of the
 // goroutine's own stack trace. That is a real cost in taste, and it is paid
 // here rather than in the alternative because the alternative is worse. A mark
-// that recorded only THAT a hook is running would refuse a Pin from any
-// unrelated caller goroutine that merely overlapped one - once per rotation,
-// for as long as the hook's whole budget, with an error telling the caller to
-// do the thing it was already doing. Identity is what makes the refusal apply
-// to exactly the caller that is actually deadlocking itself.
+// that recorded only THAT a callback is running would refuse a Pin from any
+// unrelated caller goroutine that merely overlapped one - once per rotation and
+// once per error delivery, for as long as the callback runs, with an error
+// telling the caller to do the thing it was already doing. Identity is what
+// makes the refusal apply to exactly the caller that is actually deadlocking
+// itself.
 //
 // runtime.Stack(buf, false) walks only the calling goroutine, so it does not
-// stop the world; with a buffer this small it is a truncated single-frame
-// traceback, on the order of a microsecond. It is reached at most twice per
-// hook invocation (once to arm the mark, once for a pin command that actually
-// overlaps a hook) and never at all when no PreApply hook is installed.
+// stop the world. A small buffer truncates the OUTPUT, not the walk: the runtime
+// still traverses every frame, so the cost stays proportional to the caller's
+// stack depth rather than being fixed - measured at a couple of microseconds a
+// few frames down, and ~40us at depth 200. That is affordable where this is
+// reached from, and it is worth knowing where that is:
+//
+//   - Arming, once per PreApply hook invocation (armReentrancy, called from
+//     runPreApply) and once per OnError delivery (emitErr, reconciler.go). Both
+//     run near the bottom of the reconciler goroutine's own shallow stack, where
+//     the microsecond figure holds, and neither is on a per-flush path: a
+//     watcher with no hook and no OnError callback reaches this never.
+//   - Checking, in sendPinCtx (pin.go), once per control-channel command that
+//     actually overlaps one of those callbacks. That caller's stack is the
+//     application's own and can be arbitrarily deep, so the microsecond figure
+//     does NOT hold there. It is bounded instead by how rare the overlap is:
+//     zero cost when no callback is running, which for a watcher without either
+//     is always.
 //
 // Every failure path returns 0, and 0 is the same value the mark holds when no
-// hook is running, so a parse that ever stopped matching the runtime's format
+// callback is running, so a parse that ever stopped matching the runtime's format
 // would silently disable the detection and restore the previous behavior. It
 // can never manufacture a false match, which is the direction that matters: a
 // missed detection is the bug this package documented for a release, while a

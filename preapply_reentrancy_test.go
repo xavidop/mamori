@@ -341,6 +341,242 @@ func TestPinFromAnotherGoroutineIsUnaffected(t *testing.T) {
 	}
 }
 
+// TestRefreshFromInsideOnErrorFailsFast covers the OTHER callback this package
+// runs inline on the reconciler goroutine.
+//
+// OnError is not dispatched through the queue OnChange goes through: emitErr
+// calls it directly, on the reconciler goroutine, from buildCandidate,
+// reportTerminalError and flush. So a callback that reaches back into its own
+// Watcher is in exactly the position a PreApply hook is - waiting for a receiver
+// on w.control that cannot exist until the callback returns - and it wedges the
+// watcher the same permanent way, until Close.
+//
+// The reason it matters more now than it read before: "the reload was rejected,
+// retry it" is a natural thing to write in an OnError callback, and Refresh is
+// what you would reach for to write it. Guarding only PreApply would have left
+// the more tempting of the two callbacks unguarded.
+func TestRefreshFromInsideOnErrorFailsFast(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rp7://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("rp7")
+	p.set("a", "first", "v1")
+
+	// self is how the callback reaches the Watcher that is running it; see the
+	// tests above for why it has to be an atomic pointer that tolerates nil.
+	var self atomic.Pointer[Watcher[cfg]]
+	// once keeps this to a single reentrant call. A refused Refresh emits
+	// nothing, so it cannot recurse, but a later unrelated error delivery
+	// should not overwrite what the first one observed either.
+	var once atomic.Bool
+	refreshErr := make(chan error, 1)
+	reject := errors.New("credential does not work")
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if ev.New.A == "second" {
+				return reject
+			}
+			return nil
+		}),
+		OnError(func(error) {
+			w := self.Load()
+			if w == nil || !once.CompareAndSwap(false, true) {
+				return
+			}
+			refreshErr <- w.Refresh(context.Background())
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	self.Store(w)
+
+	p.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	select {
+	case err := <-refreshErr:
+		if !errors.Is(err, ErrReentrantCall) {
+			t.Fatalf("Refresh from inside an OnError callback returned %v, want ErrReentrantCall", err)
+		}
+	case <-time.After(reentrancyBudget):
+		t.Fatal("Refresh from inside an OnError callback did not return: the watcher is wedged, which is the bug this detection exists to convert into an error")
+	}
+
+	// The refusal must be local to the offending call. The rejection that
+	// triggered the callback still stands, and the watcher must still be
+	// reconciling: a later good value has to be applied normally.
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q, want first (the rejected candidate must not be applied)", got)
+	}
+	p.push("a", "third", "v3")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+	if got := w.Get().A; got != "third" {
+		t.Errorf("Get().A = %q, want third: a refused reentrant call must leave the reconciler working", got)
+	}
+}
+
+// TestPinFromInsideOnErrorFailsFast is the same hazard through Pin, which is the
+// half of it that predates Refresh entirely. Nothing regressed here - a Pin from
+// an OnError callback wedged just as permanently before this work existed - but
+// the detection now says so instead of hanging, which is what makes
+// ErrReentrantCall's promise ("a command issued from a callback this package
+// runs on the reconciler goroutine") true rather than half true.
+func TestPinFromInsideOnErrorFailsFast(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rp8://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("rp8")
+	p.set("a", "first", "v1")
+
+	var self atomic.Pointer[Watcher[cfg]]
+	var once atomic.Bool
+	pinErr := make(chan error, 1)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk), WithHistory(4),
+		OnError(func(error) {
+			w := self.Load()
+			if w == nil || !once.CompareAndSwap(false, true) {
+				return
+			}
+			pinErr <- w.Pin(1)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	self.Store(w)
+
+	// A watch-delivered provider error reaches OnError through
+	// reportTerminalError, the emitErr call site furthest from the PreApply
+	// gate: there is no hook installed here at all, so the mark this refusal
+	// keys on can only have been armed by emitErr itself.
+	p.pushErr("a", errors.New("backend is down"))
+
+	select {
+	case err := <-pinErr:
+		if !errors.Is(err, ErrReentrantCall) {
+			t.Fatalf("Pin from inside an OnError callback returned %v, want ErrReentrantCall", err)
+		}
+	case <-time.After(reentrancyBudget):
+		t.Fatal("Pin from inside an OnError callback did not return: the watcher is wedged")
+	}
+	if v, pinned := w.Pinned(); pinned {
+		t.Errorf("Pinned() = (%d, true) after a refused Pin, want not pinned", v)
+	}
+}
+
+// TestPinFromAnotherGoroutineDuringOnErrorIsUnaffected is the false-positive
+// test for the widened guard, and it is why emitErr records WHICH goroutine is
+// inside the callback rather than merely that one is. An OnError callback can
+// run for as long as the user's logging or metrics call takes, and a Pin issued
+// from an unrelated goroutine in that window is doing nothing wrong: it must
+// queue on control and be serviced when the reconciler comes back to its select.
+func TestPinFromAnotherGoroutineDuringOnErrorIsUnaffected(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rp9://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("rp9")
+	p.set("a", "first", "v1")
+
+	inCallback := make(chan struct{})
+	release := make(chan struct{})
+	var blocked atomic.Bool
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk), WithHistory(4),
+		OnError(func(error) {
+			if !blocked.CompareAndSwap(false, true) {
+				return
+			}
+			close(inCallback)
+			<-release
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	p.pushErr("a", errors.New("backend is down"))
+	<-inCallback // the reconciler goroutine is now parked inside OnError
+
+	pinned := make(chan error, 1)
+	go func() { pinned <- w.Pin(1) }()
+
+	select {
+	case err := <-pinned:
+		t.Fatalf("Pin from an unrelated goroutine returned %v while an OnError callback was running, want it to wait its turn", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case err := <-pinned:
+		if errors.Is(err, ErrReentrantCall) {
+			t.Fatal("Pin from an unrelated goroutine was refused as reentrant: the detection must key on WHICH goroutine is inside the callback, not merely that one is")
+		}
+		if err != nil {
+			t.Fatalf("Pin from an unrelated goroutine = %v, want nil once the callback released the reconciler", err)
+		}
+	case <-time.After(reentrancyBudget):
+		t.Fatal("Pin from an unrelated goroutine never completed after the OnError callback returned")
+	}
+	if v, ok := w.Pinned(); !ok || v != 1 {
+		t.Errorf("Pinned() = (%d, %v), want (1, true)", v, ok)
+	}
+}
+
+// TestArmReentrancyNests pins the shape that makes arming safe in two places at
+// once: restore the PREVIOUS value, never store 0.
+//
+// emitErr and runPreApply both arm the same mark, and emitErr is reachable from
+// inside flush's PreApply rejection path. Today the hook's own mark has already
+// been restored by the time flush emits (runPreApply's disarm is deferred, so it
+// runs before flush's emitErr call), which means no nesting actually occurs on
+// the current code path. That ordering is an implementation detail of two
+// functions in different files, though, and an inner frame that cleared the mark
+// to 0 would silently unguard the remainder of an outer callback - a regression
+// with no symptom except the return of the hang this detection exists to
+// prevent. Restoring makes the invariant a property of the helper rather than of
+// that ordering.
+func TestArmReentrancyNests(t *testing.T) {
+	var mark atomic.Uint64
+	me := goroutineID()
+
+	outer := armReentrancy(&mark)
+	if got := mark.Load(); got != me {
+		t.Fatalf("mark = %d after arming, want this goroutine's ID %d", got, me)
+	}
+	inner := armReentrancy(&mark)
+	inner()
+	if got := mark.Load(); got != me {
+		t.Errorf("mark = %d after the inner disarm, want the outer arming (%d) to survive it", got, me)
+	}
+	outer()
+	if got := mark.Load(); got != 0 {
+		t.Errorf("mark = %d after the outer disarm, want 0", got)
+	}
+}
+
 // TestPinWithNoHookInstalledIsUnaffected is the zero-cost, zero-behavior-change
 // case: no PreApply hook at all, so the mark is never set and sendPin takes
 // exactly the path it always took.

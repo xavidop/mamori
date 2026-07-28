@@ -34,6 +34,61 @@ func TestPreApplyTimeoutDefaultAndOverride(t *testing.T) {
 	}
 }
 
+// TestPreApplyTimeoutClampsNonPositive pins the clamp, and the reason it is a
+// clamp rather than an honored value.
+//
+// context.WithTimeout(parent, 0) returns a context that is ALREADY past its
+// deadline, so runPreApply's post-hook ctx.Err() check would refuse every
+// candidate a hook ever saw - the initial load included, which makes Watch and
+// Load fail outright at startup. The rest of this package spells a disabling
+// zero (WithStale) and clamps nonsense input (WithHistory's negative n), so
+// neither reading a caller could plausibly have in mind matches what honoring it
+// would do.
+func TestPreApplyTimeoutClampsNonPositive(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		o := defaultOptions()
+		WithPreApplyTimeout(d)(o)
+		if o.preApplyTimeout != defaultPreApplyTimeout {
+			t.Errorf("WithPreApplyTimeout(%v) = %v, want the default %v", d, o.preApplyTimeout, defaultPreApplyTimeout)
+		}
+	}
+}
+
+// TestPreApplyTimeoutZeroStillGatesTheInitialLoad is the behavioral half of the
+// clamp: without it, WithPreApplyTimeout(0) turns a hook that returns nil into a
+// rejection of the very first configuration, and Watch never returns a watcher
+// at all.
+func TestPreApplyTimeoutZeroStillGatesTheInitialLoad(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pz://a"`
+	}
+	p := newWatchProvider("pz")
+	p.set("a", "first", "v1")
+
+	var calls atomic.Int64
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithPollInterval(time.Hour),
+		WithPreApplyTimeout(0),
+		PreApply(func(ctx context.Context, _ Change[cfg]) error {
+			calls.Add(1)
+			return ctx.Err() // an already-expired budget would surface here
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch with WithPreApplyTimeout(0) = %v, want a working watcher: a zero budget must clamp to the default, not reject everything", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("hook ran %d times on the initial load, want 1", got)
+	}
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q, want first", got)
+	}
+}
+
 func TestPreApplyErrorWrapsAndReports(t *testing.T) {
 	cause := errors.New("dial tcp: connection refused")
 	err := &PreApplyError{Err: cause}

@@ -93,19 +93,27 @@ type Watcher[T any] struct {
 	// separate "closed" signal needed to get the same guarantee.
 	ctx context.Context
 
-	// inPreApply holds the ID of the goroutine currently running a PreApply
-	// hook for this watcher, and 0 whenever no hook is running - which is
-	// always, for a watcher with no gate installed. Only flush arms it (see
-	// runPreApply's mark parameter), so it names the reconciler goroutine and
-	// no other; sendPin is the only reader.
+	// inCallback holds the ID of the goroutine currently running one of this
+	// watcher's INLINE callbacks, and 0 whenever none is - which is always, for
+	// a watcher that installed neither. Two arm it, and they are exactly the two
+	// this package runs on the reconciler goroutine itself: flush's PreApply
+	// gate (via runPreApply's mark parameter) and emitErr's OnError. So it names
+	// the reconciler goroutine and no other; sendPinCtx is the only reader.
+	//
+	// OnChange is deliberately absent. It runs on the dispatch goroutine, which
+	// receives Change events from a queue rather than occupying the reconciler,
+	// so an OnChange callback calling Pin or Refresh is an ordinary caller whose
+	// command is serviced in the ordinary way - marking it would refuse correct
+	// code. See armReentrancy (preapply.go) for the rest of that reasoning, and
+	// for why the disarm restores the previous value rather than storing 0.
 	//
 	// It is a goroutine ID rather than a bool because the two questions are not
-	// the same one. "Is a hook running" is true for every caller in the process
-	// while a hook runs, and refusing all of them would break correct code that
-	// merely overlapped a rotation. "Is the caller the goroutine that is inside
-	// the hook" is true only for the caller that is genuinely waiting on itself,
-	// which is exactly the set that can never be answered.
-	inPreApply atomic.Uint64
+	// the same one. "Is a callback running" is true for every caller in the
+	// process while one runs, and refusing all of them would break correct code
+	// that merely overlapped a rotation. "Is the caller the goroutine that is
+	// inside the callback" is true only for the caller that is genuinely waiting
+	// on itself, which is exactly the set that can never be answered.
+	inCallback atomic.Uint64
 
 	// adminServer and adminAddrVal are set only when WithAdminHTTP was given to
 	// Watch (see adminhttp.go); both are nil/unset otherwise. adminServer is
@@ -1156,7 +1164,7 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 		Old:    e.lastGood,
 		New:    cand,
 		Fields: fields,
-	}, &e.w.inPreApply); err != nil {
+	}, &e.w.inCallback); err != nil {
 		for _, f := range fields {
 			e.applied[f.Path] = f.OldVersion
 		}
@@ -1536,10 +1544,34 @@ func (e *engine[T]) enqueue(ev Change[T]) {
 	}
 }
 
+// emitErr delivers err to the OnError callback, INLINE on the reconciler
+// goroutine - it is not queued the way OnChange is, because an error has no
+// snapshot to coalesce with and dropping the oldest one (what enqueue does when
+// the dispatch queue is full) would lose exactly the diagnostic the caller
+// installed the callback to see.
+//
+// That inline delivery puts an OnError callback in the same position a PreApply
+// hook is in, so it is marked the same way. A callback that calls Pin,
+// PinCurrent, Unpin or Refresh on this watcher is asking the goroutine it is
+// currently occupying to service a command, and before this mark existed on this
+// path that blocked until Close, silently, with no reconciliation in between -
+// verified, not theorized: see TestRefreshFromInsideOnErrorFailsFast and
+// TestPinFromInsideOnErrorFailsFast, both of which time out rather than fail
+// without the arming below. "The reload was rejected, retry it" is a natural
+// thing to write in an OnError callback and Refresh is how you would write it,
+// which is what makes this the more tempting of the two callbacks to get wrong.
+//
+// The mark is armed only when a callback actually exists, and this is an error
+// path rather than a per-flush one - buildCandidate's validation failures,
+// reportTerminalError, and flush's gate rejection - so the goroutineID lookup
+// (a runtime.Stack walk, see goroutineID) is never paid on the path a healthy
+// watcher takes. A watcher with no OnError installed pays nothing at all.
 func (e *engine[T]) emitErr(err error) {
-	if e.o.onError != nil {
-		e.o.onError(err)
+	if e.o.onError == nil {
+		return
 	}
+	defer armReentrancy(&e.w.inCallback)()
+	e.o.onError(err)
 }
 
 // schemeForPath returns the scheme of the ref that most recently determined

@@ -3,8 +3,8 @@ package mamori
 import "context"
 
 // Refresh forces an immediate re-resolve of every field, bypassing poll
-// intervals and per-ref backoff, and blocks until the resulting snapshot has
-// been applied or rejected.
+// intervals, and blocks until the resulting snapshot has been applied or
+// rejected.
 //
 // It returns nil when a snapshot was applied and when nothing changed, and the
 // rejection reason when the candidate failed validation or a PreApply gate. A
@@ -12,10 +12,22 @@ import "context"
 // the whole reason this blocks rather than queueing:
 //
 //	for range sighup {
-//	    if err := w.Refresh(ctx); err != nil {
+//	    switch err := w.Refresh(ctx); {
+//	    case err == nil:
+//	        log.Println("reload applied")
+//	    case ctx.Err() != nil:
+//	        // The wait was abandoned, not the reload. Whether it applied is
+//	        // unknown from here; Status reports what actually happened.
+//	        log.Printf("stopped waiting for the reload: %v", err)
+//	    default:
 //	        log.Printf("reload rejected, still serving the previous config: %v", err)
 //	    }
 //	}
+//
+// Distinguishing those two is the whole reason the example is written this way.
+// A cancelled ctx returns ctx.Err() while the reconciler goes on to apply the
+// reload anyway (see below), so treating every non-nil error as a rejection
+// reports "still serving the previous config" for a reload that in fact landed.
 //
 // It does NOT bypass PreApply. A forced refresh is still gated; that is the
 // point of having a gate, and a refresh is what an operator reaches for exactly
@@ -27,12 +39,15 @@ import "context"
 // Close for the same reason they do (see sendPin in pin.go).
 //
 // It returns ErrReentrantCall, having re-resolved nothing, when called from
-// inside a PreApply hook: that hook runs ON the goroutine which would have to
-// service this command, so the call would be waiting for itself. Taking a
-// context does not make that survivable - a hook calling
+// inside a PreApply hook or an OnError callback: both run ON the goroutine which
+// would have to service this command, so the call would be waiting for itself.
+// Taking a context does not make that survivable - a callback calling
 // Refresh(context.Background()), the obvious thing to write, would block until
 // Close - so this is refused up front exactly as Pin is, rather than left to a
-// deadline the caller may not have set.
+// deadline the caller may not have set. OnError is the one to watch for: "the
+// reload was rejected, retry it" is a natural thing to write there, and this is
+// what it gets instead. OnChange is unaffected; it runs on the dispatch
+// goroutine, so a Refresh from it is an ordinary call.
 //
 // ctx bounds the wait, not the work. Cancelling it returns ctx.Err() and stops
 // this call from waiting; it does not recall a command already handed to the

@@ -59,7 +59,7 @@ Returning a non-nil error from the hook rejects the candidate outright:
 - `Get()` keeps returning the last valid config; the rejected candidate is discarded.
 - `OnChange` does not fire.
 - `OnError` receives a `*PreApplyError` wrapping the hook's own error (or `context.DeadlineExceeded` on timeout, below).
-- The engine's per-ref state is not rewound. The next upstream change or poll produces a fresh candidate and the hook runs again. There is no periodic retry of the rejected value on its own; it is re-gated only on the next change.
+- The rejected value is **not** withdrawn from the engine's observed state, but the per-field *applied* versions are rolled back, so the same value is diffed and re-gated rather than looking already applied. The next upstream **change** produces a fresh candidate and the hook runs again. There is no periodic retry of the rejected value on its own: polling only emits when the value actually changes, so a poll that re-reads the same rejected value produces nothing and the hook does not run again.
 
 ## The timeout is mandatory, and exceeding it is a rejection
 
@@ -77,13 +77,17 @@ Exceeding the budget is a **rejection, not an acceptance**. On timeout, mamori d
 
 The hook runs on the reconciler goroutine, which is what lets it block the swap in the first place. That has one consequence you have to design around: `Get()` is a lock-free atomic load, so it is safe to call from inside the hook, but `Pin`, `PinCurrent`, `Unpin`, and `Refresh` are commands sent to, and serviced by, that very same goroutine. Calling one of them from inside a `PreApply` hook asks for a reply that only the goroutine it is currently occupying could ever send.
 
-`WithPreApplyTimeout` does not rescue this. The timeout only cancels the `ctx` handed to the hook; `Pin`, `PinCurrent`, and `Unpin` take no `ctx` at all, and `Refresh` takes the *caller's* `ctx`, not the hook's, so there is nothing on any of their sides for the hook's timeout to cancel.
+**This applies to `OnError` too, and that is the one people hit.** `OnError` is not delivered through the queue `OnChange` uses; it runs *inline* on the reconciler goroutine, so errors are never dropped. That puts an `OnError` callback in exactly the same position as a hook - and "the reload was rejected, retry it" is a natural thing to write there, with `w.Refresh` as the obvious way to write it.
 
-**mamori detects this and fails the call instead.** Until it did, a hook stuck this way wedged the whole watcher permanently, not just its own check: no reconciliation, no `OnChange`, no `OnError`, nothing until something outside the hook cancelled the watcher (`w.Close()`, or the parent context passed to `Watch`). Now the call returns immediately, changes no pin state, and the hook carries on:
+`OnChange` is the exception, and it is safe: it is delivered from the dispatch queue on its own goroutine, so `Pin`, `Unpin`, and `Refresh` from inside an `OnChange` handler are ordinary calls, serviced in the ordinary way.
 
-| Called from inside a hook | Result |
+`WithPreApplyTimeout` does not rescue any of this. The timeout only cancels the `ctx` handed to the hook; `Pin`, `PinCurrent`, and `Unpin` take no `ctx` at all, and `Refresh` takes the *caller's* `ctx`, not the hook's, so there is nothing on any of their sides for the hook's timeout to cancel. An `OnError` callback has no timeout of its own at all.
+
+**mamori detects this and fails the call instead.** Until it did, a callback stuck this way wedged the whole watcher permanently, not just its own check: no reconciliation, no `OnChange`, no further `OnError`, nothing until something outside cancelled the watcher (`w.Close()`, or the parent context passed to `Watch`). Now the call returns immediately, changes no pin state, and the callback carries on:
+
+| Called from inside a `PreApply` hook or an `OnError` callback | Result |
 | --- | --- |
-| `Get()` | Works, and is the supported way to read from a hook. Returns the snapshot this candidate would supersede, since the swap has not happened yet. |
+| `Get()` | Works, and is the supported way to read from either. It returns whatever `Get()` returns anywhere else at that instant: normally the snapshot the candidate would supersede, since the swap has not happened yet - but while the watcher is *pinned*, the pinned snapshot, which is not the one the candidate supersedes. |
 | `Pin(v)` | Returns `ErrReentrantCall`. Nothing is pinned. |
 | `PinCurrent()` | Returns `0`. Versions start at 1, so `0` never collides with a real one. Nothing is pinned. |
 | `Unpin()` | Does nothing. Its signature has no error to return, so it leaves the watcher pinned and `Pinned()` still reports so. |
@@ -99,9 +103,17 @@ mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
 	}
 	return nil
 })
+
+mamori.OnError(func(err error) {
+	// Same refusal, same reason: this callback is running ON the goroutine
+	// that would have to service the refresh.
+	if err := w.Refresh(context.Background()); errors.Is(err, mamori.ErrReentrantCall) {
+		// let the next reconciliation retry, or refresh from another goroutine
+	}
+})
 ```
 
-The detection keys on *which* goroutine is inside the hook, not merely that one is. A `Pin` issued from an unrelated goroutine that happens to overlap a running hook is not affected: it waits for the reconciler to come free and is then serviced normally, exactly as before.
+The detection keys on *which* goroutine is inside the callback, not merely that one is. A `Pin` issued from an unrelated goroutine that happens to overlap a running hook or callback is not affected: it waits for the reconciler to come free and is then serviced normally, exactly as before.
 
 If a hook needs to compare against something other than `ev.Old` or `ev.New`, keep a reference outside the `Watcher` rather than asking the watcher for it mid-hook. Detection turns a hang into a diagnosable error; it does not make the call work.
 
@@ -139,26 +151,35 @@ State the cost as plainly as the benefit: a retained snapshot holds a full copy 
 func (w *Watcher[T]) Refresh(ctx context.Context) error
 ```
 
-`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals and per-ref backoff, and **blocks until the resulting snapshot has been applied or rejected**. That block is deliberate, not something to route around: a SIGHUP handler wants to know whether the reload it just triggered actually worked, not merely that a request for one was queued.
+`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals, and **blocks until the resulting snapshot has been applied or rejected**. That block is deliberate, not something to route around: a SIGHUP handler wants to know whether the reload it just triggered actually worked, not merely that a request for one was queued.
 
 ```go
 sighup := make(chan os.Signal, 1)
 signal.Notify(sighup, syscall.SIGHUP)
 
 for range sighup {
-	if err := w.Refresh(ctx); err != nil {
+	switch err := w.Refresh(ctx); {
+	case err == nil:
+		log.Println("reload applied")
+	case ctx.Err() != nil:
+		// The wait was abandoned, not the reload. Whether it applied is
+		// unknown from here; w.Status() reports what actually happened.
+		log.Printf("stopped waiting for the reload: %v", err)
+	default:
 		log.Printf("reload rejected, still serving the previous config: %v", err)
-		continue
 	}
-	log.Println("reload applied")
 }
 ```
 
-`Refresh` returns `nil` in the two cases that both mean "`Get()` is current": a snapshot was applied, or nothing had actually changed. It returns the rejection reason in every other case:
+Splitting those last two cases is not pedantry. A cancelled `ctx` returns `ctx.Err()` **while the reconciler goes on to apply the reload anyway** (see below); treating every non-nil error as a rejection would log "still serving the previous config" for a reload that in fact landed.
+
+`Refresh` returns `nil` in the two cases that both mean "`Get()` is current": a snapshot was applied, or nothing had actually changed. It returns the *rejection reason* when the candidate was refused:
 
 - a field failed validation,
 - `PreApply` rejected the candidate - a `*PreApplyError`, exactly as in [What a rejection does](#what-a-rejection-does) above,
 - or a field is blocked by `onfail:"fail"` and stayed blocked.
+
+The remaining non-nil returns are not rejections at all, and should not be reported as one: `ctx.Err()` means *you* stopped waiting (the reload proceeds regardless), and a closed-watcher error means there was no reconciler left to ask.
 
 **`Refresh` does not bypass `PreApply`.** A forced refresh is gated exactly like any other reconciliation. Skipping the gate on the one call an operator reaches for right after a rotation - the moment a gate matters most - would defeat the point of having it.
 
@@ -168,7 +189,9 @@ While the watcher is pinned, a refresh still re-resolves, still runs the `PreApp
 
 ### The reentrancy hazard applies to `Refresh` too
 
-`Refresh` is serviced by the reconciler goroutine - the same one a `PreApply` hook occupies for the duration of its call. Calling `w.Refresh` from inside your own hook would ask that goroutine to service a command while it is busy being the hook, so it is refused rather than left to hang, exactly like `Pin`, `PinCurrent`, and `Unpin`: it returns `ErrReentrantCall` immediately, having re-resolved nothing. Giving it its own `ctx` does not rescue it - `Refresh(context.Background())`, the obvious thing to reach for, would simply block until `Close`, since nothing else would ever free the goroutine it is waiting on.
+`Refresh` is serviced by the reconciler goroutine - the same one a `PreApply` hook occupies for the duration of its call, and the same one an `OnError` callback occupies for the duration of *its* call. Calling `w.Refresh` from inside either would ask that goroutine to service a command while it is busy being the callback, so it is refused rather than left to hang, exactly like `Pin`, `PinCurrent`, and `Unpin`: it returns `ErrReentrantCall` immediately, having re-resolved nothing. Giving it its own `ctx` does not rescue it - `Refresh(context.Background())`, the obvious thing to reach for, would simply block until `Close`, since nothing else would ever free the goroutine it is waiting on.
+
+`OnError` is the one to watch for here. Retrying a rejected reload from the callback that told you it was rejected is the natural shape to reach for, and it is the shape that wedges: issue the `Refresh` from another goroutine, or simply let the next reconciliation carry it. See [Do not call back into the same Watcher](#do-not-call-back-into-the-same-watcher) above for the full rule and what each command returns.
 
 ### What running it actually costs
 

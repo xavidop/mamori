@@ -116,15 +116,22 @@ mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
 Rules to hold onto:
 - `WithPreApplyTimeout` bounds the hook, defaulting to 10s. It cannot be disabled, and exceeding it is a **rejection**, not an acceptance - mamori does not know the candidate works, so it does not apply it.
 - The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, `w.Unpin`, and `w.Refresh` are commands serviced by that same goroutine, and the timeout does not rescue them - `Pin`/`PinCurrent`/`Unpin` take no `ctx` at all, and `Refresh` takes the caller's `ctx`, not the hook's. Never call back into the same `Watcher` from a `PreApply` hook. mamori detects it if you do, and refuses the call rather than hanging: `Pin` and `Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0` (versions start at 1), and `Unpin` does nothing and leaves the watcher pinned. Calls from any other goroutine are unaffected.
+- **The same rule covers `OnError`,** which is delivered inline on the reconciler goroutine rather than through the `OnChange` queue. Do not call `w.Refresh` from an `OnError` callback to retry a rejected reload - it returns `ErrReentrantCall`. Issue it from another goroutine, or let the next reconciliation carry it. `OnChange` is safe: it runs on its own dispatch goroutine.
 - A hook typed for a different config than the one passed to `Watch[T]`/`Load[T]` fails `Watch` and `Load` outright (an error wrapping `ErrInvalid`), rather than silently leaving the gate open.
 
 ## Force an immediate refresh
 
-`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals and per-ref backoff, and **blocks until the result is applied or rejected** - which is the point: a SIGHUP handler wants to know whether the reload it triggered actually worked, not just that it was requested.
+`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals, and **blocks until the result is applied or rejected** - which is the point: a SIGHUP handler wants to know whether the reload it triggered actually worked, not just that it was requested.
 
 ```go
 for range sighupCh {
-	if err := w.Refresh(ctx); err != nil {
+	switch err := w.Refresh(ctx); {
+	case err == nil:
+		log.Println("reload applied")
+	case ctx.Err() != nil:
+		// You stopped waiting; the reload still proceeds. Not a rejection.
+		log.Printf("stopped waiting for the reload: %v", err)
+	default:
 		log.Printf("reload rejected: %v", err) // validation, PreApply, or onfail:"fail"
 	}
 }
