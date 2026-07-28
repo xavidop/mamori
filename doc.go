@@ -26,6 +26,23 @@
 // fragment is a literal top-level key ("#ca.crt"), exactly as before. See
 // [ParseRef] and [SelectKey].
 //
+// An optional ?decode= query option declares that the resolved value is
+// encoded, so core decodes it (base64, base64url, hex, gzip, or trim,
+// stacked left to right) before it reaches the field:
+// "aws-sm://prod/tls#key?decode=base64". A bad payload is a loud ErrInvalid,
+// never a silent passthrough, and a field's default: is used as-is,
+// undecoded. See [WithDecodeHook] for arbitrary per-type conversion beyond
+// this closed set.
+//
+// A tag may also reference a variable with ${VAR}, expanded once, before
+// parsing, from the map supplied via [WithRefVars]
+// ("aws-sm://${ENV}/db#password"). Expansion never reads the ambient
+// environment - only WithRefVars, or its explicit opt-in helper [EnvVars],
+// supply values - because a ref decides which secret gets read, and that
+// must not be steerable by anything able to set an environment variable. An
+// undefined variable, an unterminated "${", or an empty "${}" are errors
+// rather than a silently empty ref.
+//
 // # Watching
 //
 // [Watch] performs an initial fail-fast load and then keeps the configuration

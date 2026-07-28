@@ -8,8 +8,11 @@ title: Ref grammar
 A `source` tag is parsed into a `Ref` by `ParseRef`. This page is the
 consolidated reference for that grammar: the scheme forms, the two fragment
 forms (literal key and JSON Pointer), the RFC 6901 escaping and array-index
-rules, the error table that decides whether `default:` applies, and the
-gotcha you hit when a value is itself a string containing JSON.
+rules, the error table that decides whether `default:` applies, the gotcha
+you hit when a value is itself a string containing JSON, the `?decode=`
+pipeline that transforms a resolved value before it reaches your field, and
+`${VAR}` interpolation of the tag text itself before any of the above is
+parsed.
 
 ## The full grammar
 
@@ -300,7 +303,148 @@ decoding step is in play, and `?decode=` alone is not itself sensitive.
 
 ## Ref interpolation (`${VAR}`)
 
-Not yet released - this section will be filled in when it ships.
+`${VAR}` in a `source` tag is expanded from variables you supply through
+[`WithRefVars`](#withrefvars-is-the-only-source), before the tag is parsed:
+
+```go
+type Config struct {
+	DBPassword secret.String `source:"aws-sm://${ENV}/db#password"`
+	Bucket     string        `source:"s3://backups-${REGION}/nightly"`
+}
+
+cfg, err := mamori.Load[Config](ctx,
+	mamori.WithRefVars(map[string]string{"ENV": "prod", "REGION": "eu-west-1"}),
+)
+```
+
+Only the braced form is recognized. A bare `$VAR` (no braces) is left
+untouched, so a password, an `exec:` command, or a path that happens to
+contain a literal `$` passes through unaffected. `$$` collapses to one
+literal `$`.
+
+### `WithRefVars` is the only source
+
+**Variables come only from `WithRefVars`. mamori never reads the ambient
+environment (`os.Getenv`) for `${VAR}` expansion.** This is the central rule
+of this feature, not an incidental detail: a `source` tag's ref decides
+*which secret a process reads*, so expanding `${VAR}` from ambient state
+would let anything able to set an environment variable in the process - a
+compromised dependency, a misconfigured entrypoint script, a sibling
+container sharing an env file - redirect that read to a secret of its own
+choosing. Routing expansion only through an explicit map keeps the set of
+things that can influence a ref exactly what the caller passed to
+`WithRefVars`: nothing ambient, nothing implicit.
+
+This mirrors the `exec:` provider (see [exec](/docs/providers/exec/)), which
+is similarly opt-in via `WithExecProvider` rather than always-on, for the
+same reason: a capability that changes which secret gets read should not be
+able to activate itself off state the caller never consciously provided.
+
+Applying `WithRefVars` more than once merges the maps, with a later call
+winning per key.
+
+### `EnvVars`: the explicit, named opt-in
+
+When a variable's value should in fact come from the environment, opt in by
+naming it:
+
+```go
+mamori.WithRefVars(mamori.EnvVars("ENVIRONMENT", "REGION"))
+```
+
+`EnvVars` takes **named** variables on purpose: it keeps the set of things
+that can influence a ref enumerable and greppable at the call site, rather
+than "any environment variable at all". A name that is not set in the
+environment is **omitted** from the result rather than mapped to `""`, so an
+unset variable still surfaces as the undefined-variable error below instead
+of silently expanding to nothing.
+
+### When expansion runs
+
+Expansion happens once, when `Load`, `Watch`, or `Doctor` walks the config
+struct - before the tag is split into a precedence chain or handed to
+`ParseRef`. It runs over the **whole raw tag string**, so a variable can
+supply a scheme, a path segment, a fragment, or a query value:
+
+```go
+Endpoint string `source:"${SCHEME}://prod/db#${KEY}?region=${REGION}"`
+```
+
+It is **not recursive**: a variable's own value is inserted verbatim and
+never rescanned. If `${A}` expands to a value that itself contains `${B}`,
+that `${B}` is left literal in the output rather than resolved against
+whatever `B` is set to. Recursive expansion would risk an infinite loop from
+a self-referencing or cyclic variable value, so this is deliberate, not an
+oversight.
+
+### Errors: undefined, unterminated, and empty are all hard failures
+
+Three shapes fail loudly rather than silently expanding to nothing:
+
+| Situation | Example | Error text |
+| --- | --- | --- |
+| Undefined variable | `${NOPE}`, with no `NOPE` key in the vars map | `undefined ref variable "NOPE" (pass it with WithRefVars)` |
+| Unterminated `${` | `${NOPE` with no closing `}` | `unterminated ${` |
+| Empty name | `${}` | `empty variable name in ${}` |
+
+All three wrap `ErrInvalid`. The reasoning is the same for all three:
+expanding an unset or malformed reference to nothing would produce a ref
+like `aws-sm:///db` (an empty path segment), which resolves not-found and
+then quietly falls back to the field's `default:` - turning a deployment
+misconfiguration (someone forgot to pass `ENV`) into a silently wrong value
+instead of a loud `Load`/`Watch`/`Doctor`-time error.
+
+### Interpolation and precedence chains
+
+Because expansion runs over the whole tag string before it is split into a
+comma-separated [precedence chain](/docs/concepts/source-chains/), a
+variable's value can inject a comma and change how that split happens: if a
+`${VAR}` value contains a comma followed by text that matches the
+[comma-split rule](/docs/concepts/source-chains/#the-comma-split-rule) (it
+looks like a new scheme), what was written as one ref becomes two:
+
+```go
+// If REGION expands to "eu,vault://kv/data/db", this stops being one ref
+// and becomes a two-element chain: "s3://backups-eu" and "vault://kv/data/db".
+Bucket string `source:"s3://backups-${REGION}"`
+```
+
+This is acceptable under the same trust model as the rest of `WithRefVars`:
+the caller supplying the variables is also the one who wrote the ref, so a
+variable reshaping the chain is no different in kind from that caller
+writing the two-element chain directly. It is worth knowing about, though,
+if a variable's value is ever assembled from anything less trusted than the
+caller itself.
+
+### Compatibility: the scan always runs
+
+Expansion scans every `source` tag whether or not the caller ever calls
+`WithRefVars` - `$$` still collapses to a literal `$`, and a stray `${` still
+hard-errors, even with no vars supplied at all. This is deliberate rather
+than conditioned on "did the caller opt in": gating the scan on
+`WithRefVars` having been called would mean a caller who simply forgot to
+call it gets `${ENV}` left completely literal in the ref, which resolves
+not-found and quietly takes the field's `default:` - exactly the silent
+misconfiguration this feature exists to prevent.
+
+The realistic thing this changes on upgrade is a pre-existing tag that
+happens to contain a literal `$$` or a stray `${`, most plausibly inside an
+`exec:` command line; that text now means something different, or fails,
+rather than passing straight through as inert.
+
+### Visibility: expanded refs are visible, not redacted
+
+After expansion, `Ref.Raw` holds the **expanded** string, so
+[`Status()`](/docs/observability/), the
+[admin endpoint's](/docs/observability/admin/) `Report`, and
+[`mamori doctor`](/docs/observability/doctor/) all show the ref exactly as it
+resolved, variable values included.
+
+**`WithRefVars` values must not be secrets.** Use it for environment names,
+regions, service names, and tenant identifiers - anything you'd be
+comfortable seeing on a status page or in `mamori doctor` output. A secret
+still belongs in the *value* a ref resolves to (the payload behind
+`aws-sm://...`), never in a variable spliced into the ref's own text.
 
 ## See also
 

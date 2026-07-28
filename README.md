@@ -42,8 +42,10 @@ go get github.com/xavidop/mamori/providers/k8s     # k8s-secret://  k8s-cm://
 
 ```go
 type Config struct {
-    // A secret string from AWS Secrets Manager (redacted in logs by default)
-    DBPassword secret.String `source:"aws-sm://prod/db#password"`
+    // A secret string from AWS Secrets Manager (redacted in logs by default).
+    // ${ENV} is ref interpolation: expanded from WithRefVars below, never
+    // from the ambient environment.
+    DBPassword secret.String `source:"aws-sm://${ENV}/db#password"`
 
     // Plain config from the environment, with a default and validation
     LogLevel   string        `source:"env:LOG_LEVEL" default:"info" validate:"oneof=debug info warn error"`
@@ -72,6 +74,8 @@ cfg, err := mamori.Load[Config](ctx)
 
 // Or: watch and reconcile at runtime
 w, err := mamori.Watch[Config](ctx,
+    // Expands DBPassword's ${ENV} above - see "Ref interpolation" below.
+    mamori.WithRefVars(map[string]string{"ENV": "prod"}),
     mamori.OnChange(func(ev mamori.Change[Config]) {
         if ev.Changed("DBPassword") {
             pool.Rotate(ev.New.DBPassword.Reveal())
@@ -89,6 +93,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 - **Typed & tag-driven** - one struct, multiple sources, generics API (`Load[T]` / `Watch[T]`).
 - **Nested selection** - `#/credentials/password` is an RFC 6901 JSON Pointer, addressing a value at any depth through objects and array elements; any other fragment (`#ca.crt`, `#tls.key`) stays a literal top-level key, exactly as before.
 - **Value decoding** - `?decode=base64,gzip` runs a stdlib-only pipeline (`base64`, `base64url`, `hex`, `gzip`, `trim`) over a resolved value before it reaches your struct field, left to right, outermost wrapper first; a bad payload is a loud `ErrInvalid`, never a silent passthrough.
+- **Ref interpolation** - `${VAR}` in a `source` tag expands from `mamori.WithRefVars` before the tag is parsed, so a variable can supply a scheme, path, fragment, or query value. Variables come only from `WithRefVars`, never the ambient environment - the same opt-in posture as `exec:` - and an undefined or malformed `${VAR}` is a hard error rather than a silently empty path segment.
 - **Precedence chains** - `source:"env:PORT,aws-ps://svc/port"` tries sources in priority order: the first to yield a value wins, not-found falls through to the next, and a real error stops the walk and applies the field's `onfail` policy instead of silently sliding to a lower-priority source. Every position is watched, so precedence is live.
 - **Reconciled at runtime** - native watch where the backend supports it (Kubernetes informers, Consul blocking queries, fsnotify), polling with jitter everywhere else, and lease-aware pre-expiry refresh for Vault.
 - **Atomic & validated** - an update that fails validation is *rejected*; `Get()` keeps returning the last good config. Config never enters a broken state mid-flight.
