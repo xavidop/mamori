@@ -29,6 +29,37 @@ func blockUntilTimers(t *testing.T, clk *FakeClock, n int) {
 	}
 }
 
+// armedTimers reports how many timers are currently pending on clk. It is the
+// counting half of armedDelay, used to assert that a code path arms no timer
+// at all (a natively-watched ref, which never enters the polling adapter).
+func armedTimers(clk *FakeClock) int {
+	clk.mu.Lock()
+	defer clk.mu.Unlock()
+	return len(clk.waiters)
+}
+
+// armedDelay returns the delay of the single timer currently pending on clk,
+// measured from the clock's current time.
+//
+// It is the assertion counterpart to blockUntilTimers: the block orders the
+// test after the goroutine armed its timer, and this reads the deadline that
+// goroutine chose. Reading the deadline directly is what makes a retry-cadence
+// assertion exact - the alternative is to advance the clock by a guessed amount
+// and infer the interval from whether a side effect happened, which can only
+// bracket the delay and turns every cadence test into a timing puzzle. It
+// insists on exactly one pending timer so a test that has accidentally armed a
+// debounce timer alongside the poll timer fails loudly rather than asserting on
+// whichever one happens to be first in the slice.
+func armedDelay(t *testing.T, clk *FakeClock) time.Duration {
+	t.Helper()
+	clk.mu.Lock()
+	defer clk.mu.Unlock()
+	if len(clk.waiters) != 1 {
+		t.Fatalf("pending timers on the fake clock = %d, want exactly 1", len(clk.waiters))
+	}
+	return clk.waiters[0].deadline.Sub(clk.now)
+}
+
 func TestFakeClockTimer(t *testing.T) {
 	c := NewFakeClock(time.Time{})
 	timer := c.NewTimer(10 * time.Second)

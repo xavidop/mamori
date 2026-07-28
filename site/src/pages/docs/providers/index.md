@@ -84,3 +84,5 @@ The [mamori (client)](/docs/providers/mamori/) provider is the one shipped provi
 - **poll** - mamori polls on `WithPollInterval` with jitter, using `Value.Version` to detect change.
 
 Provider authors implement the smallest interface native to their backend and never fake a watch with an internal ticker - mamori supplies the poller.
+
+Because mamori supplies the poller, it also supplies the retry cadence for the three polled rows: [`WithBackoff`](/docs/usage/watching/#retry-backoff) spaces out retries for a ref that keeps failing to resolve. It does not reach a **native** provider, which owns its stream and its own reconnect behavior; see each provider's page for that.

@@ -27,6 +27,7 @@ func (p *pollFake) Resolve(context.Context, Ref) (Value, error) {
 	return p.val, p.err
 }
 func (p *pollFake) setVal(v Value) { p.mu.Lock(); p.val = v; p.mu.Unlock() }
+func (p *pollFake) setErr(e error) { p.mu.Lock(); p.err = e; p.mu.Unlock() }
 
 func drainOne(t *testing.T, ch <-chan Update, wantBytes string) {
 	t.Helper()

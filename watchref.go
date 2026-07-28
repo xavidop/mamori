@@ -13,10 +13,13 @@ import "context"
 //
 // opts is turned into an *options the same way Load and Watch build theirs:
 // defaultOptions() overlaid with opts in the order given. Of everything an
-// *options carries, only clock, pollInterval, and jitter matter here - the
-// fields pollWatch itself reads - but the full Option surface (WithClock,
-// WithPollInterval, WithJitter, ...) is accepted so a caller does not need a
-// second, narrower configuration vocabulary just for this entry point.
+// *options carries, only clock, pollInterval, jitter, and the WithBackoff
+// window matter here - the fields pollWatch itself reads - but the full Option
+// surface (WithClock, WithPollInterval, WithJitter, ...) is accepted so a
+// caller does not need a second, narrower configuration vocabulary just for
+// this entry point. Since backoff lives in the polling adapter, it reaches a
+// ref watched through here on exactly the terms WithBackoff documents: polled
+// refs and native-watch fallbacks, never a native watch that started cleanly.
 //
 // The returned channel is closed when ctx is cancelled, matching both
 // WatchableProvider's and pollWatch's own contract.

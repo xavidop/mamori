@@ -28,7 +28,7 @@ type options struct {
 	debounce     time.Duration
 	queueDepth   int
 	stale        time.Duration // 0 = disabled
-	backoffBase  time.Duration
+	backoffBase  time.Duration // 0 = disabled; see WithBackoff
 	backoffMax   time.Duration
 	meter        Meter
 	tracer       Tracer
@@ -47,6 +47,13 @@ type options struct {
 	onError  func(error)
 }
 
+// defaultOptions returns the option set every Load and Watch starts from.
+//
+// backoffBase/backoffMax are deliberately absent, leaving the retry backoff
+// window at zero: backoff is opt-in via WithBackoff. This used to name 1s/1m
+// here while nothing in the engine read either field, so those numbers never
+// described real behavior; adopting them once the option was implemented would
+// have changed the retry cadence of every existing caller. See WithBackoff.
 func defaultOptions() *options {
 	return &options{
 		providers:    map[string]Provider{},
@@ -56,8 +63,6 @@ func defaultOptions() *options {
 		jitter:       defaultJitter,
 		debounce:     defaultDebounce,
 		queueDepth:   defaultQueueDepth,
-		backoffBase:  time.Second,
-		backoffMax:   time.Minute,
 		meter:        noopMeter{},
 		tracer:       noopTracer{},
 	}
@@ -123,7 +128,47 @@ func WithHistory(n int) Option {
 	}
 }
 
-// WithBackoff configures per-ref exponential backoff on resolve failure.
+// WithBackoff enables per-ref exponential backoff on resolve failure for
+// polled refs. After a ref fails to resolve, its next attempt is delayed by
+// base instead of the poll interval; each further consecutive failure doubles
+// that delay, held at max once it gets there. Any successful round trip with
+// the backend resets it, and the ref returns to the normal poll interval.
+//
+// Backoff is OFF by default. Without this option a failing ref is retried on
+// the WithPollInterval cadence, exactly as it always has been - which is the
+// point: this option set two fields nothing read until it was implemented, so
+// no existing caller can have been relying on backoff, and switching it on for
+// everyone would have made a just-failed backend get retried far sooner than
+// its operators had ever seen. Choose the window deliberately.
+//
+// Normalization: a base of zero or less disables backoff, so WithBackoff(0, 0)
+// turns it back off. A max below base is raised to base, which gives
+// WithBackoff(d, 0) the meaning "retry every d while failing" rather than
+// unbounded exponential growth.
+//
+// Three behaviors are worth knowing before choosing a window.
+//
+// It does not apply to providers with a native watch. A WatchableProvider
+// (Kubernetes informers, Consul blocking queries, Postgres LISTEN/NOTIFY, the
+// mamori:// SSE client, ...) owns its own stream and its own reconnection
+// cadence; mamori polls nothing on its behalf, so there is no attempt for this
+// option to delay. Reconnect behavior for those is provider-internal and
+// documented per provider. The single exception is a native watch that fails
+// to START: mamori falls back to the polling adapter for that ref, and backoff
+// governs it from then on like any other polled ref.
+//
+// A not-found is not a failure. ErrNotFound means the backend answered and the
+// ref is absent, which is ordinary default:/optional: territory; it ends a
+// streak rather than extending one, so a ref that gets provisioned after the
+// process starts is still discovered on the normal poll interval.
+//
+// It interacts with WithStale. Staleness is escalated to a *StaleError on the
+// first failed attempt after maxAge elapses, and backoff is what pushes that
+// attempt out, so a large max delays the OnError signal by up to one backoff
+// step. Watcher.Status and Watcher.Health are unaffected: they recompute Age
+// and Stale at read time from the last success, so a readiness probe still
+// turns unhealthy at exactly maxAge. Keep max well under the WithStale
+// threshold if the OnError timing matters to you.
 func WithBackoff(base, max time.Duration) Option {
 	return func(o *options) { o.backoffBase, o.backoffMax = base, max }
 }
