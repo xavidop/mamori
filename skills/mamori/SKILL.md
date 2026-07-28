@@ -115,7 +115,7 @@ mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
 
 Rules to hold onto:
 - `WithPreApplyTimeout` bounds the hook, defaulting to 10s. It cannot be disabled, and exceeding it is a **rejection**, not an acceptance - mamori does not know the candidate works, so it does not apply it.
-- The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, and `w.Unpin` are commands serviced by that same goroutine, so calling one from inside the hook blocks forever waiting for a reply only that same, currently-busy goroutine could send - and the timeout does not rescue this, since it only cancels the hook's `ctx`, which those methods do not take. Never call back into the same `Watcher` from a `PreApply` hook.
+- The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, and `w.Unpin` are commands serviced by that same goroutine, and the timeout does not rescue them, since it only cancels the hook's `ctx`, which those methods do not take. Never call back into the same `Watcher` from a `PreApply` hook. mamori detects it if you do, and refuses the call rather than hanging: `Pin` returns `ErrReentrantCall`, `PinCurrent` returns `0` (versions start at 1), and `Unpin` does nothing and leaves the watcher pinned. Calls from any other goroutine are unaffected.
 - A hook typed for a different config than the one passed to `Watch[T]`/`Load[T]` fails `Watch` and `Load` outright (an error wrapping `ErrInvalid`), rather than silently leaving the gate open.
 
 ## Choosing a provider

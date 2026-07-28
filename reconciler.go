@@ -93,6 +93,20 @@ type Watcher[T any] struct {
 	// separate "closed" signal needed to get the same guarantee.
 	ctx context.Context
 
+	// inPreApply holds the ID of the goroutine currently running a PreApply
+	// hook for this watcher, and 0 whenever no hook is running - which is
+	// always, for a watcher with no gate installed. Only flush arms it (see
+	// runPreApply's mark parameter), so it names the reconciler goroutine and
+	// no other; sendPin is the only reader.
+	//
+	// It is a goroutine ID rather than a bool because the two questions are not
+	// the same one. "Is a hook running" is true for every caller in the process
+	// while a hook runs, and refusing all of them would break correct code that
+	// merely overlapped a rotation. "Is the caller the goroutine that is inside
+	// the hook" is true only for the caller that is genuinely waiting on itself,
+	// which is exactly the set that can never be answered.
+	inPreApply atomic.Uint64
+
 	// adminServer and adminAddrVal are set only when WithAdminHTTP was given to
 	// Watch (see adminhttp.go); both are nil/unset otherwise. adminServer is
 	// used by Close to shut the server down; adminAddrVal backs AdminAddr.
@@ -1098,7 +1112,7 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
 		Old:    e.lastGood,
 		New:    cand,
 		Fields: fields,
-	}); err != nil {
+	}, &e.w.inPreApply); err != nil {
 		for _, f := range fields {
 			e.applied[f.Path] = f.OldVersion
 		}

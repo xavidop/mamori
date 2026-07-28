@@ -75,19 +75,34 @@ Exceeding the budget is a **rejection, not an acceptance**. On timeout, mamori d
 
 ## Do not call back into the same Watcher
 
-The hook runs on the reconciler goroutine, which is what lets it block the swap in the first place. That has one consequence you have to design around: `Get()` is a lock-free atomic load, so it is safe to call from inside the hook, but `Pin`, `PinCurrent`, and `Unpin` are commands sent to, and serviced by, that very same goroutine. Calling one of them from inside a `PreApply` hook blocks the hook forever waiting for a reply that only the goroutine it is currently occupying could ever send.
+The hook runs on the reconciler goroutine, which is what lets it block the swap in the first place. That has one consequence you have to design around: `Get()` is a lock-free atomic load, so it is safe to call from inside the hook, but `Pin`, `PinCurrent`, and `Unpin` are commands sent to, and serviced by, that very same goroutine. Calling one of them from inside a `PreApply` hook asks for a reply that only the goroutine it is currently occupying could ever send.
 
-`WithPreApplyTimeout` does not rescue this. The timeout only cancels the `ctx` handed to the hook; `Pin`, `PinCurrent`, and `Unpin` take no `ctx` at all, so there is nothing for the timeout to cancel on their side. A hook stuck this way wedges the whole watcher, not just its own check, until something outside the hook cancels the watcher, typically `w.Close()` or the parent context passed to `Watch`.
+`WithPreApplyTimeout` does not rescue this. The timeout only cancels the `ctx` handed to the hook; `Pin`, `PinCurrent`, and `Unpin` take no `ctx` at all, so there is nothing for the timeout to cancel on their side.
+
+**mamori detects this and fails the call instead.** Until it did, a hook stuck this way wedged the whole watcher permanently, not just its own check: no reconciliation, no `OnChange`, no `OnError`, nothing until something outside the hook cancelled the watcher (`w.Close()`, or the parent context passed to `Watch`). Now the call returns immediately, changes no pin state, and the hook carries on:
+
+| Called from inside a hook | Result |
+| --- | --- |
+| `Get()` | Works, and is the supported way to read from a hook. Returns the snapshot this candidate would supersede, since the swap has not happened yet. |
+| `Pin(v)` | Returns `ErrReentrantCall`. Nothing is pinned. |
+| `PinCurrent()` | Returns `0`. Versions start at 1, so `0` never collides with a real one. Nothing is pinned. |
+| `Unpin()` | Does nothing. Its signature has no error to return, so it leaves the watcher pinned and `Pinned()` still reports so. |
 
 ```go
 mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
-	_ = w.Get()    // fine: a lock-free atomic load, safe from inside the hook
-	w.PinCurrent() // do not do this: wedges the watcher, not bounded by the timeout
+	_ = w.Get() // fine: a lock-free atomic load, safe from inside the hook
+
+	// Refused, not hung: returns ErrReentrantCall at once and pins nothing.
+	if err := w.Pin(1); errors.Is(err, mamori.ErrReentrantCall) {
+		// call Pin from another goroutine instead
+	}
 	return nil
 })
 ```
 
-If a hook needs to compare against something other than `ev.Old` or `ev.New`, keep a reference outside the `Watcher` rather than asking the watcher for it mid-hook.
+The detection keys on *which* goroutine is inside the hook, not merely that one is. A `Pin` issued from an unrelated goroutine that happens to overlap a running hook is not affected: it waits for the reconciler to come free and is then serviced normally, exactly as before.
+
+If a hook needs to compare against something other than `ev.Old` or `ev.New`, keep a reference outside the `Watcher` rather than asking the watcher for it mid-hook. Detection turns a hang into a diagnosable error; it does not make the call work.
 
 ## Runs on the initial load too
 

@@ -58,7 +58,29 @@ type pinReply struct {
 // not just the Close one, and returns errWatcherClosed: from the caller's
 // perspective, "the reconciler is gone" reads the same regardless of which
 // path caused it.
+//
+// There is one way to block on control forever that ctx.Done cannot rescue, and
+// the guard below is it: a PreApply hook calling back into its own Watcher. The
+// hook runs ON the reconciler goroutine (see preapply.go), so while it runs
+// there is no receiver for control at all, and the caller waiting for one IS
+// the goroutine that would have to become that receiver. Nothing short of Close
+// ever resolves it, and until then the watcher does not reconcile, does not
+// deliver OnChange and does not report an error - a silent, permanent wedge. So
+// this refuses the command instead, and w.inPreApply is what makes the refusal
+// precise: it holds the ID of the goroutine currently inside a hook, so only a
+// caller that is genuinely waiting on itself is turned away. A pin command from
+// any other goroutine, including one issued while a hook happens to be running,
+// still queues on control and is serviced when the reconciler comes back to its
+// select, exactly as it always was.
+//
+// The check is one atomic load on the path that matters: inPreApply is zero
+// whenever no hook is running, which for a watcher with no PreApply gate is
+// always, and the goroutine-ID lookup is reached only when a pin command truly
+// overlaps a hook.
 func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
+	if id := w.inPreApply.Load(); id != 0 && id == goroutineID() {
+		return pinReply{err: ErrReentrantCall}
+	}
 	cmd.reply = make(chan pinReply, 1)
 	select {
 	case w.control <- cmd:
@@ -73,6 +95,10 @@ func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
 // keeps reporting the diverging Live version underneath. It returns
 // ErrNoSuchSnapshot if that version is not retained; raise WithHistory to
 // pin further back.
+//
+// It returns ErrReentrantCall, immediately and without pinning anything, when
+// called from inside a PreApply hook: the hook occupies the goroutine that
+// would service this command. Call it from another goroutine.
 func (w *Watcher[T]) Pin(version uint64) error {
 	return w.sendPin(pinCmd{kind: pinAt, version: version}).err
 }
@@ -81,6 +107,14 @@ func (w *Watcher[T]) Pin(version uint64) error {
 // returns that version. Unlike Pin, it always succeeds and needs no
 // retained history, since it pins to the live snapshot rather than looking
 // one up in it.
+//
+// It returns 0, pinning nothing, in the two cases where it cannot succeed: the
+// watcher is closed, or it was called from inside a PreApply hook (see
+// ErrReentrantCall - the signature has no room for one, and widening it would
+// break every caller). Zero is unambiguous rather than a convenient lie:
+// versions start at 1, so it can never collide with a version this really
+// pinned, which is the same disambiguation Pinned relies on. Callers that need
+// to distinguish the two causes, or to be sure at all, can check Pinned.
 func (w *Watcher[T]) PinCurrent() uint64 {
 	return w.sendPin(pinCmd{kind: pinCurrent}).version
 }
@@ -90,6 +124,17 @@ func (w *Watcher[T]) PinCurrent() uint64 {
 // accumulated diff of everything that changed while pinned, no matter how
 // many updates were reconciled (and recorded to history) in the meantime. It
 // is a no-op if the watcher is not currently pinned.
+//
+// It is also a no-op when called from inside a PreApply hook (see
+// ErrReentrantCall): it returns immediately and leaves the pin exactly as it
+// found it, so the watcher stays pinned and Pinned still says so. It reports
+// nothing, because it has nothing to report it with. Giving it an error return
+// would be an incompatible change to a released API - it breaks every func()
+// this method value is assigned to, t.Cleanup(w.Unpin) among them, and turns
+// every existing call site into an unchecked-error lint finding - which is too
+// much to charge every correct caller for a signal only an incorrect one can
+// ever see. Pin, called the same wrong way, returns the error in full; the
+// mistake is the same mistake, and diagnosing it once is enough.
 func (w *Watcher[T]) Unpin() {
 	w.sendPin(pinCmd{kind: unpin})
 }

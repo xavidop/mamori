@@ -26,6 +26,32 @@ var ErrNoSuchSnapshot = errors.New("mamori: no such snapshot version")
 // unambiguous from the fact that Close was called.
 var errWatcherClosed = errors.New("mamori: watcher closed")
 
+// ErrReentrantCall reports a pin command issued from inside a PreApply hook.
+//
+// The hook runs ON the reconciler goroutine; Pin, PinCurrent and Unpin are
+// commands SERVICED by that same goroutine. Calling one from inside a hook asks
+// the goroutine to answer a message it cannot reach until the hook it is
+// running returns, and the call takes no context to escape on: before this was
+// detected, it blocked until Close, with no reconciliation, no OnChange and no
+// OnError in the meantime. This sentinel converts that permanent, silent wedge
+// into an immediate, diagnosable refusal that leaves pin state untouched.
+//
+// Unlike errWatcherClosed it is exported, because the two errors sit at
+// opposite ends of what a caller can do about them: a closed watcher is an
+// expected lifecycle race with Close and needs no test, while this one is a
+// programming mistake in the caller's own hook, and a test that wants to prove
+// the mistake is caught (or a wrapper that wants to translate it) needs
+// errors.Is to reach it.
+//
+// Pin returns it directly. PinCurrent returns version 0 and Unpin does nothing;
+// see their doc comments for why, and for what each leaves observable instead.
+//
+// Any future command serviced by the reconciler goroutine belongs here too. If
+// Refresh lands, route it through sendPin's guard and name it in this message:
+// a sentinel that lists three of the four commands it covers is worse than one
+// that lists none.
+var ErrReentrantCall = errors.New("mamori: Pin, PinCurrent and Unpin cannot be called from inside a PreApply hook, which occupies the reconciler goroutine that services them; Get is safe inside a hook, but these must be called from another goroutine")
+
 // Kind is a coarse, provider-independent classification of a resolve failure.
 // It exists so diagnostics can distinguish conditions that need human action
 // (a missing secret, a denied permission) from transient ones (an unreachable

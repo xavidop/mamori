@@ -133,12 +133,46 @@ w, err := mamori.Watch[Config](ctx,
 same `Watcher` will deadlock. `w.Get()` is lock-free and safe; the others are
 not, and they do not all fail the same way.
 
-`Pin`, `PinCurrent`, and `Unpin` take **no context**. `sendPin` (`pin.go:61`)
+`Pin`, `PinCurrent`, and `Unpin` take **no context**. `sendPin` (`pin.go`)
 selects only on the control channel and on the watcher's own `ctx`, so with the
 reconciler goroutine sitting inside the hook, the send blocks and nothing
 releases it short of `Close`. The hook's timeout does **not** rescue this: the
 hook is blocked inside `sendPin`, which never looks at the context the hook was
 given. The result is a permanently wedged watcher, not a bounded stall.
+
+**This is now detected** (added after task 5, by agreement with the repository
+owner; it is not in the original task list above). `sendPin` refuses the command
+rather than attempting the send, so the wedge above is no longer reachable
+through the pin commands:
+
+- The engine records the ID of the goroutine running the hook in
+  `Watcher.inPreApply` for the hook's duration, armed and cleared by
+  `runPreApply` (the clear is deferred, so a panicking hook cannot leave it set).
+  It is zero at all other times, and for a watcher with no hook installed it is
+  never written at all.
+- `sendPin` compares that mark against its own caller's goroutine ID and returns
+  the exported sentinel `ErrReentrantCall` on a match.
+- `Pin` returns the sentinel. `PinCurrent` returns version `0`, which no real
+  version ever is (versions start at 1 - the same disambiguation `Pinned` uses),
+  because its signature carries no error. `Unpin` does nothing and leaves the
+  pin in place, observable through `Pinned`; it keeps its `func()` signature
+  because widening it is an incompatible change to a released API, and the
+  identical mistake made through `Pin` is already reported in full.
+
+The mark is a goroutine **identity**, not a boolean, on purpose. A boolean would
+answer "is a hook running anywhere", and refusing on that would reject a `Pin`
+from an unrelated caller goroutine that merely overlapped a rotation - once per
+rotation, for a window as wide as the hook's whole budget, with an error telling
+that caller to do what it was already doing. Go does not expose goroutine
+identity, so it is read out of the header line of `runtime.Stack(buf, false)`,
+which does not stop the world and is reached at most twice per hook invocation.
+Every parse failure returns 0, which disables detection and restores the
+previous behavior; it can never manufacture a false match.
+
+Not addressed, because it is out of reach of this mechanism: watcher A's hook
+calling into watcher B while B's hook calls into A. That is a cross-watcher
+deadlock, not reentrancy, it is unchanged by this work, and detecting it needs a
+lock-order graph rather than a mark.
 
 `Refresh(ctx)` is different, because it takes a caller context and selects on it
 (section 6), so a hook calling it fails on that context's deadline rather than

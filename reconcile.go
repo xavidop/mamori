@@ -284,7 +284,14 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 			fields = append(fields, FieldChange{Path: r.spec.Path, NewVersion: r.value.Version})
 		}
 	}
-	if err := runPreApply(ctx, hook, o.preApplyTimeout, Change[T]{New: cfg, Fields: fields}); err != nil {
+	// The reentrancy mark is nil here, and that is not an oversight: this gate
+	// runs on the CALLER's goroutine, inside Load or inside Watch before it has
+	// constructed a Watcher at all. There is no reconciler goroutine yet and no
+	// control channel to send on, so there is nothing a hook could reenter -
+	// a hook reaching for the Watcher this load is producing can only find the
+	// nil it has not been assigned yet. Only flush's gate, which runs on the
+	// reconciler goroutine itself, needs the mark (see reconciler.go).
+	if err := runPreApply(ctx, hook, o.preApplyTimeout, Change[T]{New: cfg, Fields: fields}, nil); err != nil {
 		return cfg, nil, err
 	}
 
