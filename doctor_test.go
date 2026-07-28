@@ -100,6 +100,32 @@ func TestDoctorUnregisteredSchemeIsInvalid(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsDecodeFailureAsInvalid(t *testing.T) {
+	// Doctor does not decode into T, but a ref's ?decode= pipeline runs inside
+	// resolution (resolveRef), so a value whose declared encoding does not
+	// match what the backend holds is a per-field failure here, classified
+	// invalid - which is the point of a preflight check, since it is exactly
+	// how the same ref would fail at Load. Doctor's doc comment says so; this
+	// pins it.
+	t.Setenv("MAMORI_DOC_BAD_B64", "not!valid!base64")
+	type Config struct {
+		A []byte `source:"env:MAMORI_DOC_BAD_B64?decode=base64"`
+	}
+	rep, err := Doctor[Config](context.Background())
+	if err != nil {
+		t.Fatalf("Doctor returned a walk error: %v", err)
+	}
+	if len(rep.Fields) != 1 {
+		t.Fatalf("Doctor reported %d fields, want 1", len(rep.Fields))
+	}
+	if got := rep.Fields[0].LastKind; got != KindInvalid {
+		t.Errorf("LastKind = %q, want %q", got, KindInvalid)
+	}
+	if rep.Healthy {
+		t.Errorf("Doctor reported healthy despite a failing decode pipeline")
+	}
+}
+
 func TestDoctorOptionalAbsentFieldIsHealthy(t *testing.T) {
 	// A field that is optional and absent resolves in practice (it is left at
 	// its zero value), so Doctor must report it healthy, not as a failure.

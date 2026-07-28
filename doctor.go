@@ -15,8 +15,12 @@ import (
 // The returned error is non-nil only when T itself cannot be walked as a config
 // struct. Individual field failures are recorded in the Report, not returned, so
 // a caller sees every problem at once rather than only the first. Doctor does
-// not decode or validate; a field that resolves but fails validation is Load's
-// concern, not a reachability check's.
+// not populate T's fields or validate them: a field that resolves but fails
+// validation is Load's concern, not a reachability check's. It does run a ref's
+// ?decode= pipeline, which happens inside resolution rather than after it (see
+// resolveRef), so a value whose declared encoding does not match what the
+// backend holds is reported here as a failed field with LastKind "invalid" -
+// exactly as it would fail at Load, which is the point of a preflight check.
 //
 // Report.Snapshot and Report.Live are always 0, signaling a one-shot probe
 // rather than a running watcher's snapshot (whose version starts at 1).

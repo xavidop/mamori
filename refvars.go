@@ -10,11 +10,15 @@ import (
 // struct tags. Expansion happens once, when Load, Watch, or Doctor walks the
 // config struct, before any ref is parsed, so a variable may supply a scheme, a
 // path segment, a fragment, or a query value. Because expansion runs against
-// the whole raw tag string before it is split into refs, a variable's value
-// can also inject a comma and thereby change how a multi-ref precedence chain
-// splits. Variables are operator-supplied through this function, so that is
-// part of the same trust model as the rest of this doc comment, not a
-// separate gap.
+// the whole raw tag string before it is split into refs and before ParseRef
+// sees it, a variable's value can also re-cut the ref: a comma changes how a
+// multi-ref precedence chain splits, and a '#' or '?' moves the fragment or
+// query delimiter, since ParseRef cuts at the first of each. The last two are
+// the ones to watch, because they yield a valid ref for a different location
+// rather than an error, which then resolves not-found into the field's
+// default:. Values are operator-supplied through this function, so this is
+// part of the same trust model as the rest of this doc comment, not a separate
+// gap; keep ref punctuation out of them.
 //
 // Nothing is expanded unless it appears here. mamori never reads the ambient
 // environment for this, and that is a deliberate security property rather than

@@ -34,7 +34,10 @@ func VersionHash(b []byte) string {
 //
 // If key is empty, data is returned unchanged. String values are returned
 // unquoted; objects, arrays, numbers, and booleans are returned as their JSON
-// encoding, byte-for-byte as they appeared in the payload.
+// encoding, byte-for-byte as they appeared in the payload. A selected JSON
+// null returns zero bytes, not "null", so it is indistinguishable from an
+// empty string (see unquoteJSON for why that is deliberate); a null nested
+// inside a selected object or array is unaffected.
 //
 // An absent key or an out-of-range index wraps ErrNotFound, so the field's
 // default: or optional handling applies. A structural mismatch (a pointer

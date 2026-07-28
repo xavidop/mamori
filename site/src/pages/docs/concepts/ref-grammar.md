@@ -64,6 +64,12 @@ aws-sm://prod/db#/a~1b                        a pointer whose one token
                                                also addresses a top-level key -
                                                just one whose name itself
                                                contains a "/"
+aws-sm://prod/db#/~1etc~1passwd               the same trick for a top-level
+                                               key that *starts* with a "/":
+                                               one token unescaping to
+                                               "/etc/passwd". Written
+                                               unescaped, "#/etc/passwd" is a
+                                               two-token pointer instead
 ```
 
 This is what keeps `#ca.crt`, `#tls.crt`, and `#tls.key` addressing the keys
@@ -91,6 +97,20 @@ find-and-replace calls: replacing every `~0` before every `~1` would turn the
 literal token `~01` into `~1` and then into `/`, which is wrong. Escapes let a
 pointer address a key whose name contains a literal `/` or `~`, exactly as if
 you had looked it up directly by that name.
+
+The case worth calling out is a top-level key whose name **begins** with `/`,
+since that is also the discriminator that makes a fragment a pointer at all:
+
+| Fragment | Selects |
+| --- | --- |
+| `#/etc/passwd` | a two-token pointer: key `etc`, then key `passwd` |
+| `#/~1etc~1passwd` | the single top-level key literally named `/etc/passwd` |
+
+Only the second form reaches such a key. The first is not an error - it is a
+well-formed pointer that simply finds no `etc` object, so it reports
+`ErrNotFound`, which a field's `default:` or `optional` then absorbs silently.
+If a key beginning with `/` seems to have gone missing on upgrade, that is the
+reason: escape the leading slash as `~1`.
 
 ### Array indices
 
@@ -124,11 +144,22 @@ An index token is digits only, per RFC 6901's `"0" / (%x31-39 *DIGIT)`:
 ## Return semantics
 
 Object keys and array indices interleave freely at any depth. A JSON string
-yields its unquoted contents; any other JSON value (object, array, number,
-boolean, null) yields its JSON encoding, byte-for-byte as it appeared in the
-payload. This holds for both fragment forms and is what makes the same
-fragment usable for both a `secret.String` field and a `flatten:"json"`
-struct field with no second rule.
+yields its unquoted contents; an object, array, number, or boolean yields its
+JSON encoding, byte-for-byte as it appeared in the payload. This holds for
+both fragment forms and is what makes the same fragment usable for both a
+`secret.String` field and a `flatten:"json"` struct field with no second rule.
+
+**A JSON `null` is the one exception: it selects successfully and yields zero
+bytes**, not the four bytes `null`. It is therefore indistinguishable from an
+empty string (`""`), and - because it is a success, not an `ErrNotFound` - it
+does **not** trigger the field's `default:` or `optional` handling either. If
+a value may legitimately be null and has to be told apart from an empty one,
+select the *enclosing* object instead and let `flatten:"json"` decode it into
+a pointer field: a `null` leaves that pointer `nil`, while `""` gives a
+non-nil pointer to an empty string. Note this applies only to a `null` the
+fragment selects directly; one nested *inside* a selected object or array is
+carried through verbatim, so `#/replicas` over `{"replicas":[null,1]}` still
+yields `[null,1]`.
 
 ## Errors
 
@@ -301,6 +332,15 @@ and `mamori doctor` redact, so it stays visible in a `Report`. That is
 deliberate: an operator debugging a garbled value needs to see that a
 decoding step is in play, and `?decode=` alone is not itself sensitive.
 
+### `?decode=` is a client-side concern
+
+`?decode=` is applied by core, in the process that loads the config, so it
+belongs on the ref in *your* `source` tag - including a `mamori://name` ref
+pointing at a [config server](/docs/server/). A
+[server binding](/docs/server/bindings/) may not carry it: the server serves
+what the upstream holds and never runs the pipeline, so it rejects the option
+at construction rather than silently serving still-encoded bytes.
+
 ## Ref interpolation (`${VAR}`)
 
 `${VAR}` in a `source` tag is expanded from variables you supply through
@@ -416,6 +456,43 @@ writing the two-element chain directly. It is worth knowing about, though,
 if a variable's value is ever assembled from anything less trusted than the
 caller itself.
 
+### A value containing `#` or `?` re-cuts the ref
+
+The comma above is the benign case - it still produces a working chain. `#`
+and `?` are the ones to watch, because a value containing either **moves the
+fragment or query delimiter** and the result is a valid ref that resolves to
+the wrong thing rather than an error. Expansion is textual and runs before
+`ParseRef`, which splits the query at the *first* `?` and the fragment at the
+*first* `#`, so a delimiter arriving from a variable's value wins over the one
+you wrote:
+
+```go
+DBUser string `source:"aws-sm://${ENV}/db#/credentials/user"`
+```
+
+| `ENV` | Ref actually resolved |
+| --- | --- |
+| `prod` | path `prod/db`, pointer `/credentials/user` - as written |
+| `prod?x` | path `prod`, **no fragment**, and `x/db#/credentials/user` swallowed into the query as an option name |
+| `prod#y` | path `prod`, fragment is now the literal key `y/db#/credentials/user` |
+
+Both of the last two rows resolve not-found and then quietly fall through to
+the field's `default:` or `optional`. The same applies to a variable in the
+fragment or query position, which
+[`#${KEY}?region=${REGION}`](#when-expansion-runs) makes an ordinary thing to
+write: a `KEY` of `pass?word` yields the fragment `pass` plus a junk
+`word?region` option, silently selecting the wrong key *and* dropping the
+region.
+
+mamori deliberately does not validate or escape variable values to prevent
+this. Supplying a scheme, a fragment, or a query value is an advertised use of
+`${VAR}`, so there is no rule that could tell "this `?` starts the query I
+meant" from "this `?` came from a value". The rule to hold instead is the one
+`WithRefVars` states already: variable values are operator-supplied
+identifiers - environment names, regions, tenants - not text assembled from
+anything the operator does not control. Keep `#`, `?`, and `,` out of them,
+and if a value is ever built from a less trusted source, check it there.
+
 ### Compatibility: the scan always runs
 
 Expansion scans every `source` tag whether or not the caller ever calls
@@ -430,7 +507,9 @@ misconfiguration this feature exists to prevent.
 The realistic thing this changes on upgrade is a pre-existing tag that
 happens to contain a literal `$$` or a stray `${`, most plausibly inside an
 `exec:` command line; that text now means something different, or fails,
-rather than passing straight through as inert.
+rather than passing straight through as inert. See
+[What changes on upgrade](#what-changes-on-upgrade) for the full list of
+behavior changes this grammar brings.
 
 ### Visibility: expanded refs are visible, not redacted
 
@@ -445,6 +524,32 @@ regions, service names, and tenant identifiers - anything you'd be
 comfortable seeing on a status page or in `mamori doctor` output. A secret
 still belongs in the *value* a ref resolves to (the payload behind
 `aws-sm://...`), never in a variable spliced into the ref's own text.
+
+## What changes on upgrade
+
+Pointer fragments, `?decode=`, and `${VAR}` are new grammar, so almost every
+existing tag keeps its meaning. Four things do not, and none of them announces
+itself at the call site:
+
+| Existing tag or behavior | Was | Is now |
+| --- | --- | --- |
+| A tag containing `$$` | two literal `$` characters, passed through | one literal `$` - [the scan always runs](#compatibility-the-scan-always-runs) |
+| A tag containing `${` | inert literal text | a variable reference: a hard `ErrInvalid` at `Load`/`Watch`/`Doctor` if it is unterminated or names a variable no `WithRefVars` supplied |
+| A fragment naming a top-level key that *starts* with `/` | that literal key | [a JSON Pointer](#escapes), so it reports `ErrNotFound` and a `default:`/`optional` absorbs it. Escape the leading slash: `#/~1etc~1passwd` |
+| `SelectKey` against a payload that is not JSON | an unclassified error, `mamori.ErrorKind` of `unknown` | wraps `ErrInvalid`, `ErrorKind` of `invalid` |
+
+The first two are most plausible in an `exec:` command line, which is the one
+place a `$` regularly appears in a tag. The last one changes no control flow -
+neither kind is not-found, so `default:` was never involved either way - but it
+does change the `Kind` a `Status()`, admin `Report`, or `mamori doctor` output
+reports, which matters if anything alerts on those strings.
+
+**Provider authors:** `providertest.Run`'s
+[`DecodeOption` case](/docs/writing-a-provider/conformance/#decodeoption) is
+**not** opt-in - it runs for every provider. An out-of-tree provider that
+strips, rewrites, or errors on a query option it does not recognize starts
+failing the conformance suite on upgrade. That is the bug it exists to catch:
+such a provider silently breaks `?decode=` for its users.
 
 ## See also
 

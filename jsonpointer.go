@@ -153,8 +153,21 @@ func arrayIndex(tok string) (int, error) {
 }
 
 // unquoteJSON returns a JSON string's unquoted contents, or raw unchanged for
-// any other JSON value. It is the shared final step of both SelectKey's literal
-// path and selectPointer, so both encode a selected value identically.
+// any other JSON value except null. It is the shared final step of both
+// SelectKey's literal path and selectPointer, so both encode a selected value
+// identically.
+//
+// null is the exception because json.Unmarshal of "null" into a string
+// SUCCEEDS and leaves the string untouched, so this returns zero bytes for it
+// rather than the four bytes "null" - a selected null is indistinguishable
+// from a selected empty string. That is long-standing behavior, and both the
+// pointer and literal-key paths share it, so it is documented here (and on
+// SelectKey, and in the ref-grammar page) rather than "fixed": changing it
+// would silently alter what an existing field receives, and the alternative
+// encodings are no better - "null" would make a plain string field read the
+// literal text, and an error would turn a present-but-null value into a
+// failure. A caller that must tell null apart from "" selects the enclosing
+// object and decodes it with flatten:"json" into a pointer field.
 func unquoteJSON(raw json.RawMessage) []byte {
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {

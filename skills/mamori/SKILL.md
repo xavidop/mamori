@@ -62,7 +62,11 @@ Rules to hold onto:
   into a payload that only exists once decoded - drop the `#key`, decode the
   whole payload, and use `flatten:"json"` for that case instead. A bad
   payload is a loud `ErrInvalid`, never silently passed through; a field's
-  `default:` value is exempt - it is used as-is, undecoded.
+  `default:` value is exempt - it is used as-is, undecoded. Decoding is done
+  by core in the process that loads the config, so `?decode=` belongs on the
+  `source` tag you write - including a `mamori://name` ref pointing at a
+  config server. A server-side binding may not carry it (`server.New`
+  rejects it), since that server never runs the pipeline.
 - `${VAR}` in a `source` tag is ref interpolation: it expands from the map
   passed to `mamori.WithRefVars(map[string]string{...})`, once, before the
   tag is parsed - `source:"aws-sm://${ENV}/db#password"`. **Variables come

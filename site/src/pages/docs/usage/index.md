@@ -22,12 +22,12 @@ import (
 
 type Config struct {
 	Port       string        `source:"env:PORT" default:"8080"`
-	DBPassword secret.String `source:"aws-sm://${ENV}/db-password#password"`
+	DBPassword secret.String `source:"aws-sm://${ENV}/db#password"`
 	// #/credentials/user is an RFC 6901 JSON Pointer fragment, selecting a
 	// value nested inside the secret's JSON payload rather than a top-level key.
 	// It is a secret.String, not a plain string, because anything drawn from a
 	// secret-bearing scheme should stay redacted - `mamori vet` enforces this.
-	DBUser     secret.String `source:"aws-sm://${ENV}/db-password#/credentials/user"`
+	DBUser     secret.String `source:"aws-sm://${ENV}/db#/credentials/user"`
 	// ?decode=base64 declares the stored value is base64; core decodes it
 	// back to raw bytes before TLSKey is populated.
 	TLSKey     secret.Bytes  `source:"aws-sm://prod/tls#key?decode=base64"`
