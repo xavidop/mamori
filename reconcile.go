@@ -35,6 +35,13 @@ type options struct {
 	historyN     int               // snapshots retained beyond the current one; 0 = current only
 	refVars      map[string]string // ${VAR} expansion for source tags; nil means none
 
+	// preApply is the gate run before a candidate snapshot becomes current,
+	// typed per T and stored as any for the same reason onChange below is;
+	// Watch[T] asserts it back to a concrete type. preApplyTimeout bounds it
+	// (see WithPreApplyTimeout for why that bound is mandatory).
+	preApply        any
+	preApplyTimeout time.Duration
+
 	// admin server config, consumed only by Watch (see adminhttp.go). Load
 	// accepts the same Option values but has no watcher to run a server
 	// against, so it ignores all three.
@@ -57,15 +64,16 @@ type options struct {
 // have changed the retry cadence of every existing caller. See WithBackoff.
 func defaultOptions() *options {
 	return &options{
-		providers:    map[string]Provider{},
-		validator:    defaultValidator(),
-		clock:        SystemClock(),
-		pollInterval: defaultPollInterval,
-		jitter:       defaultJitter,
-		debounce:     defaultDebounce,
-		queueDepth:   defaultQueueDepth,
-		meter:        noopMeter{},
-		tracer:       noopTracer{},
+		providers:       map[string]Provider{},
+		validator:       defaultValidator(),
+		clock:           SystemClock(),
+		pollInterval:    defaultPollInterval,
+		jitter:          defaultJitter,
+		debounce:        defaultDebounce,
+		queueDepth:      defaultQueueDepth,
+		meter:           noopMeter{},
+		tracer:          noopTracer{},
+		preApplyTimeout: defaultPreApplyTimeout,
 	}
 }
 
