@@ -527,3 +527,228 @@ func TestPreApplyNotCalledWhenNothingChanged(t *testing.T) {
 		t.Errorf("hook called %d extra times for an unchanged value, want 0", got-before)
 	}
 }
+
+// TestPreApplyWrongTypeFailsLoad is Load's counterpart to
+// TestPreApplyWrongTypeFailsWatch. loadValue is the shared load path behind
+// both Load and Watch's initial resolve, and it gates the initial
+// configuration itself (decision D7, see TestPreApplyRejectsInitialLoad below)
+// - which means it needs the very same guard against a mistyped hook that
+// Watch already has, not a bare comma-ok assertion of its own. A bare
+// assertion would report a hook typed for the wrong config as "no hook
+// installed" and return the unverified configuration as though the gate had
+// approved it: Load's own fail-open version of the bug
+// TestPreApplyWrongTypeFailsWatch already closed for Watch, and arguably
+// worse, since it would run before the program has any configuration at all.
+func TestPreApplyWrongTypeFailsLoad(t *testing.T) {
+	type cfg struct {
+		A string `source:"pv://a"`
+	}
+	p := newWatchProvider("pv")
+	p.set("a", "first", "v1")
+
+	_, err := Load[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(context.Context, Change[preApplyOtherConfig]) error {
+			return errors.New("refuse everything")
+		}),
+	)
+	if err == nil {
+		t.Fatal("Load accepted a PreApply hook typed for a different config: the gate would be silently open")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error = %v, want one wrapping ErrInvalid", err)
+	}
+	// Same message requirement as Watch's version: naming both types is the
+	// only way the error is useful when the two candidates are similarly named.
+	for _, want := range []string{"PreApply", "preApplyOtherConfig", "cfg"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestPreApplyRejectsInitialLoad pins decision D7: a hook that verifies a
+// credential should verify the first one too, because discovering at startup
+// that the configured credential does not work beats discovering it at the
+// first rotation. Watch is already fail-fast on its initial Load for every
+// other kind of error (resolve, validation); a PreApply rejection now joins
+// that list rather than being the one failure mode Watch tolerates silently.
+func TestPreApplyRejectsInitialLoad(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pi://a"`
+	}
+	p := newWatchProvider("pi")
+	p.set("a", "bad", "v1")
+	boom := errors.New("initial credential does not work")
+
+	_, err := Watch[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(context.Context, Change[cfg]) error { return boom }),
+	)
+	if err == nil {
+		t.Fatal("Watch must fail when PreApply rejects the initial configuration")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want one wrapping the hook's error", err)
+	}
+	var pe *PreApplyError
+	if !errors.As(err, &pe) {
+		t.Errorf("err = %v, want a *PreApplyError", err)
+	}
+}
+
+// TestPreApplyRejectsLoad is TestPreApplyRejectsInitialLoad's one-shot
+// counterpart: Load shares loadValue with Watch's initial resolve, so the
+// same gate has to reject a one-shot Load exactly the way it rejects Watch's
+// startup load.
+func TestPreApplyRejectsLoad(t *testing.T) {
+	type cfg struct {
+		A string `source:"pl://a"`
+	}
+	p := newWatchProvider("pl")
+	p.set("a", "bad", "v1")
+
+	_, err := Load[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(context.Context, Change[cfg]) error {
+			return errors.New("nope")
+		}),
+	)
+	if err == nil {
+		t.Fatal("Load must fail when PreApply rejects")
+	}
+	var pe *PreApplyError
+	if !errors.As(err, &pe) {
+		t.Errorf("err = %v, want a *PreApplyError", err)
+	}
+}
+
+// TestPreApplyInitialLoadReceivesZeroOld pins what the initial Change looks
+// like on this path: Old is the zero value of T, since nothing was serving
+// yet, and New is the freshly loaded configuration. See
+// TestPreApplyInitialLoadPopulatesFields for the other half of the initial
+// Change, Fields, which is populated rather than left nil.
+func TestPreApplyInitialLoadReceivesZeroOld(t *testing.T) {
+	type cfg struct {
+		A string `source:"pz://a"`
+	}
+	p := newWatchProvider("pz")
+	p.set("a", "value", "v1")
+
+	var gotOld, gotNew string
+	_, err := Load[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			gotOld, gotNew = ev.Old.A, ev.New.A
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if gotOld != "" {
+		t.Errorf("ev.Old.A = %q on the initial load, want the zero value", gotOld)
+	}
+	if gotNew != "value" {
+		t.Errorf("ev.New.A = %q, want value", gotNew)
+	}
+}
+
+// TestPreApplyInitialLoadPopulatesFields pins the other half of the initial
+// Change: Fields is populated, not left nil, by applying the engine's own
+// diff rule (buildCandidate, reconciler.go) against the true prior state at
+// this point in the program's life. e.applied does not exist yet - Watch only
+// seeds it after loadValue returns - so the prior version for every resolved
+// field is the empty string, exactly what a missing e.applied entry already
+// means everywhere else in this codebase (see flush's own comment on that
+// equivalence in reconciler.go). Applying that rule here is what makes
+// ev.Changed(path) report true for a field set on the initial load.
+//
+// This is the test that makes decision D7 actually work for the usage the
+// docs recommend: without Fields populated, the documented guard pattern -
+// "if !ev.Changed(path) { return nil }" - would silently skip verification of
+// the very first value, the same class of silent gate failure Task 3 closed
+// for a mistyped hook, arrived at through the guard pattern PreApply's own
+// docs teach instead.
+func TestPreApplyInitialLoadPopulatesFields(t *testing.T) {
+	type cfg struct {
+		A string `source:"pf://a"`
+	}
+	p := newWatchProvider("pf")
+	p.set("a", "value", "v1")
+
+	var changed bool
+	var fields []FieldChange
+	_, err := Load[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			changed = ev.Changed("A")
+			fields = ev.Fields
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !changed {
+		t.Error(`ev.Changed("A") = false on the initial load, want true: the documented guard ` +
+			"pattern must not skip startup verification")
+	}
+	if len(fields) != 1 {
+		t.Fatalf("ev.Fields = %+v, want exactly one entry for A", fields)
+	}
+	if fields[0].Path != "A" {
+		t.Errorf("fields[0].Path = %q, want A", fields[0].Path)
+	}
+	if fields[0].OldVersion != "" {
+		t.Errorf("fields[0].OldVersion = %q, want empty (no prior version existed at this point)", fields[0].OldVersion)
+	}
+	if fields[0].NewVersion != "v1" {
+		t.Errorf("fields[0].NewVersion = %q, want v1", fields[0].NewVersion)
+	}
+}
+
+// TestPreApplyInitialLoadCallsHookExactlyOnce guards against double-gating
+// Watch's initial resolve. loadValue is the single place that runs the gate
+// for the initial configuration (see its doc comment); Watch stores loadValue's
+// already-gated result straight into the engine without a gate of its own.
+// Were Watch to also assert-and-call the hook itself around its call to
+// loadValue, a rejection would surface as two OnError deliveries and every
+// initial load would cost two round trips (e.g. two dials for a hook that
+// pings a database) instead of one.
+func TestPreApplyInitialLoadCallsHookExactlyOnce(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"psx://a"`
+	}
+	p := newWatchProvider("psx")
+	p.set("a", "first", "v1")
+
+	var calls atomic.Int32
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(context.Context, Change[cfg]) error {
+			calls.Add(1)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	// Settle before asserting: a synchronous check right after Watch returns
+	// would only catch a second call made inline, on the same call stack, and
+	// would miss an asynchronous re-gate performed moments later by the
+	// reconciler goroutine (e.g. a spurious flush of the just-seeded observed
+	// state). No push happens here, so nothing should ever become pending -
+	// this sleep exists purely to give that goroutine a window to misbehave in
+	// before the count is read.
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Errorf("hook called %d times on Watch's initial load, want exactly 1", got)
+	}
+}

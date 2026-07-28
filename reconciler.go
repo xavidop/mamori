@@ -156,6 +156,35 @@ type srcState struct {
 	err   error // meaningful only when seen && err != nil; may wrap ErrNotFound
 }
 
+// typedPreApply asserts o.preApply back to a func(context.Context, Change[T])
+// error, the concrete type PreApply[T] actually stored (options is not
+// generic, so the field is held as any). It returns (nil, nil) when no hook
+// was installed at all, which is the common case.
+//
+// A hook written against some other T would make a bare comma-ok assertion
+// yield nil, and a nil gate is an OPEN gate: the hook would never be called,
+// no error would ever be emitted, and every rotation (or, on the initial load,
+// the very first configuration) would be applied unverified while the caller
+// believed it had been proven to work first. For onChange the same kind of
+// mismatch costs a dropped notification and the application keeps serving
+// correct configuration; for a gate whose only job is refusing credentials
+// that do not work, silence is the worst available outcome. So this returns a
+// loud error instead, wrapping ErrInvalid and naming both types, and is shared
+// by every caller that can observe this mismatch (Watch, and loadValue for
+// both Load and Watch's initial resolve) so none of them can drift into
+// tolerating it via their own bare assertion.
+func typedPreApply[T any](o *options) (func(context.Context, Change[T]) error, error) {
+	if o.preApply == nil {
+		return nil, nil
+	}
+	fn, ok := o.preApply.(func(context.Context, Change[T]) error)
+	if !ok {
+		var want func(context.Context, Change[T]) error
+		return nil, fmt.Errorf("mamori: PreApply hook has type %T, want %T: %w", o.preApply, want, ErrInvalid)
+	}
+	return fn, nil
+}
+
 // Watch performs an initial, fail-fast Load of T and then keeps it reconciled at
 // runtime, delivering validated, diff-aware updates to OnChange. It returns after
 // the initial configuration is resolved (OnChange fires only on subsequent
@@ -166,29 +195,19 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		opt(o)
 	}
 
-	// The PreApply hook is stored as any (options is not generic) and asserted
-	// back to this T here. The mechanism is onChange's, below; the outcome on a
-	// mismatch deliberately is NOT.
-	//
-	// A hook written against some other T yields nil from the assertion, and a
-	// nil gate is an OPEN gate: the hook would never be called, no error would
-	// ever be emitted, and every rotation would be applied unverified while the
-	// caller believed each one had been proven to work first. For onChange the
-	// same mismatch costs a dropped notification and the application keeps
-	// serving correct configuration; for a gate whose only job is refusing
-	// credentials that do not work, silence is the worst available outcome, so
-	// this one fails Watch outright rather than proceeding ungated. Option is
-	// untyped by construction, so Watch is the only place the mismatch can be
-	// caught at all - and catching it before the initial Load means a typo
-	// costs no provider round trips.
-	var preApply func(context.Context, Change[T]) error
-	if o.preApply != nil {
-		fn, ok := o.preApply.(func(context.Context, Change[T]) error)
-		if !ok {
-			var want func(context.Context, Change[T]) error
-			return nil, fmt.Errorf("mamori: PreApply hook has type %T, want %T: %w", o.preApply, want, ErrInvalid)
-		}
-		preApply = fn
+	// Checked here, before loadValue, so that a mismatched hook is caught
+	// before any provider round trip is spent resolving fields - see
+	// typedPreApply's doc comment for why the mismatch is fatal rather than
+	// tolerated. loadValue itself is called just below (for the initial Load)
+	// and now also runs this same check as part of gating that Load's result
+	// (decision D7); asserting it here again is what buys Watch this earlier,
+	// round-trip-free failure on top of that, not a substitute for it. This
+	// call is also where preApply, below, comes from: it is the value stored
+	// into the engine (e.preApply) for every flush after the initial one, not
+	// merely a discarded probe.
+	preApply, err := typedPreApply[T](o)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg, initial, err := loadValue[T](ctx, o)
