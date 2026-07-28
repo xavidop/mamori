@@ -25,10 +25,12 @@ type Config struct {
 	DBPassword secret.String `source:"aws-sm://${ENV}/db-password#password"`
 	// #/credentials/user is an RFC 6901 JSON Pointer fragment, selecting a
 	// value nested inside the secret's JSON payload rather than a top-level key.
-	DBUser     string        `source:"aws-sm://${ENV}/db-password#/credentials/user"`
+	// It is a secret.String, not a plain string, because anything drawn from a
+	// secret-bearing scheme should stay redacted - `mamori vet` enforces this.
+	DBUser     secret.String `source:"aws-sm://${ENV}/db-password#/credentials/user"`
 	// ?decode=base64 declares the stored value is base64; core decodes it
 	// back to raw bytes before TLSKey is populated.
-	TLSKey     []byte        `source:"aws-sm://prod/tls#key?decode=base64"`
+	TLSKey     secret.Bytes  `source:"aws-sm://prod/tls#key?decode=base64"`
 }
 
 func main() {

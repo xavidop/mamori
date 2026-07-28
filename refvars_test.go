@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/xavidop/mamori/secret"
 )
 
 func TestExpandRefVars(t *testing.T) {
@@ -78,7 +80,10 @@ func TestExpandRefVarsNotRecursive(t *testing.T) {
 
 func TestFieldSpecsExpandsAndReportsField(t *testing.T) {
 	type cfg struct {
-		Pass string `source:"aws-sm://${ENV}/db#password"`
+		// secret.String, not a plain string: mamori's own vet analyzer flags a
+		// secret-bearing scheme stored unredacted, and a fixture in this
+		// repository should model what it tells users to write.
+		Pass secret.String `source:"aws-sm://${ENV}/db#password"`
 	}
 	specs, err := fieldSpecs(reflect.TypeOf(cfg{}), map[string]string{"ENV": "prod"})
 	if err != nil {
