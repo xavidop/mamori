@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -840,6 +841,350 @@ func TestRestartOnSamePathKeepsSuccessorSocket(t *testing.T) {
 
 	if _, err := os.Stat(sockPath); err != nil {
 		t.Fatalf("the outgoing server deleted its successor's socket at %s: %v", sockPath, err)
+	}
+
+	// The file surviving is not enough: the successor must still serve on it.
+	client := unixHTTPClient(sockPath)
+	defer client.CloseIdleConnections()
+	vb := getJSON(t, client, "http://unix/v1/values/b")
+	if vb.Name != "b" || string(vb.Bytes) != "v1" {
+		t.Fatalf("valueBody = %+v, want Name=b Bytes=v1 from the surviving server", vb)
+	}
+}
+
+// stallShutdown opens a connection to sockPath that the server accepts but
+// that never completes a request header, so http.Server.Shutdown cannot
+// report the server quiescent and is forced to run out its full
+// shutdownGrace. That widens Close's drain from microseconds into seconds,
+// which is what lets the two tests below observe what has and has not
+// already happened INSIDE the drain rather than racing it.
+//
+// net/http counts such a connection as non-quiescent for the first five
+// seconds after it is accepted: closeIdleConns only reclassifies a StateNew
+// connection (accepted, first request header not yet fully read) as idle
+// once it is more than five seconds old. transportReadHeaderTimeout is 10s,
+// comfortably past shutdownGrace, so the server will not time the half-sent
+// header out first either.
+//
+// The completed request on a SECOND connection is the synchronization, and
+// it is not optional: a listener accepts on a single goroutine in backlog
+// order, so a request that round-trips on a connection dialed LATER proves
+// the accept loop has already taken this one. Without it the stall
+// connection could still be sitting in the kernel backlog when Shutdown
+// closes the listener, where it would hold nothing at all and the tests
+// below would silently stop testing anything.
+func stallShutdown(t *testing.T, sockPath string) net.Conn {
+	t.Helper()
+
+	stall, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial %s to stall shutdown: %v", sockPath, err)
+	}
+	t.Cleanup(func() { _ = stall.Close() })
+
+	// A request line and one header, with no terminating blank line: the
+	// server is now blocked reading the rest of a header that never arrives.
+	if _, err := io.WriteString(stall, "GET /v1/healthz HTTP/1.1\r\nHost: unix\r\n"); err != nil {
+		t.Fatalf("write a partial request header on the stall connection: %v", err)
+	}
+
+	client := unixHTTPClient(sockPath)
+	defer client.CloseIdleConnections()
+	resp, err := client.Get("http://unix/v1/healthz")
+	if err != nil {
+		t.Fatalf("GET /v1/healthz (to confirm the stall connection has been accepted): %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	return stall
+}
+
+// TestCloseUnlinksSocketBeforeDrainingConnections pins the ORDERING inside
+// closeTransports: the Unix socket file must be unlinked while this Server's
+// listener is still open, before Shutdown is ever called, not tidied up
+// afterward.
+//
+// The ordering is the whole correctness argument for removeOwnedSocket. Its
+// ownership check is os.SameFile against an identity captured at bind time,
+// and an inode number identifies a file only while that file is still
+// allocated. An open listener keeps its own socket allocated; a closed one
+// does not, and Linux hands the freed inode number straight to the next file
+// created in that directory - which, during a restart on a fixed path, is
+// the successor's socket. An ownership check made after the listener is
+// closed therefore matches the SUCCESSOR and deletes it, stranding a healthy
+// server on a path no client can dial. See closeTransports and
+// removeOwnedSocket.
+//
+// This test deliberately asserts the ordering rather than that outcome.
+// Reproducing the outcome requires a filesystem that actually recycles inode
+// numbers, which Linux does and macOS does not, so an outcome test passes
+// vacuously on a developer's Mac and only ever fails in CI - see
+// TestRestartDuringPredecessorDrainKeepsSuccessorSocket, which does exactly
+// that and has to skip itself to stay honest about it. The ordering is
+// observable everywhere, so this test is meaningful everywhere.
+//
+// The two outcomes are separated by seconds, not microseconds, which is what
+// makes the assertion deterministic rather than a race: the stall connection
+// holds Shutdown for the full shutdownGrace, so an unlink that happens
+// before the drain shows up within milliseconds, while an unlink that
+// happens after it cannot possibly show up inside the window below.
+func TestCloseUnlinksSocketBeforeDrainingConnections(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	p := mamoritest.NewProvider("udsorder")
+	p.Set("k", "v1")
+
+	sockPath := shortSocketPath(t)
+
+	s, err := New(
+		WithPolicy(AllowAll()),
+		NoAuth(),
+		Bind("b", "udsorder://k"),
+		WithProvider(p),
+		Unix(sockPath, 0o600),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = s.Serve(ctx) }()
+	waitForAddrs(t, s, 1)
+
+	stall := stallShutdown(t, sockPath)
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- s.Close() }()
+
+	// Well inside the drain: shutdownGrace is the earliest the stalled
+	// connection can let Shutdown finish, so anything observed before half
+	// of it has elapsed necessarily happened before the drain ended.
+	//
+	// The verdict is recorded rather than reported on the spot, so that the
+	// drain below is always released and Close always allowed to finish. A
+	// t.Fatalf from inside this loop would leave the stalled connection open
+	// and bury the actual diagnosis under goleak's dump of the goroutines
+	// still working on a teardown this test never let complete.
+	observeBy := time.Now().Add(shutdownGrace / 2)
+	var failure string
+	closeReturned := false
+	for {
+		select {
+		case closeErr := <-closeDone:
+			closeReturned = true
+			failure = fmt.Sprintf("Close returned (err=%v) without the socket file at %s ever being observed unlinked during the drain: the unlink is happening AFTER the listener is closed, where removeOwnedSocket's inode check can no longer tell this server's socket from a successor that rebound the path - see closeTransports", closeErr, sockPath)
+		default:
+		}
+		if closeReturned {
+			break
+		}
+		if _, statErr := os.Stat(sockPath); os.IsNotExist(statErr) {
+			break // Unlinked while still draining: the ordering holds.
+		}
+		if time.Now().After(observeBy) {
+			failure = fmt.Sprintf("socket file at %s still present %s into Close, with a stalled connection still draining: want it unlinked before Shutdown, while the listener still pins its inode - see closeTransports", sockPath, shutdownGrace/2)
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Release the drain so Close can finish and this test leaves nothing
+	// behind for goleak, whatever the verdict above turned out to be.
+	_ = stall.Close()
+	if !closeReturned {
+		select {
+		case closeErr := <-closeDone:
+			if closeErr != nil && failure == "" {
+				failure = fmt.Sprintf("Close: %v", closeErr)
+			}
+		case <-time.After(shutdownGrace + transportTestWait):
+			if failure == "" {
+				failure = "Close did not return after the stalled connection was released"
+			}
+		}
+	}
+
+	if failure != "" {
+		t.Fatal(failure)
+	}
+}
+
+// inodeNumbersAreRecycled reports whether the filesystem holding dir hands a
+// freed inode number straight back to the next file created in its place.
+//
+// It performs exactly the sequence closeTransports must never perform: bind a
+// socket, capture its identity, close the listener, drop the name, and bind
+// again on the same path. Linux answers true (every time, in practice);
+// macOS answers false, because APFS allocates inode numbers monotonically and
+// effectively never reuses one.
+//
+// Probing the behavior beats testing runtime.GOOS: what the test below
+// actually depends on is inode recycling, not an operating system name, and a
+// filesystem that stops recycling should skip the test rather than let it
+// pass vacuously.
+func inodeNumbersAreRecycled(t *testing.T, dir string) bool {
+	t.Helper()
+
+	path := filepath.Join(dir, "recycle-probe.sock")
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	listenProbe := func() (net.Listener, os.FileInfo) {
+		t.Helper()
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			t.Fatalf("inode recycling probe: listen on %s: %v", path, err)
+		}
+		if ul, ok := ln.(*net.UnixListener); ok {
+			// Match bindUnix: the name must outlive the listener, so that
+			// dropping it below is what actually frees the inode.
+			ul.SetUnlinkOnClose(false)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			_ = ln.Close()
+			t.Fatalf("inode recycling probe: stat %s: %v", path, err)
+		}
+		return ln, fi
+	}
+
+	first, before := listenProbe()
+	_ = first.Close()   // the socket is gone; only the name still holds the inode
+	_ = os.Remove(path) // and now nothing does, so the inode is free to reuse
+
+	second, after := listenProbe()
+	_ = second.Close()
+	_ = os.Remove(path)
+
+	return os.SameFile(before, after)
+}
+
+// TestRestartDuringPredecessorDrainKeepsSuccessorSocket is the end-to-end
+// half of TestCloseUnlinksSocketBeforeDrainingConnections: it reproduces the
+// production failure itself rather than the ordering that causes it.
+//
+// TestRestartOnSamePathKeepsSuccessorSocket already covers the easy
+// interleaving, where the successor binds while the predecessor's listener is
+// still open. That one is safe by construction: the predecessor's inode
+// cannot be recycled while it still holds it, so its ownership check cannot
+// be fooled. The dangerous interleaving is the other one - the predecessor's
+// listener is ALREADY CLOSED (http.Server.Shutdown closes it at the very
+// start of its drain) when the successor binds - and that is what this
+// exercises: the successor gets the predecessor's recycled inode number, and
+// an ownership check made at the end of the drain deletes the successor's
+// live socket.
+//
+// It skips where inode numbers are not recycled, because there the successor
+// can never collide with the predecessor's identity and the test would pass
+// whether or not the bug is present. A test that only fails on Linux CI while
+// passing silently on every developer's Mac is worse than no test, so it says
+// so out loud instead.
+//
+// The outgoing server is given TWO Unix listeners, and the connection that
+// stalls its drain is opened on the OTHER one. That is not incidental. A
+// stalled connection is what makes the drain wide enough to bind a successor
+// inside it, but an accepted AF_UNIX connection takes a reference to the
+// LISTENING socket's path (unix_stream_connect does a path_get on it), so a
+// connection held open on the socket being restarted would keep that socket's
+// inode allocated - and an inode that is never freed is never recycled, which
+// is precisely the collision this test needs to provoke. Stalling one socket
+// to observe the other keeps the two requirements from cancelling out:
+// closeTransports runs ONE shared shutdownGrace across every listener, so a
+// connection parked on the stall socket delays the restart socket's cleanup
+// just as effectively, while leaving its inode free to be handed to the
+// successor.
+func TestRestartDuringPredecessorDrainKeepsSuccessorSocket(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	sockPath := shortSocketPath(t)
+	if !inodeNumbersAreRecycled(t, filepath.Dir(sockPath)) {
+		t.Skip("this filesystem does not recycle inode numbers, so a successor socket can never collide with its predecessor's captured identity here; the ordering this protects is covered on every platform by TestCloseUnlinksSocketBeforeDrainingConnections")
+	}
+	// Deliberately a sibling in the SAME directory: ext4 allocates a new
+	// inode from the parent directory's block group first, so keeping both
+	// sockets together is what makes the successor pick up the inode number
+	// the predecessor just released.
+	stallPath := filepath.Join(filepath.Dir(sockPath), "stall.sock")
+
+	p := mamoritest.NewProvider("udsdrain")
+	p.Set("k", "v1")
+
+	newServer := func(opts ...Option) *Server {
+		t.Helper()
+		s, err := New(append([]Option{
+			WithPolicy(AllowAll()),
+			NoAuth(),
+			Bind("b", "udsdrain://k"),
+			WithProvider(p),
+			Unix(sockPath, 0o600),
+		}, opts...)...)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return s
+	}
+
+	oldSrv := newServer(Unix(stallPath, 0o600))
+	oldCtx, oldCancel := context.WithCancel(context.Background())
+	defer oldCancel()
+	go func() { _ = oldSrv.Serve(oldCtx) }()
+	waitForAddrs(t, oldSrv, 2)
+
+	// Hold the outgoing server in its drain for the full shutdownGrace, so
+	// the successor below binds squarely inside the window where the
+	// predecessor's listener is closed but its cleanup has not run yet.
+	stall := stallShutdown(t, stallPath)
+
+	oldCloseDone := make(chan error, 1)
+	go func() { oldCloseDone <- oldSrv.Close() }()
+
+	// The listener closes at the very start of Shutdown, so the path stops
+	// accepting almost immediately. Waiting for that is what puts the
+	// successor's bind inside the drain rather than before it. The dial can
+	// fail either because nothing is listening on the socket file any more or
+	// because the file itself is already gone (which is what the fixed
+	// ordering produces); either answer means the window is open.
+	deadline := time.Now().Add(transportTestWait)
+	for {
+		conn, dialErr := net.Dial("unix", sockPath)
+		if dialErr != nil {
+			break
+		}
+		_ = conn.Close()
+		if time.Now().After(deadline) {
+			t.Fatalf("the outgoing server was still accepting on %s %s after Close began; expected Shutdown to close its listener promptly", sockPath, transportTestWait)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The incoming server takes the path over, exactly as a restart does,
+	// while the outgoing one is still draining.
+	newSrv := newServer()
+	newCtx, newCancel := context.WithCancel(context.Background())
+	defer newCancel()
+	go func() { _ = newSrv.Serve(newCtx) }()
+	defer func() { newCancel(); _ = newSrv.Close() }()
+	waitForAddrs(t, newSrv, 1)
+	waitForLookup(t, newSrv, "b", func(v mamori.Value, k mamori.Kind, hasValue, found bool) bool {
+		return found && k == "" && string(v.Bytes) == "v1"
+	})
+
+	// Let the outgoing server finish its teardown. Whatever cleanup it does
+	// on the way out must not touch the path, which now belongs to the
+	// successor.
+	_ = stall.Close()
+	select {
+	case closeErr := <-oldCloseDone:
+		if closeErr != nil {
+			t.Fatalf("closing the outgoing server: %v", closeErr)
+		}
+	case <-time.After(shutdownGrace + transportTestWait):
+		t.Fatal("the outgoing server's Close did not return after the stalled connection was released")
+	}
+
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("the outgoing server deleted its successor's socket at %s while draining: %v", sockPath, err)
 	}
 
 	// The file surviving is not enough: the successor must still serve on it.

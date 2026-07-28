@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.3.2](https://github.com/xavidop/mamori/compare/v1.3.1...v1.3.2) (2026-07-28)
+
+
+### Bug Fixes
+
+* **server:** unlink the Unix socket before draining, not after ([#58](https://github.com/xavidop/mamori/issues/58)) ([5aa2c87](https://github.com/xavidop/mamori/commit/5aa2c87d47c1a93e0589b09bcc7ce61452876181))
+
 ## [1.3.1](https://github.com/xavidop/mamori/compare/v1.3.0...v1.3.1) (2026-07-27)
 
 

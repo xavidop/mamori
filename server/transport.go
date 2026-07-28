@@ -131,8 +131,10 @@ func InsecureNoTLS() TCPOption {
 // Serve removes ("unlinks") any file already at path before binding (see
 // bindUnix) - a config server that crashed without reaching Close must not
 // fail to restart just because its old socket file is still there - and
-// Close removes it again once the listener is shut down, so neither this run
-// nor the next one ever trips over a stale file either way.
+// Close removes it again at the START of shutdown, while its listener is
+// still open (see closeTransports for why that ordering is load-bearing and
+// not merely tidy), so neither this run nor the next one ever trips over a
+// stale file either way.
 //
 // Every connection accepted on this listener has its kernel-verified peer
 // credentials (uid/gid/pid) captured and stashed into that connection's
@@ -168,7 +170,7 @@ func TCP(addr string, opts ...TCPOption) Option {
 }
 
 // listenerEntry is one listener Serve bound, plus the http.Server serving it
-// and (for a Unix listener) the socket path Close must unlink afterward.
+// and (for a Unix listener) the socket path Close must unlink.
 // Serve appends one of these per configured Unix(...)/TCP(...) spec, in that
 // order (every Unix(...) listener before every TCP(...) listener), and
 // Close/Addrs both read s.entries back in that same order.
@@ -179,9 +181,10 @@ type listenerEntry struct {
 
 	// unixFile identifies the socket file bindUnix created at unixPath, so
 	// shutdown can verify the file still at that path is the same one before
-	// unlinking it (see closeTransports). Nil for a TCP listener, and also
-	// nil when the post-bind stat failed, which is read as "cannot prove
-	// ownership" and leaves the file alone.
+	// unlinking it (see closeTransports, which must make that comparison
+	// while ln below is still open - see removeOwnedSocket's precondition).
+	// Nil for a TCP listener, and also nil when the post-bind stat failed,
+	// which is read as "cannot prove ownership" and leaves the file alone.
 	unixFile os.FileInfo
 }
 
@@ -266,7 +269,9 @@ func bindUnix(spec unixSpec) (net.Listener, os.FileInfo, error) {
 	// on Close by default, with no check that the file still belongs to it,
 	// which is the very deletion described above. Turning that off and doing
 	// the removal in closeTransports lets it be guarded by the identity
-	// captured here.
+	// captured here. closeTransports keeps the stdlib's ORDERING, though -
+	// unlink while the listener is still open - because that is what keeps
+	// this identity meaningful; see removeOwnedSocket's precondition.
 	if ul, ok := ln.(*net.UnixListener); ok {
 		ul.SetUnlinkOnClose(false)
 	}
@@ -479,7 +484,40 @@ func (s *Server) Serve(ctx context.Context) error {
 // this can also be invoked directly by Serve itself, when Serve's post-setup
 // beginListening check finds a concurrent Close already ran.
 //
-// Every entry's http.Server is offered a graceful Shutdown first, all of
+// Every Unix listener's socket file is unlinked FIRST, before anything is
+// shut down, so neither this run nor a restart trips over a stale file left
+// behind (see Unix's doc comment for the other half of this - the same
+// removal also runs before Serve binds, in case a PREVIOUS run's process
+// died without reaching Close at all).
+//
+// The unlink has to come first, rather than as a tidy-up at the end, because
+// that is the ONLY window in which removeOwnedSocket's ownership check means
+// anything. That check compares inodes (os.SameFile) against an identity
+// captured at bind time, and an inode number identifies a file only for as
+// long as that file is still allocated. This listener is what keeps its own
+// socket allocated: while the listener is open the kernel cannot hand that
+// inode number to anything else, so a match can only mean "still mine".
+// Close the listener - which http.Server.Shutdown does immediately, at the
+// very start of its drain, long before it returns - and the socket is freed
+// as soon as its last name goes away, whereupon Linux hands that exact inode
+// number straight back to the next file created in the directory. A restart
+// binding this same path during the drain is precisely that next file, so an
+// ownership check made after the drain compares the successor's socket
+// against our now-meaningless identity, finds the recycled inode number
+// equal, and concludes the successor's live socket is ours to delete. That
+// misidentification is not a rare interleaving; measured on Linux it happens
+// every single time. It is invisible on macOS only because APFS never reuses
+// an inode number, which is exactly why the regression test for this asserts
+// the ORDERING rather than racing for the symptom - see
+// TestCloseUnlinksSocketBeforeDrainingConnections.
+//
+// Unlinking while the listener is still open is also what net.UnixListener's
+// own unlink-on-close does, which bindUnix deliberately turns off (see
+// SetUnlinkOnClose there). Doing the removal here rather than there buys the
+// ownership check net.UnixListener does not make, without giving up the
+// ordering that is what makes such a check possible at all.
+//
+// Every entry's http.Server is offered a graceful Shutdown next, all of
 // them concurrently, sharing ONE bounded deadline (shutdownGrace) rather
 // than one grace period per listener, so Close's total blocking time stays
 // bounded no matter how many listeners this Server has. Shutdown waits for
@@ -521,16 +559,20 @@ func (s *Server) Serve(ctx context.Context) error {
 // above release them and this Wait finds a zero counter and returns at once;
 // if the very first bind failed, entries is empty and the guard at the top of
 // this function returns before the Wait is reached at all.
-//
-// Finally, every Unix listener's socket file is removed, so neither this run
-// nor a restart trips over a stale file left behind (see Unix's doc comment
-// for the other half of this - the same removal also runs before Serve
-// binds, in case a PREVIOUS run's process died without reaching Close at
-// all).
 func (s *Server) closeTransports() {
 	entries := s.snapshotEntries()
 	if len(entries) == 0 {
 		return
+	}
+
+	// While every listener below is still open, and therefore still pinning
+	// its own socket's inode against reuse. See this function's doc comment:
+	// after the Shutdown below this check can no longer tell our socket from
+	// a successor's.
+	for _, e := range entries {
+		if e.unixPath != "" {
+			removeOwnedSocket(e.unixPath, e.unixFile)
+		}
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
@@ -551,26 +593,38 @@ func (s *Server) closeTransports() {
 	}
 
 	s.listenWG.Wait()
-
-	for _, e := range entries {
-		if e.unixPath != "" {
-			removeOwnedSocket(e.unixPath, e.unixFile)
-		}
-	}
 }
 
 // removeOwnedSocket unlinks path only if the file there is still the very one
 // this listener created (identified by owned, captured in bindUnix).
 //
-// The guard exists because a socket path is a rendezvous point that another
-// process can take over. Binding removes whatever is already at the path, so
-// restarting a server on a fixed path means the incoming process replaces the
-// outgoing process's socket file while the outgoing one is still draining,
-// which can take up to shutdownGrace when a long-lived watch stream is open.
-// An unguarded unlink here would then delete the INCOMING server's socket,
-// leaving it listening on a path nothing can dial and every client
-// permanently unable to reconnect. The failure is worse than a leaked file
-// because it strands a healthy server.
+// # Precondition: the caller must still hold the listener open
+//
+// This function is ONLY correct while the listener that created owned is
+// still open. It is not a general-purpose "is this file still mine" helper,
+// and calling it after the listener has been closed is actively dangerous:
+// os.SameFile compares device and inode number, and an inode number is a
+// stable identity only while the inode is still allocated. An open Unix
+// listener holds its own socket's inode allocated; once that listener is
+// closed, unlinking the last name frees the inode, and Linux hands the very
+// same number to the next file created in that directory - which, in the
+// scenario this guard exists for, is the successor's socket. The comparison
+// then returns a false match and this function deletes a live server's
+// socket. On Linux that is not an unlucky interleaving, it is the every-time
+// outcome. See closeTransports, which is the only caller and which is
+// ordered specifically to satisfy this precondition.
+//
+// # Why the guard exists at all
+//
+// A socket path is a rendezvous point that another process can take over.
+// Binding removes whatever is already at the path, so restarting a server on
+// a fixed path means the incoming process replaces the outgoing process's
+// socket file while the outgoing one is still draining, which can take up to
+// shutdownGrace when a long-lived watch stream is open. An unguarded unlink
+// would then delete the INCOMING server's socket, leaving it listening on a
+// path nothing can dial and every client permanently unable to reconnect.
+// The failure is worse than a leaked file because it strands a healthy
+// server.
 //
 // Every uncertain case leaves the file in place. A leftover socket is
 // harmless (the next bind removes it), whereas deleting a live server's
