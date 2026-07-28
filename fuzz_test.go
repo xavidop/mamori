@@ -70,6 +70,12 @@ func FuzzRefGrammar(f *testing.F) {
 	for _, s := range seeds {
 		f.Add(s, []byte(`{"a":{"b":[1,2,"three"]}}`))
 	}
+	// The pairings above all cross a fixed shallow payload with every tag, so
+	// a pointer fragment deep enough to need multiple descend() calls, or one
+	// that walks into an array-rooted document, is left entirely to chance
+	// mutation to discover. Seed those pairings directly instead.
+	f.Add("aws-sm://prod/db#/a/b/c/d/e", []byte(`{"a":{"b":{"c":{"d":{"e":"deep"}}}}}`))
+	f.Add("aws-sm://prod/db#/2/x", []byte(`[{"x":1},{"x":2},{"x":30}]`))
 
 	f.Fuzz(func(t *testing.T, tag string, payload []byte) {
 		expanded, err := expandRefVars(tag, map[string]string{"ENV": "prod"})
@@ -98,14 +104,26 @@ func FuzzRefGrammar(f *testing.F) {
 			}
 
 			got, err := SelectKey(payload, r.Key)
-			if err != nil && got != nil {
-				t.Fatalf("SelectKey(%q) returned both bytes and an error %v", r.Key, err)
+			if err != nil {
+				if got != nil {
+					t.Fatalf("SelectKey(%q) returned both bytes and an error %v", r.Key, err)
+				}
 			}
 
-			// A ref that parsed must render back to something parseable: the
-			// hand-rolled scanner's own output is always valid input to itself.
-			if _, err := ParseRef(r.String()); err != nil {
-				t.Fatalf("Ref.String() %q does not re-parse: %v", r.String(), err)
+			// A ref that parsed must render back to something parseable from
+			// its parts alone: Scheme/Path/Key/Opts.Encode(), not from Raw.
+			// Ref.String() short-circuits to Raw whenever it is set, and
+			// ParseRef always sets Raw to its own input, so checking
+			// ParseRef(r.String()) directly would just re-parse the exact
+			// same string that already parsed - a check that can never fail.
+			// Zeroing Raw on this local copy (production Ref is untouched)
+			// forces String() down its reconstruction branch, so this
+			// actually exercises Opts.Encode() round-tripping through
+			// url.Values and back.
+			r2 := r
+			r2.Raw = ""
+			if _, err := ParseRef(r2.String()); err != nil {
+				t.Fatalf("Ref.String() %q does not re-parse: %v", r2.String(), err)
 			}
 		}
 	})
