@@ -67,6 +67,34 @@ srv, err := server.New(
 
 Every other scheme (`env:`, `aws-sm:`, `vault:`, `file:`, `gcp-sm:`, and so on) needs neither option.
 
+## `?decode=` is rejected on a binding
+
+A binding ref may not carry [`?decode=`](/docs/concepts/ref-grammar/#value-decoding-decode). `New` fails at construction:
+
+```yaml
+# rejected: "?decode= is applied by the consuming client, not by this server"
+bindings:
+  tls-key: aws-sm://prod/tls#key?decode=base64
+```
+
+The server resolves a binding through mamori's watch machinery and serves the provider's bytes as they arrive; it never runs the decode pipeline. Accepting the option would mean serving still-base64 bytes to every client with no error anywhere - a wrong value rather than a failure, and one the client cannot detect, because what it receives is a plausible payload. Rejecting is the loud version of the same outcome.
+
+Put the option on the **client's** ref instead, where core applies it:
+
+```go
+// server: the binding carries no ?decode=
+server.Bind("tls-key", "aws-sm://prod/tls#key")
+
+// client: its own ref does, and core decodes before the field is populated
+type Config struct {
+	TLSKey secret.Bytes `source:"mamori://tls-key?decode=base64"`
+}
+```
+
+That split is the intended one: this server is a read-through fan-out of upstream refs, so what it caches and replays is what the upstream holds, while decoding is a property of what a consuming application wants to do with those bytes.
+
+`#key` fragments, **including RFC 6901 pointers**, are unaffected and do work on a binding: providers apply those inside their own `Resolve` via `mamori.SelectKey`, so `aws-sm://prod/db#/credentials/user` binds and resolves normally. Only `?decode=` is refused - which is exactly why it is refused rather than ignored, since one half of the fragment/option grammar working server-side is otherwise a reasonable thing to assume about the other.
+
 ## Next
 
 - [Server auth and policy](/docs/server/authorization/) - decide who may request which binding.

@@ -158,6 +158,44 @@ func resolveBindings(direct []rawBinding, files []string, allowExec, allowChaini
 			}
 		}
 
+		// ?decode= is a core-side value transform (mamori's applyDecode), and
+		// this server never runs it: bindings resolve through mamori.WatchRef,
+		// which hands back the provider's raw Update, so a binding carrying
+		// ?decode=base64 would serve still-base64 bytes to every client, with
+		// no error anywhere - the exact failure a client cannot detect, since
+		// what it receives is a plausible value rather than a failure. That is
+		// worse than either supporting the option or having never accepted it,
+		// so it is refused at construction, next to the scheme gates and for
+		// the same reason: fail loudly here rather than silently later.
+		//
+		// Refusing rather than implementing is deliberate. This server is a
+		// read-through fan-out of upstream refs: it caches and serves what the
+		// upstream holds, and decoding is a property of what the consuming
+		// application wants to do with those bytes, not of the source. Applying
+		// it here would change what is cached, what every client of that
+		// binding sees, and what a stale-serving replica replays - a design
+		// question of its own, not a line of code. The client's own ref is the
+		// place that already works, and core applies the pipeline there:
+		//
+		//	Bind("tls-key", "aws-sm://prod/tls#key")   // server: raw bytes
+		//	`source:"mamori://tls-key?decode=base64"`  // client: decoded
+		//
+		// The gate is on the option's presence, not on it having a non-empty
+		// value: a bare "?decode=" is a no-op in core, but writing it states an
+		// intent this server cannot honor, and accepting it here would only
+		// teach an operator that the option is understood.
+		//
+		// Pointer fragments (#/a/b) deliberately need no such gate: providers
+		// apply those inside their own Resolve via mamori.SelectKey, so they
+		// genuinely do work on a binding. That asymmetry - one half of the new
+		// ref grammar working server-side and the other half not - is precisely
+		// why the silent half has to be an error.
+		if ref.Opts.Has("decode") {
+			return nil, fmt.Errorf(
+				"mamori/server: binding %q: ?decode= is applied by the consuming client, not by this server, and is rejected rather than silently serving still-encoded bytes: drop it from the binding and let the client's ref carry it (mamori://%s?decode=%s)",
+				rb.name, rb.name, ref.Opt("decode"))
+		}
+
 		out[rb.name] = Binding{Name: rb.name, Ref: ref}
 	}
 	return out, nil

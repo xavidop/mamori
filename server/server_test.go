@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -166,6 +167,84 @@ func TestBindExecAllowExecOrderIndependent(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestBindDecodeOptionRejected covers the ?decode= gate in resolveBindings.
+// The server resolves bindings through mamori.WatchRef, which yields the
+// provider's raw Update with no decode pipeline anywhere in the path, so a
+// binding carrying ?decode= would serve still-encoded bytes to every client
+// without an error - a wrong value rather than a failure. It is refused at
+// construction, like the exec:/mamori: schemes above.
+func TestBindDecodeOptionRejected(t *testing.T) {
+	_, err := New(
+		WithPolicy(AllowAll()),
+		NoAuth(),
+		Bind("tls-key", "aws-sm://prod/tls#key?decode=base64"),
+	)
+	if err == nil {
+		t.Fatal("expected New to reject a binding carrying ?decode=")
+	}
+	// The error has to name the alternative that does work, since the whole
+	// point of rejecting is that the operator wanted the decoding to happen
+	// somewhere: on the client's own mamori:// ref, where core applies it.
+	if !strings.Contains(err.Error(), "mamori://tls-key?decode=base64") {
+		t.Fatalf("expected the error to name the client-side alternative, got: %v", err)
+	}
+}
+
+// TestBindEmptyDecodeOptionRejected pins the gate to the option's presence
+// rather than to it having a non-empty value: "?decode=" is a no-op in core,
+// but accepting it here would tell an operator this server understands an
+// option it never applies.
+func TestBindEmptyDecodeOptionRejected(t *testing.T) {
+	_, err := New(
+		WithPolicy(AllowAll()),
+		NoAuth(),
+		Bind("tls-key", "aws-sm://prod/tls#key?decode="),
+	)
+	if err == nil {
+		t.Fatal("expected New to reject a binding carrying a bare ?decode=")
+	}
+}
+
+func TestBindFileDecodeOptionRejected(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "bindings.yaml")
+	content := "bindings:\n  tls-key: aws-sm://prod/tls#key?decode=base64\n"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to write bind file: %v", err)
+	}
+
+	_, err := New(
+		WithPolicy(AllowAll()),
+		NoAuth(),
+		BindFile(p),
+	)
+	if err == nil {
+		t.Fatal("expected New to reject a bind file entry carrying ?decode=")
+	}
+}
+
+// TestBindOtherQueryOptionsAccepted is the negative half of the ?decode=
+// gate: only decode is refused, so a pointer fragment (which providers apply
+// themselves, inside Resolve, via mamori.SelectKey) and ordinary
+// provider-specific options still bind.
+func TestBindOtherQueryOptionsAccepted(t *testing.T) {
+	s, err := New(
+		WithPolicy(AllowAll()),
+		NoAuth(),
+		Bind("db-user", "aws-sm://prod/db#/credentials/user?region=eu-west-1"),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	b, ok := s.bindings["db-user"]
+	if !ok {
+		t.Fatal("expected binding \"db-user\" to be present")
+	}
+	if b.Ref.Key != "/credentials/user" {
+		t.Fatalf("expected the pointer fragment to survive binding, got %q", b.Ref.Key)
 	}
 }
 
