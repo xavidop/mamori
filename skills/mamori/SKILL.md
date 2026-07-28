@@ -100,6 +100,24 @@ defer w.Close()
 cfg := w.Get() // latest fully-valid snapshot, safe to call anytime
 ```
 
+## Verify a rotated credential before it goes live
+
+`OnChange` fires after `Get()` already serves the new value - too late to refuse a credential that turns out not to work. `mamori.PreApply` installs a gate that runs after validation and before the atomic swap; returning an error rejects the candidate (`Get()` keeps the last good config, `OnChange` does not fire, `OnError` gets a `*PreApplyError`) and the check runs on the initial load too, so a bad configured credential fails `Watch`/`Load` at startup rather than at the first rotation.
+
+```go
+mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
+	if !ev.Changed("DBPassword") {
+		return nil // guard: only re-verify the field that actually rotated
+	}
+	return pool.Ping(ctx, ev.New.DBPassword.Reveal())
+})
+```
+
+Rules to hold onto:
+- `WithPreApplyTimeout` bounds the hook, defaulting to 10s. It cannot be disabled, and exceeding it is a **rejection**, not an acceptance - mamori does not know the candidate works, so it does not apply it.
+- The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, and `w.Unpin` are commands serviced by that same goroutine, so calling one from inside the hook blocks forever waiting for a reply only that same, currently-busy goroutine could send - and the timeout does not rescue this, since it only cancels the hook's `ctx`, which those methods do not take. Never call back into the same `Watcher` from a `PreApply` hook.
+- A hook typed for a different config than the one passed to `Watch[T]`/`Load[T]` fails `Watch` and `Load` outright (an error wrapping `ErrInvalid`), rather than silently leaving the gate open.
+
 ## Choosing a provider
 
 Pick the scheme, add its module, blank-import it. Common ones (see

@@ -130,13 +130,23 @@ w, err := mamori.Watch[Config](ctx,
 ### 5.3 The reentrancy hazard, stated plainly
 
 `PreApply` runs on the reconciler goroutine. A hook that calls back into the
-same `Watcher` will deadlock. `w.Get()` is lock-free and safe, but `w.Refresh`,
-`w.Pin`, and `w.Unpin` are not, since they are serviced by the very goroutine
-the hook is occupying.
+same `Watcher` will deadlock. `w.Get()` is lock-free and safe; the others are
+not, and they do not all fail the same way.
 
-This gets a prominent doc comment and a test asserting the timeout fires rather
-than hanging forever, so the failure is bounded and diagnosable rather than a
-silent wedge.
+`Pin`, `PinCurrent`, and `Unpin` take **no context**. `sendPin` (`pin.go:61`)
+selects only on the control channel and on the watcher's own `ctx`, so with the
+reconciler goroutine sitting inside the hook, the send blocks and nothing
+releases it short of `Close`. The hook's timeout does **not** rescue this: the
+hook is blocked inside `sendPin`, which never looks at the context the hook was
+given. The result is a permanently wedged watcher, not a bounded stall.
+
+`Refresh(ctx)` is different, because it takes a caller context and selects on it
+(section 6), so a hook calling it fails on that context's deadline rather than
+hanging.
+
+An earlier draft of this spec claimed all four "deadlock until the timeout
+fires". That was verified false during implementation and is corrected here;
+the doc comment on `PreApply` states the real, more severe behavior.
 
 ## 6. Feature 2: `Refresh`
 

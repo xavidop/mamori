@@ -42,8 +42,13 @@ const defaultPreApplyTimeout = 10 * time.Second
 // It is bounded by WithPreApplyTimeout, and the bound cannot be removed.
 //
 // It must not call back into the same Watcher. Get is lock-free and safe, but
-// Refresh, Pin, PinCurrent, and Unpin are serviced by the very goroutine the
-// hook is occupying, so calling one deadlocks until the timeout fires.
+// Pin, PinCurrent, and Unpin are serviced by the very goroutine the hook is
+// occupying, and they take no context: sendPin (pin.go) selects only on the
+// control channel and on the watcher's own ctx, so with the reconciler goroutine
+// sitting inside this hook, the send blocks and nothing releases it short of
+// Close. The hook's own timeout does NOT rescue this, because the hook is
+// blocked inside sendPin, which never looks at the context this hook was given.
+// The result is a watcher wedged for good, not a bounded stall.
 //
 // It is typed to the same T passed to Watch, and runs on the initial load as
 // well as on every subsequent update, so a credential that does not work is

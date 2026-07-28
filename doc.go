@@ -3,9 +3,10 @@
 // into typed, validated Go structs, and keeps them reconciled at runtime.
 //
 // When a source value changes, mamori detects it, re-validates the whole
-// configuration, and - only if the new snapshot is valid - atomically swaps it
-// in and notifies the application with a diff-aware callback so it can react
-// (rotate a database pool, rebuild a client, ...) without restarting.
+// configuration, optionally runs it past a [PreApply] gate, and - only if the
+// new snapshot is valid and the gate accepts it - atomically swaps it in and
+// notifies the application with a diff-aware callback so it can react (rotate
+// a database pool, rebuild a client, ...) without restarting.
 //
 // # Loading
 //
@@ -57,6 +58,13 @@
 //	)
 //	defer w.Close()
 //	cfg := w.Get() // lock-free snapshot; always the last valid config
+//
+// [PreApply] installs a gate that runs after validation and before that swap,
+// for a check struct validation cannot express because it needs I/O: that a
+// rotated database password actually opens a connection, for example. Returning
+// an error rejects the candidate, keeping the last good config current; the
+// same gate runs on the initial load too, so a bad configured credential fails
+// at startup rather than at the first rotation.
 //
 // # Providers
 //

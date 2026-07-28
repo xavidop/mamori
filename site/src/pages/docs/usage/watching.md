@@ -64,6 +64,7 @@ mamori.OnError(func(err error) {
 These behaviors are guaranteed and covered by the conformance kit.
 
 - **Validated, all-or-nothing updates.** `OnChange` fires with a fully re-validated snapshot. If a new value fails validation the update is rejected: `Get()` keeps returning the last good config and `OnError` receives a `*ValidationError`.
+- **A gate before the swap, if you install one.** A candidate is built, then validated, then - if `PreApply` was installed - handed to it for a check that needs I/O (a rotated password actually opens a connection). Only after that gate passes does the atomic swap happen and `OnChange` fire. See [Rotation safety](/docs/usage/rotation/).
 - **OnChange is called one at a time.** Callbacks are serialized, so your callback never runs concurrently with itself. A slow callback delays the next event but never drops it in normal operation.
 - **Coalesced events.** Field changes within a debounce window (default 500ms, override per field with `?debounce=`) produce a single `Change`. A JSON secret with five keys rotating is one event, not five.
 - **Last-good on failure.** On a runtime resolve failure the last-good value is retained, `OnError` receives a `*ProviderError`, and the ref keeps being retried - on the poll interval by default, or with per-ref exponential backoff if you opt into it with [`WithBackoff`](#retry-backoff). `WithStale(maxAge)` escalates prolonged staleness to a hard `*StaleError`.

@@ -71,6 +71,7 @@ Batch-capable providers (for example AWS Secrets Manager) are resolved in a sing
 - [Watch for changes](/docs/usage/watching/) - `Watch`, `Get`, `OnChange`, and `OnError`.
 - [Source chains](/docs/concepts/source-chains/) - comma-separated precedence and the `onfail` policy.
 - [Snapshots and pinning](/docs/usage/snapshots/) - `Status`, `WithHistory`, and `Pin` / `Unpin`.
+- [Rotation safety](/docs/usage/rotation/) - `PreApply`, a gate that proves a rotated credential works before it becomes current.
 
 ## See also
 
