@@ -3,6 +3,8 @@ package mamori
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -217,6 +219,8 @@ func TestRefreshReturnsValidationRejection(t *testing.T) {
 }
 
 func TestRefreshAfterCloseReturnsClosed(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	type cfg struct {
 		A string `source:"rc://a"`
 	}
@@ -321,6 +325,168 @@ func TestRefreshFromInsidePreApplyHookFailsFast(t *testing.T) {
 	if got := w.Get().A; got != "second" {
 		t.Errorf("Get().A = %q, want second: a refused reentrant Refresh must not disturb the flush that was already in flight", got)
 	}
+}
+
+// TestRefreshOutlivesAReconcilerThatDiesMidHandler is the reason the reply wait
+// selects on the watcher's context at all.
+//
+// Before Refresh, handlePin ran no user code: every command was a few map
+// writes, so a delivered command was always answered and the wait could be an
+// unconditional receive. The refresh case runs providers, OnError callbacks and
+// the PreApply hook ON the reconciler goroutine, inside handlePin, which makes
+// "the handler never returns" reachable for the first time. runtime.Goexit is
+// the sharp version of that, and not a contrived one: it is what t.Fatal does,
+// so any hook that fails a test assertion, or any OnError callback that does,
+// kills the reconciler goroutine with the reply unsent.
+//
+// Without the shutdown branch the caller outlives Close: the watcher shuts down
+// cleanly, Close returns, and Refresh is still parked on a channel nobody will
+// ever write to. errWatcherClosed is the correct answer instead - the reconciler
+// really is gone - and it is the same answer Refresh gives for any other way of
+// asking a departed watcher to do something.
+func TestRefreshOutlivesAReconcilerThatDiesMidHandler(t *testing.T) {
+	type cfg struct {
+		A string `source:"rd://a"`
+	}
+	p := newWatchProvider("rd")
+	p.set("a", "first", "v1")
+
+	dying := make(chan struct{})
+	var self atomic.Pointer[Watcher[cfg]]
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithPollInterval(time.Hour),
+		PreApply(func(_ context.Context, ev Change[cfg]) error {
+			if self.Load() == nil || ev.New.A != "second" {
+				return nil // the initial load, on Watch's own goroutine
+			}
+			// Announce first: past this point the reconciler goroutine no
+			// longer exists, so this is the last thing it can tell the test.
+			close(dying)
+			runtime.Goexit()
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	self.Store(w)
+
+	p.set("a", "second", "v2")
+	refreshErr := make(chan error, 1)
+	go func() { refreshErr <- w.Refresh(context.Background()) }()
+
+	<-dying // the reconciler is inside handlePin and about to die there
+
+	// Refresh is now parked on a reply that will never be sent. Close is what
+	// releases it, and Close itself must not hang either: the dead goroutine's
+	// deferred wg.Done and dispatch close still ran on the way out.
+	closed := make(chan struct{})
+	go func() { _ = w.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(refreshBudget):
+		t.Fatal("Close did not return after the reconciler goroutine died mid-handler")
+	}
+
+	select {
+	case err := <-refreshErr:
+		if !errors.Is(err, errWatcherClosed) {
+			t.Errorf("Refresh after the reconciler died mid-handler = %v, want errWatcherClosed", err)
+		}
+	case <-time.After(refreshBudget):
+		t.Fatal("Refresh never returned after the reconciler goroutine died mid-handler and the watcher was closed: the caller has outlived Close")
+	}
+}
+
+// TestRefreshReturnsTheBlockingFieldsError covers the third refusal Refresh
+// promises to report, after validation and the gate: a field whose onfail:"fail"
+// policy rejects every candidate while it is failing. The reason has to reach
+// the caller like the other two - "the reload did not happen" with no cause is
+// the answer a SIGHUP handler can do least with - and the blocked path is the
+// one case where the error was recorded by whoever detected it rather than
+// raised by the flush itself (see buildCandidate and blockedErr).
+func TestRefreshReturnsTheBlockingFieldsError(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rb://a" onfail:"fail"`
+	}
+	p := &refreshFailProvider{scheme: "rb", val: Value{Bytes: []byte("first"), Version: "v1"}}
+
+	w, err := Watch[cfg](context.Background(), WithProvider(p), WithPollInterval(time.Hour))
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	p.fail(fmt.Errorf("%w: denied", ErrPermissionDenied))
+
+	err = w.Refresh(context.Background())
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v (%T), want a *ProviderError", err, err)
+	}
+	if !errors.Is(err, ErrPermissionDenied) {
+		t.Errorf("err = %v, want one reaching the provider's own cause", err)
+	}
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q, want first (onfail:\"fail\" rejects the whole candidate)", got)
+	}
+
+	// And the block lifts: a later refresh that resolves cleanly must report
+	// success rather than the error the engine was still holding.
+	p.recover(Value{Bytes: []byte("second"), Version: "v2"})
+	if err := w.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh after the field recovered: %v", err)
+	}
+	if got := w.Get().A; got != "second" {
+		t.Errorf("Get().A = %q after recovery, want second", got)
+	}
+}
+
+// refreshFailProvider resolves one value and can be switched to a non-not-found
+// failure at any moment, while its Watch says nothing at all. That combination
+// is the point: a provider whose answer changed but whose watch is silent is
+// exactly the state Refresh exists to interrogate, and it is the only way to
+// drive the onfail:"fail" path from a refresh rather than from a watch update.
+type refreshFailProvider struct {
+	scheme string
+	mu     sync.Mutex
+	val    Value
+	err    error
+}
+
+func (p *refreshFailProvider) Scheme() string { return p.scheme }
+
+func (p *refreshFailProvider) Resolve(context.Context, Ref) (Value, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.err != nil {
+		return Value{}, p.err
+	}
+	return p.val, nil
+}
+
+func (p *refreshFailProvider) Watch(ctx context.Context, _ Ref) (<-chan Update, error) {
+	ch := make(chan Update)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
+}
+
+func (p *refreshFailProvider) fail(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.err = err
+}
+
+func (p *refreshFailProvider) recover(v Value) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.val, p.err = v, nil
 }
 
 // TestRefreshKeepsAChainsLowerPositionState pins the one way a re-resolve can

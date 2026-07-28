@@ -1319,13 +1319,29 @@ func (e *engine[T]) handlePin(ctx context.Context, cmd pinCmd) {
 // forced refresh: the single-ref case is exactly the case an operator is
 // reaching for when a secret has just rotated and nothing has pushed it yet.
 //
-// It occupies the reconciler goroutine for as long as those round trips take,
-// which is the same exposure start's seeding has and is bounded the same way:
-// ctx is the watcher's, so Close releases a resolve in flight, and a provider
-// that ignores its context can stall reconciliation here exactly as it can
-// there. Refresh's own caller context does not help with this - it bounds the
-// caller's wait, not the work (see refresh.go) - which is why it is the
-// watcher's context, not the caller's, that is threaded down to the providers.
+// Two costs come with reusing it here, and neither is the one start pays.
+//
+// This occupies a LIVE reconciler for the whole walk, which start's seeding
+// never does: start runs before loop exists, so it delays only a caller already
+// waiting synchronously inside Watch. For as long as this runs, pin commands go
+// unserviced, watch updates back up on the unbuffered updates channel, the
+// debounce timer cannot be observed firing, and no new Report is published. It
+// is also every field, not just the chains start seeds. ctx is the watcher's, so
+// Close releases a resolve in flight; a provider that ignores its context stalls
+// reconciliation for as long as it hangs. Refresh's caller context does not help
+// with that - it bounds the caller's wait, not the work (see refresh.go) - which
+// is why the watcher's context, not the caller's, is what reaches the providers.
+//
+// And these round trips go straight to Provider.Resolve, bypassing resolveRef,
+// so they are invisible to tracer.StartResolve and meter.RecordResolve, and they
+// do not group through BatchProvider: N single-ref fields sharing one batch
+// scheme cost N round trips here where a Load would have cost one. That is
+// inherited from seedChainSources, where it is paid once per chain at startup;
+// this path is operator-triggered and covers every field, so it is a
+// deliberately accepted cost rather than an unnoticed one. Routing a refresh
+// through resolveAll instead would fix both, and would cost the per-position
+// state that makes a refreshed field indistinguishable from a watched one -
+// which is the property this whole function is built on.
 func (e *engine[T]) refreshNow(ctx context.Context) error {
 	// loop's unblock re-arms a flush for every field its block had left
 	// unapplied; here a plain delete is enough, because the single flush below

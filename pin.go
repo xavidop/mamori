@@ -114,16 +114,29 @@ func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
 // re-resolve - the alternative would be a half-applied snapshot - and it is why
 // ctx.Err() is returned as "you stopped waiting", not as "nothing happened".
 //
-// The reply wait deliberately does NOT select on w.ctx.Done(), unlike the
-// delivery above. Past the send, a reply is guaranteed: handlePin replies on
-// every branch, to a buffered channel, so it cannot block and cannot be missed
-// even if this caller is gone. A refresh's provider round trips can make that
-// reply SLOW, which is exactly what ctx is here for; they cannot make it never
-// come, which is the only thing a shutdown branch would be good for. What such
-// a branch would add is a race in which a command that really did run reports
-// errWatcherClosed because Close happened to land first - and for Refresh that
-// is precisely the wrong answer, since a SIGHUP handler would then log a failed
-// reload for a reload that worked.
+// The reply wait needs w.ctx.Done() as well, and needs it BECAUSE of Refresh.
+// For the three pin commands a reply is guaranteed once the command is
+// delivered - handlePin's other cases run no user code, they are a handful of
+// map writes - which is why the wait was an unconditional receive for as long as
+// those were the only commands. They can still take this branch, but only by
+// racing Close closely enough that the drain below finds nothing, and
+// errWatcherClosed is already the documented answer for a pin that raced Close.
+// The refresh case is the one that needs the branch to exist at all. It runs
+// providers, emitErr and the PreApply hook on the reconciler goroutine, inside
+// handlePin, so "the handler never returns" became reachable for the first time
+// - a hook (or an OnError callback) calling t.Fatal, or anything else reaching
+// runtime.Goexit, kills the reconciler goroutine mid-handler with the reply
+// unsent. Without this branch the caller then outlives Close: the watcher shuts
+// down cleanly, Close returns, and Refresh is still parked on a channel nobody
+// will ever write to. See TestRefreshOutlivesAReconcilerThatDiesMidHandler.
+//
+// The drain is what keeps that branch from lying. cmd.reply and w.ctx.Done()
+// can both be ready at once - a refresh that completed in the same instant Close
+// landed - and select picks uniformly between ready cases, so answering
+// errWatcherClosed straight away would report a failed reload for a reload that
+// worked, about half the time it raced. So take the reply if one is actually
+// there, and only then conclude that none is coming. Nothing else can write to
+// cmd.reply: sendPinCtx creates it per command and handlePin sends at most once.
 func (w *Watcher[T]) sendPinCtx(ctx context.Context, cmd pinCmd) pinReply {
 	if id := w.inPreApply.Load(); id != 0 && id == goroutineID() {
 		return pinReply{err: ErrReentrantCall}
@@ -141,6 +154,13 @@ func (w *Watcher[T]) sendPinCtx(ctx context.Context, cmd pinCmd) pinReply {
 		return rep
 	case <-ctx.Done():
 		return pinReply{err: ctx.Err()}
+	case <-w.ctx.Done():
+		select {
+		case rep := <-cmd.reply: // it landed in the same instant Close did
+			return rep
+		default:
+		}
+		return pinReply{err: errWatcherClosed}
 	}
 }
 
