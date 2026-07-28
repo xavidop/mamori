@@ -1,5 +1,7 @@
 package mamori
 
+import "context"
+
 // This file implements Pin, PinCurrent, and Unpin: a way to freeze Get at a
 // known-good snapshot while sources keep being watched, then resume with one
 // coalesced Change for everything that changed in the meantime.
@@ -16,6 +18,12 @@ package mamori
 // goroutine. Reads (Pinned, Status, History) stay lock-free: they only ever
 // Load() a pointer the reconciler goroutine already finished publishing, the
 // same pattern the rest of the package uses.
+//
+// Refresh (refresh.go) is a fourth command on this same channel, for the same
+// reason: it re-resolves and flushes, which is exactly what the reconciler
+// goroutine does, so it is delivered to that goroutine rather than duplicated
+// beside it. The command kinds, the reply, the delivery and the reentrancy
+// guard below are shared; only the handler differs.
 
 // pinKind selects which control-channel command a pinCmd carries.
 type pinKind int
@@ -24,6 +32,7 @@ const (
 	pinAt      pinKind = iota // Pin(version): freeze at a specific retained snapshot
 	pinCurrent                // PinCurrent(): freeze at whatever Get returns right now
 	unpin                     // Unpin(): resume, applying the newest snapshot
+	refresh                   // Refresh(): re-resolve every field now and apply the result
 )
 
 // pinCmd is sent over Watcher.control to the reconciler goroutine. reply is
@@ -77,16 +86,61 @@ type pinReply struct {
 // whenever no hook is running, which for a watcher with no PreApply gate is
 // always, and the goroutine-ID lookup is reached only when a pin command truly
 // overlaps a hook.
+//
+// Pin, PinCurrent and Unpin take no context, so this is the whole of their
+// delivery. Refresh does take one, and goes through sendPinCtx below rather
+// than around it: the guard above, the errWatcherClosed answer and the
+// single-control-channel discipline are exactly what it needs too, and a second
+// send path would have had to re-derive all three (and, on the evidence of the
+// reentrancy bug this guard exists for, would have re-derived one of them
+// wrong).
 func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
+	// context.Background() is never cancelled, so both ctx.Done() branches
+	// below are receives on a nil channel, which select can never choose. This
+	// is therefore the same code path the three context-less commands have
+	// always taken, not merely an equivalent one.
+	return w.sendPinCtx(context.Background(), cmd)
+}
+
+// sendPinCtx is sendPin with a caller context that can abandon the wait. It is
+// the shared body of both; see sendPin's doc comment for the reentrancy guard
+// and for why w.ctx.Done() is what keeps delivery from blocking forever.
+//
+// ctx aborts the wait, and only the wait. Once the command is on the channel
+// the reconciler goroutine is committed to running it (control is unbuffered,
+// so the send completes only when handlePin has the command), and there is no
+// way to recall it: a Refresh whose caller gave up still re-resolves and still
+// applies whatever it finds. That is the honest behavior for a forced
+// re-resolve - the alternative would be a half-applied snapshot - and it is why
+// ctx.Err() is returned as "you stopped waiting", not as "nothing happened".
+//
+// The reply wait deliberately does NOT select on w.ctx.Done(), unlike the
+// delivery above. Past the send, a reply is guaranteed: handlePin replies on
+// every branch, to a buffered channel, so it cannot block and cannot be missed
+// even if this caller is gone. A refresh's provider round trips can make that
+// reply SLOW, which is exactly what ctx is here for; they cannot make it never
+// come, which is the only thing a shutdown branch would be good for. What such
+// a branch would add is a race in which a command that really did run reports
+// errWatcherClosed because Close happened to land first - and for Refresh that
+// is precisely the wrong answer, since a SIGHUP handler would then log a failed
+// reload for a reload that worked.
+func (w *Watcher[T]) sendPinCtx(ctx context.Context, cmd pinCmd) pinReply {
 	if id := w.inPreApply.Load(); id != 0 && id == goroutineID() {
 		return pinReply{err: ErrReentrantCall}
 	}
 	cmd.reply = make(chan pinReply, 1)
 	select {
 	case w.control <- cmd:
-		return <-cmd.reply
 	case <-w.ctx.Done():
 		return pinReply{err: errWatcherClosed}
+	case <-ctx.Done():
+		return pinReply{err: ctx.Err()}
+	}
+	select {
+	case rep := <-cmd.reply:
+		return rep
+	case <-ctx.Done():
+		return pinReply{err: ctx.Err()}
 	}
 }
 

@@ -46,19 +46,22 @@ const defaultPreApplyTimeout = 10 * time.Second
 // It must not call back into the same Watcher, and mamori now catches it when
 // it does. Get is lock-free and safe here - it Loads a pointer the reconciler
 // already published, and reads the snapshot this candidate would supersede,
-// which is usually what a hook wants. Pin, PinCurrent, and Unpin are not: they
-// are serviced by the very goroutine the hook is occupying, and they take no
-// context, so sendPin (pin.go) would be waiting for a receiver that cannot
-// exist until this hook returns. That used to block until Close - no
-// reconciliation, no OnChange, no OnError, no diagnostic of any kind, and the
-// hook's own timeout does not rescue it, because the hook is parked inside
-// sendPin, which never looks at the context this hook was given.
+// which is usually what a hook wants. Pin, PinCurrent, Unpin and Refresh are
+// not: they are serviced by the very goroutine the hook is occupying, so
+// sendPin (pin.go) would be waiting for a receiver that cannot exist until this
+// hook returns. That used to block until Close - no reconciliation, no
+// OnChange, no OnError, no diagnostic of any kind, and the hook's own timeout
+// does not rescue it, because the hook is parked inside sendPin, which never
+// looks at the context this hook was given.
 //
 // It is now detected instead, per call, and the hook keeps running:
 //
 //   - Pin returns ErrReentrantCall, having pinned nothing.
 //   - PinCurrent returns 0, which no real version ever is.
 //   - Unpin does nothing and leaves the watcher pinned exactly as it was.
+//   - Refresh returns ErrReentrantCall, having re-resolved nothing. Its own
+//     context does not save it: the hook would have to outlive the refresh it
+//     is waiting for, and Refresh(context.Background()) has no deadline at all.
 //
 // The detection is keyed on which goroutine is inside the hook, not merely that
 // one is, so a Pin issued from an unrelated goroutine that happens to overlap a

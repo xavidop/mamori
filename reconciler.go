@@ -71,7 +71,7 @@ type Watcher[T any] struct {
 	stale time.Duration
 	clock Clock
 
-	// control carries Pin/PinCurrent/Unpin commands to the reconciler
+	// control carries Pin/PinCurrent/Unpin/Refresh commands to the reconciler
 	// goroutine; see pin.go and engine.handlePin. It is unbuffered: sendPin's
 	// send only completes once the reconciler goroutine has taken the
 	// command off the channel and is committed to running handlePin, which is
@@ -669,7 +669,10 @@ func (e *engine[T]) loop(ctx context.Context, updates <-chan srcUpdate) {
 			e.w.report.Store(e.buildReport())
 
 		case <-timerC:
-			e.flush(ctx, pending)
+			// Discarded deliberately: a rejection is already on its way to
+			// OnError (flush's own doc comment), and there is no caller here to
+			// hand it to. Refresh is the one path with somewhere to return it.
+			_ = e.flush(ctx, pending)
 			pending = map[string]struct{}{}
 			disarm()
 			e.w.report.Store(e.buildReport())
@@ -681,8 +684,10 @@ func (e *engine[T]) loop(ctx context.Context, updates <-chan srcUpdate) {
 			// handlePin runs entirely on this goroutine, the same one that
 			// calls flush and enqueue, so Unpin's config application and its
 			// single coalesced Change stay serialized with every other
-			// applied update. It publishes its own report before returning.
-			e.handlePin(cmd)
+			// applied update - and so does a Refresh, which re-resolves and
+			// flushes here rather than racing the reconciliation it duplicates.
+			// It publishes its own report before returning.
+			e.handlePin(ctx, cmd)
 		}
 	}
 }
@@ -984,15 +989,23 @@ func (e *engine[T]) reportTerminalError(spec fieldSpec, ref Ref, err error) {
 // never disagree about it, and reused again (via the applied/pinnedApplied
 // comparison in diffApplied) to compute Unpin's single coalesced diff.
 //
-// ok is false when there is nothing for the caller to apply, for one of two
-// reasons: the candidate could not be built or failed validation, in which
-// case buildCandidate has already called emitErr itself (a rejected candidate
-// is exactly the same failure whether or not the watcher happens to be
-// pinned at the moment, so the emission does not belong to either flush
-// branch below and must not be skipped just because Get is currently frozen);
-// or the candidate built and validated cleanly but changed nothing versus
-// what was last applied, which is silently a no-op either way.
-func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, ok bool) {
+// There is nothing for the caller to apply in two distinct situations, and the
+// returns distinguish them because Refresh has to tell them apart:
+//
+// A non-nil err means the candidate was REFUSED - it could not be built, it
+// failed validation, or a blocked field forbids applying anything at all. The
+// refusal has already been delivered to OnError by whoever detected it (this
+// function for the validation cases, reportTerminalError for the blocked one),
+// so err is returned for a caller that needs the reason, not as a second
+// notification: callers must not emit it again. A rejected candidate is exactly
+// the same failure whether or not the watcher happens to be pinned at the
+// moment, which is why the emission lives here rather than in either of flush's
+// branches and must not be skipped just because Get is currently frozen.
+//
+// A nil err with no fields means the candidate built and validated cleanly but
+// changed nothing versus what was last applied, which is silently a no-op. That
+// is a success, and Refresh reports it as one.
+func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 	if len(e.blocked) > 0 {
 		// A chain position with onfail:"fail" is in a terminal,
 		// non-not-found error state (see loop's onFailFail case): reject
@@ -1001,9 +1014,9 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, ok bool) {
 		// tolerated. This blocks every field's flush, not just the failing
 		// one, matching onfail:"fail"'s contract. The underlying error was
 		// already delivered to OnError at the point it was detected
-		// (reportTerminalError), so this returns silently rather than
-		// emitting a second time for the same condition.
-		return cand, nil, false
+		// (reportTerminalError), so this returns it rather than emitting a
+		// second time for the same condition.
+		return cand, nil, e.blockedErr()
 	}
 	dst := reflect.ValueOf(&cand).Elem()
 	for _, spec := range e.specs {
@@ -1012,13 +1025,15 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, ok bool) {
 			continue
 		}
 		if err := setField(dst, spec, v.Bytes, e.o.decodeHooks); err != nil {
-			e.emitErr(&ValidationError{Err: err})
-			return cand, nil, false
+			ve := &ValidationError{Err: err}
+			e.emitErr(ve)
+			return cand, nil, ve
 		}
 	}
 	if err := e.o.validator.Validate(cand); err != nil {
-		e.emitErr(&ValidationError{Err: err})
-		return cand, nil, false
+		ve := &ValidationError{Err: err}
+		e.emitErr(ve)
+		return cand, nil, ve
 	}
 
 	for _, spec := range e.specs {
@@ -1035,10 +1050,31 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, ok bool) {
 			e.applied[spec.Path] = v.Version
 		}
 	}
-	if len(fields) == 0 {
-		return cand, nil, false
+	return cand, fields, nil
+}
+
+// blockedErr is the reason a blocked field gives for refusing every candidate:
+// the terminal error reportTerminalError recorded for the first blocked path in
+// spec order. Spec order rather than map order because a caller comparing two
+// refusals should not see them differ by iteration luck.
+//
+// The two maps move together - loop's onFailFail case sets e.blocked[path] and
+// calls reportTerminalError, which sets e.lastErr[path], and every path that
+// clears one clears the other - so the fallback is unreachable today. It exists
+// because the alternative to an unreachable fallback here is returning nil,
+// which flush would forward to Refresh as "applied cleanly" for a snapshot that
+// was in fact refused: a silent lie is a far worse failure than a vague error.
+func (e *engine[T]) blockedErr() error {
+	for _, spec := range e.specs {
+		if _, isBlocked := e.blocked[spec.Path]; !isBlocked {
+			continue
+		}
+		if err := e.lastErr[spec.Path]; err != nil {
+			return err
+		}
+		return fmt.Errorf("mamori: %s is failing and its onfail:\"fail\" policy rejects every update: %w", spec.Path, ErrInvalid)
 	}
-	return cand, fields, true
+	return nil
 }
 
 // flush builds a candidate from all observed values, validates it, puts it
@@ -1056,13 +1092,21 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, ok bool) {
 // thing here that can block: cancelling the watcher has to release a hook
 // waiting on an unresponsive backend, rather than leaving Close to wait out
 // the hook's full budget.
-func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
+//
+// The returned error is the candidate's rejection reason, or nil when a
+// snapshot was applied AND when there was nothing to apply - the two outcomes
+// that both mean "what Get returns is current". It exists for Refresh, which
+// has to answer that question to its caller (see refresh.go); the debounce-timer
+// call site ignores it, because everything it could report has already gone to
+// OnError by the time it returns. Nothing is emitted here that was not emitted
+// before this function grew a return value.
+func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) error {
 	if len(pending) == 0 {
-		return
+		return nil
 	}
-	cand, fields, ok := e.buildCandidate()
-	if !ok {
-		return
+	cand, fields, err := e.buildCandidate()
+	if err != nil || len(fields) == 0 {
+		return err
 	}
 
 	// Gate the candidate before anything observable changes. This runs after
@@ -1117,7 +1161,7 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
 			e.applied[f.Path] = f.OldVersion
 		}
 		e.emitErr(err)
-		return
+		return err
 	}
 
 	old := e.lastGood
@@ -1143,7 +1187,7 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
 			e.o.meter.RecordRefresh(e.schemeForPath(f.Path))
 		}
 		e.w.report.Store(e.buildReport())
-		return
+		return nil
 	}
 
 	e.w.cfg.Store(&cand)
@@ -1152,6 +1196,7 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
 	}
 	e.enqueue(Change[T]{Old: old, New: cand, Fields: fields})
 	e.w.report.Store(e.buildReport())
+	return nil
 }
 
 // handlePin executes one control-channel command. It runs only on the
@@ -1168,7 +1213,19 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
 // never observe stale pin state. Sending the reply first and publishing
 // after would leave a real window where PinCurrent has returned but Pinned
 // still reports not-pinned.
-func (e *engine[T]) handlePin(cmd pinCmd) {
+//
+// Every branch replies exactly once, and the structure is what guarantees it
+// rather than four (now five) separate promises: each case only assigns to
+// reply, and the single send below every case is the only send in the function.
+// A command that went unanswered would leave its caller blocked until the
+// watcher closes - Pin and Unpin have no context to escape on at all, and
+// Refresh's is the caller's, not a deadline this could rely on - so "reply
+// exactly once" is enforced here by there being exactly one reply statement.
+//
+// ctx is the reconciler's own context, threaded in for the refresh case: it
+// re-resolves through providers and runs the PreApply gate, both of which must
+// be released by a watcher shutdown rather than run to completion after Close.
+func (e *engine[T]) handlePin(ctx context.Context, cmd pinCmd) {
 	var reply pinReply
 	switch cmd.kind {
 	case pinCurrent:
@@ -1232,9 +1289,145 @@ func (e *engine[T]) handlePin(cmd pinCmd) {
 			e.enqueue(Change[T]{Old: old, New: newCfg, Fields: fields})
 		}
 		e.pinnedApplied = nil
+
+	case refresh:
+		reply = pinReply{err: e.refreshNow(ctx)}
 	}
 	e.w.report.Store(e.buildReport())
 	cmd.reply <- reply
+}
+
+// refreshNow re-resolves every field and flushes the result, returning what the
+// flush made of it: nil when a snapshot was applied or nothing changed, and the
+// rejection reason otherwise. It is Refresh's whole implementation on the
+// reconciler side (see refresh.go), and it runs on the reconciler goroutine, so
+// it can touch engine state directly - the same state loop's own update
+// handling touches, and never at the same time as it.
+//
+// It resolves through seedChainSources, which is the walk start already performs
+// for a chain at startup: each position in turn, applying the ref's ?decode=
+// pipeline, stopping at the first that holds a value or fails
+// non-not-foundly - exactly resolveChain's precedence rules, expressed as the
+// per-position state recomputeWinner consumes. Reusing it is what keeps a
+// refreshed field indistinguishable from a watch-delivered one; a third resolve
+// path would be a third place for decode handling, sensitivity and chain
+// precedence to drift apart, and this package has already paid for that once
+// (see recordSourceUpdate's doc comment on the ?decode= bug).
+//
+// It is called for every field, single-ref or chain, unlike start's seeding
+// which is only worth its round trips for a chain. That is the point of a
+// forced refresh: the single-ref case is exactly the case an operator is
+// reaching for when a secret has just rotated and nothing has pushed it yet.
+//
+// It occupies the reconciler goroutine for as long as those round trips take,
+// which is the same exposure start's seeding has and is bounded the same way:
+// ctx is the watcher's, so Close releases a resolve in flight, and a provider
+// that ignores its context can stall reconciliation here exactly as it can
+// there. Refresh's own caller context does not help with this - it bounds the
+// caller's wait, not the work (see refresh.go) - which is why it is the
+// watcher's context, not the caller's, that is threaded down to the providers.
+func (e *engine[T]) refreshNow(ctx context.Context) error {
+	// loop's unblock re-arms a flush for every field its block had left
+	// unapplied; here a plain delete is enough, because the single flush below
+	// already considers every field. Hoisted out of the loop so
+	// handleChainNotFound, which takes it as its unblock callback, is handed one
+	// func value rather than a fresh closure per field.
+	clearBlock := func(path string) { delete(e.blocked, path) }
+
+	// observe is markChanged (loop) minus the debounce bookkeeping: a refresh
+	// flushes now, so there is no window to coalesce into and no timer to arm.
+	// The change check is not merely an optimization - storing a value the
+	// engine considers unchanged would put new bytes behind an unchanged
+	// Version, where buildCandidate's diff cannot see them and some later,
+	// unrelated flush would publish them having passed no gate.
+	observe := func(path string, val Value) {
+		if cur, had := e.observed[path]; had && !cur.changed(val) {
+			return
+		}
+		e.observed[path] = val
+	}
+
+	for i := range e.specs {
+		spec := e.specs[i]
+		fresh := e.seedChainSources(ctx, spec)
+
+		// Merge, do not replace. seedChainSources marks seen only the
+		// positions its walk actually reached, so assigning the slice wholesale
+		// would ERASE what a lower position's own watch baseline had already
+		// taught this engine (recomputeWinner reads unseen as not-found), and
+		// nothing would re-teach it: that position's watch source delivered its
+		// baseline once and stays silent until the value next changes. A
+		// refresh would then quietly disarm a chain's fallback - the higher
+		// position disappearing later would resolve to not-found rather than
+		// falling through to the value the lower one is still holding.
+		//
+		// Nothing that could change the winner is skipped by merging: the walk
+		// visits every position down to the one that stops it, and positions
+		// below a stopping position cannot win while it stands.
+		for pos := range fresh {
+			if !fresh[pos].seen {
+				continue
+			}
+			e.sources[i][pos] = fresh[pos]
+		}
+
+		// Classify the winner exactly as loop's update case does, case for case
+		// and including the OnFail policy, so a value that arrived by refresh
+		// and the same value arriving by watch leave the engine in the same
+		// state - down to which errors were emitted and which fields count as
+		// healthy.
+		val, pos, cherr := e.recomputeWinner(i)
+		switch {
+		case cherr == nil:
+			e.lastOK[spec.Path] = e.o.clock.Now()
+			delete(e.lastErr, spec.Path) // a successful resolve clears any prior error
+			clearBlock(spec.Path)        // and a resolving field can never stay blocked
+			observe(spec.Path, val)
+
+		case errors.Is(cherr, ErrNotFound):
+			// Every position absent: ordinary default:/optional handling,
+			// never governed by onfail. Shared with loop rather than restated,
+			// because "which absences are tolerated" is precisely the kind of
+			// rule two copies would drift on.
+			e.handleChainNotFound(spec, cherr, clearBlock)
+
+		default:
+			ref := spec.Refs[0]
+			if pos >= 0 {
+				ref = spec.Refs[pos]
+			}
+			switch spec.OnFail {
+			case onFailUseDefault:
+				// Masks the error behind the field's default, silently, as
+				// applyOnFail and loop both do for this explicit opt-in.
+				clearBlock(spec.Path)
+				e.lastOK[spec.Path] = e.o.clock.Now()
+				delete(e.lastErr, spec.Path)
+				observe(spec.Path, Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"})
+			case onFailFail:
+				// Blocks every field's flush, this one included, until it
+				// clears; buildCandidate is what enforces that, and it is what
+				// turns this into Refresh's returned error rather than a
+				// partial apply.
+				e.blocked[spec.Path] = struct{}{}
+				e.reportTerminalError(spec, ref, cherr)
+			default: // onFailKeepLast
+				clearBlock(spec.Path)
+				e.reportTerminalError(spec, ref, cherr)
+			}
+		}
+	}
+
+	// flush treats pending only as "is there anything to consider" - the
+	// candidate itself is built from every observed value and diffed against
+	// every applied version (see buildCandidate) - so naming every field here
+	// is both what makes the flush happen and an honest description of its
+	// scope. An empty struct has nothing to refresh and nothing to report.
+	pending := make(map[string]struct{}, len(e.specs))
+	for _, spec := range e.specs {
+		pending[spec.Path] = struct{}{}
+	}
+	return e.flush(ctx, pending)
 }
 
 // findSnapshot searches the retained history (including the current
