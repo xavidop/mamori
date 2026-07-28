@@ -19,19 +19,43 @@ import (
 //
 //   - a keyed row store with a per-write monotonic version (so a WithVersionColumn
 //     provider sees a changing version), and
-//   - a LISTEN/NOTIFY analogue: every write closes-and-replaces a broadcast
-//     channel so any blocked Wait (the provider's watch loop) wakes, exactly as a
-//     NOTIFY wakes a real WaitForNotification.
+//   - a LISTEN/NOTIFY analogue: every write bumps notifySeq and closes-and-replaces
+//     a broadcast channel, so a notification is both delivered to any blocked Wait
+//     and queued for a subscriber that has not called Wait yet.
+//
+// That queueing is deliberate, and it is the part that is easy to "simplify" back
+// into a bug. An earlier version of this fake subscribed lazily: Listen captured
+// nothing and Wait read notifyCh fresh at call time, so a write landing between
+// Listen and the first Wait closed a channel generation nobody was watching and
+// the notification was lost outright. That made TestWatchEmitsBaselineAndChange
+// flaky at roughly 0.03%-0.4%, because Provider.Watch calls Listen synchronously
+// and only reaches Wait after resolving and emitting the baseline, leaving a real
+// window in between.
+//
+// The important point is that the fake was *less faithful than a real PostgreSQL*,
+// so the test was failing on a scenario that cannot occur in production. Against a
+// live database the provider is safe: it issues LISTEN before the baseline query,
+// on a dedicated connection, and pgx buffers an incoming NotificationResponse
+// between WaitForNotification calls (WaitForNotification loops over receiveMessage,
+// which returns buffered protocol messages rather than discarding them). A NOTIFY
+// arriving in that window is therefore queued and delivered on the next wait, never
+// dropped. Modelling queue-from-subscription semantics here is what makes the fake
+// match that behavior; reverting to "wake whoever is currently blocked" reintroduces
+// a lost-wakeup that no real backend has.
 //
 // The fake does not parse SQL; it looks the row up by the bound $1 key argument
 // and records the last SQL string so tests can assert on the generated query.
 type fakeBackend struct {
-	mu       sync.Mutex
-	rows     map[string]fakeRowData
-	fails    map[string]error // key -> injected error, consulted before rows
-	verSeq   uint64
-	lastSQL  string
-	notifyCh chan struct{} // closed+replaced on each write to wake blocked Waits
+	mu      sync.Mutex
+	rows    map[string]fakeRowData
+	fails   map[string]error // key -> injected error, consulted before rows
+	verSeq  uint64
+	lastSQL string
+	// notifySeq counts NOTIFYs fired. A subscriber records the value it saw at
+	// Listen time and compares against it, which is what lets a notification be
+	// observed after the fact instead of only while blocked in Wait.
+	notifySeq uint64
+	notifyCh  chan struct{} // closed+replaced on each write to wake blocked Waits
 }
 
 type fakeRowData struct {
@@ -53,6 +77,9 @@ func (f *fakeBackend) set(key, val string) {
 	defer f.mu.Unlock()
 	f.verSeq++
 	f.rows[key] = fakeRowData{value: []byte(val), version: strconv.FormatUint(f.verSeq, 10)}
+	// Bump the counter before closing, so a subscriber woken by the close always
+	// observes the higher seq and never sees a wake it cannot account for.
+	f.notifySeq++
 	close(f.notifyCh)
 	f.notifyCh = make(chan struct{})
 }
@@ -95,8 +122,15 @@ func (f *fakeBackend) QueryRow(ctx context.Context, sql string, args ...any) row
 	return &fakeRow{found: true, value: append([]byte(nil), data.value...), version: data.version}
 }
 
+// Listen subscribes, and the subscription takes effect here rather than at the
+// first Wait. Capturing notifySeq now is what makes a NOTIFY fired before the
+// caller gets around to waiting still count, matching a real LISTEN: the server
+// starts routing to the connection at LISTEN time and pgx buffers whatever
+// arrives before the next WaitForNotification.
 func (f *fakeBackend) Listen(_ context.Context, _ string) (notifier, error) {
-	return &fakeNotifier{be: f}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &fakeNotifier{be: f, seen: f.notifySeq}, nil
 }
 
 // fakeRow implements the row (pgx.Row-shaped) contract. A one-column select
@@ -129,22 +163,40 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// fakeNotifier blocks until the next write to the backend (the NOTIFY analogue)
-// or ctx cancellation.
+// fakeNotifier is one subscription. It returns from Wait as soon as the backend
+// has fired a NOTIFY it has not consumed yet, blocking only when it is genuinely
+// caught up.
 type fakeNotifier struct {
-	be     *fakeBackend
+	be *fakeBackend
+	// seen is the highest notifySeq this subscription has consumed, initialised
+	// at Listen time. Comparing against it rather than waiting on a channel edge
+	// is what stops a NOTIFY fired between Listen and Wait from being lost.
+	seen   uint64
 	closed bool
 }
 
 func (n *fakeNotifier) Wait(ctx context.Context) error {
-	n.be.mu.Lock()
-	wake := n.be.notifyCh
-	n.be.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-wake:
-		return nil
+	for {
+		n.be.mu.Lock()
+		if n.be.notifySeq > n.seen {
+			// A NOTIFY landed since we last looked, possibly before this call.
+			// Collapse any backlog to one wake: the provider re-queries current
+			// state on every wake, so coalescing matches how a real watcher
+			// behaves under a burst of NOTIFYs.
+			n.seen = n.be.notifySeq
+			n.be.mu.Unlock()
+			return nil
+		}
+		wake := n.be.notifyCh
+		n.be.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+			// Re-check under the lock rather than returning here: another write
+			// may have advanced notifySeq again in between, and the loop keeps
+			// seen accurate instead of skipping a generation.
+		}
 	}
 }
 
@@ -460,6 +512,88 @@ func TestMalformedPath(t *testing.T) {
 }
 
 // --- Watch unit tests (dedicated coverage of the LISTEN/NOTIFY path) ---
+
+// TestFakeBackendQueuesNotificationsFromListen pins the fake notifier's
+// queue-from-subscription semantics directly against the fake, not through
+// Provider.Watch, so a failure here points at the test infrastructure rather
+// than at the provider.
+//
+// The watch tests all depend on this property and it is genuinely easy to
+// regress, because the smaller-looking implementation is wrong: having Wait
+// simply block on the current notifyCh drops any NOTIFY fired between Listen
+// and the first Wait, which is exactly the lost wakeup that made
+// TestWatchEmitsBaselineAndChange flaky. The doc comment on fakeBackend argues
+// why the queueing is deliberate; this test is what actually enforces it.
+func TestFakeBackendQueuesNotificationsFromListen(t *testing.T) {
+	// waitFor runs sub.Wait under a bounded context and reports the outcome.
+	waitFor := func(t *testing.T, sub notifier, d time.Duration) error {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		return sub.Wait(ctx)
+	}
+
+	// The regression guard: a NOTIFY fired while nobody is blocked in Wait must
+	// still be delivered to the next Wait.
+	t.Run("NotifyBetweenListenAndWaitIsQueued", func(t *testing.T) {
+		fake := newFakeBackend()
+		fake.set("k", "v1")
+		sub, err := fake.Listen(context.Background(), defaultChannel)
+		if err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+		defer sub.Close()
+
+		// Nobody is inside Wait right now. A real LISTEN queues this on the
+		// connection; a fake that only subscribes at Wait time loses it.
+		fake.set("k", "v2")
+
+		if err := waitFor(t, sub, 2*time.Second); err != nil {
+			t.Fatalf("Wait dropped a NOTIFY fired between Listen and Wait (%v); "+
+				"the subscription must take effect at Listen, not at the first Wait", err)
+		}
+	})
+
+	// The counterweight: the watermark must start at the value Listen saw, so a
+	// write that predates the subscription is not replayed. Without this a
+	// "fix" that always returns immediately would pass the case above while
+	// spinning the provider's watch loop.
+	t.Run("WriteBeforeListenIsNotDelivered", func(t *testing.T) {
+		fake := newFakeBackend()
+		fake.set("k", "v1") // predates the subscription
+
+		sub, err := fake.Listen(context.Background(), defaultChannel)
+		if err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+		defer sub.Close()
+
+		if err := waitFor(t, sub, 100*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Wait returned %v with no NOTIFY since Listen, want it to block; "+
+				"seen must be initialised from notifySeq at Listen time", err)
+		}
+	})
+
+	// And a consumed notification must not repeat, or the watch loop would
+	// re-query forever off a single NOTIFY.
+	t.Run("ConsumedNotifyIsNotRedelivered", func(t *testing.T) {
+		fake := newFakeBackend()
+		sub, err := fake.Listen(context.Background(), defaultChannel)
+		if err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+		defer sub.Close()
+
+		fake.set("k", "v1")
+		if err := waitFor(t, sub, 2*time.Second); err != nil {
+			t.Fatalf("first Wait did not deliver the NOTIFY: %v", err)
+		}
+		if err := waitFor(t, sub, 100*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("second Wait returned %v, want it to block; "+
+				"an already-consumed NOTIFY must not be delivered twice", err)
+		}
+	})
+}
 
 func TestWatchEmitsBaselineAndChange(t *testing.T) {
 	fake := newFakeBackend()
