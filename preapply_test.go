@@ -3,6 +3,7 @@ package mamori
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,6 +46,52 @@ func TestPreApplyErrorWrapsAndReports(t *testing.T) {
 	var pe *PreApplyError
 	if !errors.As(error(err), &pe) {
 		t.Error("errors.As must reach *PreApplyError")
+	}
+}
+
+// preApplyOtherConfig is a second config type, declared at package scope so
+// the type name in the mismatch error below is stable and worth asserting on.
+type preApplyOtherConfig struct{ B string }
+
+// TestPreApplyWrongTypeFailsWatch pins the one place a mistyped hook can be
+// caught. Option is untyped, so a hook written against a different config type
+// compiles cleanly and the assertion in Watch yields nil - and a nil gate is an
+// open gate. Tolerating it the way onChange tolerates its own mismatch would
+// mean the hook is never called, nothing is ever delivered to OnError, Status
+// stays healthy, and every rotation is applied unverified: the exact failure
+// PreApply exists to prevent, arrived at by installing PreApply. Watch must
+// refuse to start instead.
+func TestPreApplyWrongTypeFailsWatch(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"pw://a"`
+	}
+	p := newWatchProvider("pw")
+	p.set("a", "first", "v1")
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p),
+		PreApply(func(context.Context, Change[preApplyOtherConfig]) error {
+			return errors.New("refuse everything")
+		}),
+	)
+	if err == nil {
+		_ = w.Close()
+		t.Fatal("Watch accepted a PreApply hook typed for a different config: the gate would be silently open")
+	}
+	if w != nil {
+		t.Errorf("Watch returned a non-nil Watcher alongside its error")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error = %v, want one wrapping ErrInvalid", err)
+	}
+	// The message has to name both types: "PreApply hook has the wrong type" is
+	// useless when the two candidates are two similarly-named config structs.
+	for _, want := range []string{"PreApply", "preApplyOtherConfig", "cfg"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }
 
@@ -280,10 +327,18 @@ func TestPreApplyRejectedValueIsStillGatedOnALaterFlush(t *testing.T) {
 	}
 }
 
-// TestPreApplyRollsBackAppliedVersions asserts the rollback directly against
-// engine state, since the behavioral test above cannot distinguish "rolled
-// back" from "the next diff happened to compute anyway".
-func TestPreApplyRollsBackAppliedVersions(t *testing.T) {
+// TestPreApplyRejectionDoesNotAdvanceTheSnapshot pins the other half of the
+// rejection contract: no version is burned on a candidate that never became
+// current, so Snapshot and Live both stay where they were and Pin(version)
+// cannot later reach a refused snapshot.
+//
+// It deliberately does NOT carry the rollback's name. An earlier draft called
+// it TestPreApplyRollsBackAppliedVersions, which was a lie: it passes with the
+// rollback deleted, because a refused flush returns before e.version++ either
+// way. The rollback is pinned by TestPreApplyRejectionIsRetriedOnNextChange
+// and TestPreApplyRejectedValueIsStillGatedOnALaterFlush, both of which fail
+// without it.
+func TestPreApplyRejectionDoesNotAdvanceTheSnapshot(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	type cfg struct {

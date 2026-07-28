@@ -3,6 +3,7 @@ package mamori
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"reflect"
@@ -165,6 +166,31 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		opt(o)
 	}
 
+	// The PreApply hook is stored as any (options is not generic) and asserted
+	// back to this T here. The mechanism is onChange's, below; the outcome on a
+	// mismatch deliberately is NOT.
+	//
+	// A hook written against some other T yields nil from the assertion, and a
+	// nil gate is an OPEN gate: the hook would never be called, no error would
+	// ever be emitted, and every rotation would be applied unverified while the
+	// caller believed each one had been proven to work first. For onChange the
+	// same mismatch costs a dropped notification and the application keeps
+	// serving correct configuration; for a gate whose only job is refusing
+	// credentials that do not work, silence is the worst available outcome, so
+	// this one fails Watch outright rather than proceeding ungated. Option is
+	// untyped by construction, so Watch is the only place the mismatch can be
+	// caught at all - and catching it before the initial Load means a typo
+	// costs no provider round trips.
+	var preApply func(context.Context, Change[T]) error
+	if o.preApply != nil {
+		fn, ok := o.preApply.(func(context.Context, Change[T]) error)
+		if !ok {
+			var want func(context.Context, Change[T]) error
+			return nil, fmt.Errorf("mamori: PreApply hook has type %T, want %T: %w", o.preApply, want, ErrInvalid)
+		}
+		preApply = fn
+	}
+
 	cfg, initial, err := loadValue[T](ctx, o)
 	if err != nil {
 		return nil, err
@@ -173,15 +199,6 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 	var onChange func(Change[T])
 	if o.onChange != nil {
 		onChange, _ = o.onChange.(func(Change[T]))
-	}
-
-	// The PreApply hook is stored as any (options is not generic) and asserted
-	// back here exactly the way onChange just was, including the deliberate
-	// non-panicking form: a hook installed for some other T yields nil rather
-	// than a runtime panic, which is the same trade onChange already makes.
-	var preApply func(context.Context, Change[T]) error
-	if o.preApply != nil {
-		preApply, _ = o.preApply.(func(context.Context, Change[T]) error)
 	}
 
 	specs := make([]fieldSpec, len(initial))
@@ -267,10 +284,13 @@ type engine[T any] struct {
 	specs    []fieldSpec
 	onChange func(Change[T])
 	// preApply gates a candidate before it becomes current (see flush). It is
-	// typed here the same way onChange above is, and is nil when the caller
-	// installed no hook - which is the whole cost of the gate on that path,
-	// since runPreApply's own nil check is all flush spends before returning
-	// to the swap.
+	// typed here the same way onChange above is, though Watch refuses a
+	// mismatched hook rather than tolerating the nil this would otherwise
+	// leave (see the assertion there). It is nil only when the caller
+	// installed no hook, and the gate then costs a flush that has changes one
+	// nil check inside runPreApply plus the Change[T] literal flush builds
+	// anyway - arguments are evaluated before the call, so those two copies of
+	// T are paid hook or no hook.
 	preApply func(context.Context, Change[T]) error
 
 	// updated only by the reconciler goroutine:
@@ -1036,7 +1056,12 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) {
 	// The next flush would diff the rejected version against itself, come up
 	// empty, and return ok == false. The rejected value would never be retried,
 	// no further error would ever be emitted, and Get would serve the
-	// superseded configuration indefinitely while Status called it healthy.
+	// superseded configuration indefinitely. (Status reports the watcher
+	// healthy through a refusal either way: emitErr does not set e.lastErr, so
+	// buildReport sees nothing wrong, exactly as it does not for a validation
+	// failure. What the rollback restores is the retry, and with it an error on
+	// every subsequent attempt; without it even the errors stop, which is what
+	// makes the staleness silent rather than merely undesired.)
 	//
 	// And the refused value is not withdrawn from e.observed, so it stays in
 	// every candidate built afterwards. Hidden from the diff, it rides into the
