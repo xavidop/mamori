@@ -39,7 +39,7 @@ aws-appconfig://<application>/<environment>/<profile>[#json-key][?minPoll=<secon
 | `<environment>` | yes | The AppConfig environment ID or name. |
 | `<profile>` | yes | The configuration profile ID or name. |
 | `#json-key` | no | Select one field from a JSON configuration payload (via `mamori.SelectKey`). |
-| `?minPoll=<seconds>` | no | Sets `RequiredMinimumPollIntervalInSeconds` on the session. It only matters on the (not-yet-implemented) `Watch` path; `Resolve` accepts and ignores it. |
+| `?minPoll=<seconds>` | no | Sets `RequiredMinimumPollIntervalInSeconds` on the session. Inert today: the floor constrains a session's second and later calls, and every session here is discarded after its first. |
 
 Each of the three path segments may be either the resource's AWS-assigned ID or its name; the provider passes them through verbatim and lets AppConfig Data resolve them.
 
@@ -73,7 +73,11 @@ mamori.WithProvider(awsprov.NewAppConfig(awsprov.WithRegion("eu-west-1")))
 
 ## Watch
 
-This provider does not currently implement native watch, so mamori polls (`WithPollInterval` + jitter, `Value.Version` comparison).
+AppConfig has no push mechanism, so mamori polls this provider (`WithPollInterval` + jitter, `Value.Version` comparison).
+
+A session-based `WatchableProvider` was considered and deliberately rejected. AppConfig's session protocol is still polling, just polling that remembers what it last saw, and mamori's rule for provider authors is that a backend without native change notification must be left to the polling adapter rather than given an internal ticker. That adapter is where jitter, change deduplication, and the injectable clock live. Jitter is the one that matters here: AppConfig hands every session the same cadence, so replicas started together would poll in lockstep against an API AWS prices per call.
+
+Each poll costs two API calls, `StartConfigurationSession` followed by `GetLatestConfiguration`, for the reason described in [Why `Resolve` costs two API calls](#why-resolve-costs-two-api-calls). Set `WithPollInterval` accordingly.
 
 ## Error classification
 

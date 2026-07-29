@@ -43,7 +43,7 @@ All three path segments are required and may each be either the resource's AWS-a
 - `<environment>` - the AppConfig environment ID or name.
 - `<profile>` - the configuration profile ID or name.
 - `#json-key` - optional; selects one field from a JSON configuration payload (via `mamori.SelectKey`), identically to the other two schemes.
-- `?minPoll=<seconds>` - optional; sets `RequiredMinimumPollIntervalInSeconds` on the session. It only matters on the (not-yet-implemented) `Watch` path, where it raises the floor AppConfig enforces on how often this client may poll. `Resolve` accepts and ignores it, since a `Resolve` session is discarded after its single call and can never be rate-limited by its own polling.
+- `?minPoll=<seconds>` - optional; sets `RequiredMinimumPollIntervalInSeconds` on the session. It has no observable effect today: the floor constrains a session's second and later calls, and every session here is discarded after its first. It is accepted because it is the correct plumbing for the field and would become meaningful if a resident session ever existed.
 
 `Resolve` costs two AWS API calls (`StartConfigurationSession` then `GetLatestConfiguration`), not one, because AppConfig Data is a session protocol: a session that already holds the current version receives an *empty* payload from `GetLatestConfiguration`, so a provider that opened one session and reused it across calls would return the configuration once and empty bytes on every call after. `Resolve` therefore starts a fresh session and discards it on every call, paying the extra request to keep every call stateless and correct.
 
