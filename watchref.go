@@ -50,5 +50,7 @@ func watchRef(ctx context.Context, p Provider, ref Ref, o *options) <-chan Updat
 		}
 		return ch
 	}
+	o.log().Debug("provider has no native watch, polling",
+		logAttrScheme, ref.Scheme, logAttrRef, redactRef(ref))
 	return pollWatch(ctx, p, ref, o)
 }

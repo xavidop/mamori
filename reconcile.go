@@ -3,6 +3,7 @@ package mamori
 import (
 	"context"
 	"crypto/tls"
+	"log/slog"
 	"reflect"
 	"time"
 
@@ -32,6 +33,7 @@ type options struct {
 	backoffMax   time.Duration
 	meter        Meter
 	tracer       Tracer
+	logger       *slog.Logger
 	historyN     int               // snapshots retained beyond the current one; 0 = current only
 	refVars      map[string]string // ${VAR} expansion for source tags; nil means none
 
@@ -76,6 +78,7 @@ func defaultOptions() *options {
 		queueDepth:      defaultQueueDepth,
 		meter:           noopMeter{},
 		tracer:          noopTracer{},
+		logger:          slog.New(slog.DiscardHandler),
 		preApplyTimeout: defaultPreApplyTimeout,
 	}
 }

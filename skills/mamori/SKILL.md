@@ -176,5 +176,8 @@ Precedence chains: a `source:` tag may list several refs comma-separated
 - Prefer `Watch` when the program is long-running and should pick up rotations;
   `Load` for one-shot / CLI programs.
 - For CI, recommend `mamori.Doctor` (library) as a pre-deploy check.
+- Suggest `mamori.WithLogger(slog.Default())` for a structured log trail of
+  resolve failures, watch errors, and applied changes - it never logs a
+  resolved value and is silent (discard logger) until opted in.
 - Point to https://mamorigo.dev/docs for provider auth details and the config
   server (a separate fan-out module, `github.com/xavidop/mamori/server`).

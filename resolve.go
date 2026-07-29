@@ -167,6 +167,8 @@ func resolveRef(ctx context.Context, ref Ref, o *options) (Value, error) {
 	finish(err)
 	o.meter.RecordResolve(ref.Scheme, o.clock.Now().Sub(start), err)
 	if err != nil {
+		o.log().Warn("resolve failed",
+			append([]any{logAttrScheme, ref.Scheme, logAttrRef, redactRef(ref)}, errAttrs(err)...)...)
 		return Value{}, &ProviderError{Scheme: ref.Scheme, Ref: redactRef(ref), Err: err}
 	}
 	val, err = applyDecode(ref, val)

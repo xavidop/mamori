@@ -660,6 +660,13 @@ func (e *engine[T]) loop(ctx context.Context, updates <-chan srcUpdate) {
 					// masks the error, not just partially.
 					unblock(spec.Path)
 					e.lastOK[spec.Path] = e.o.clock.Now()
+					// No "resolve recovered" log here: decode.go's walkSpecs
+					// rejects onfail:"default" without a default: tag, so
+					// HasDefault is always true for this field, and every
+					// failure it hits is masked right here rather than through
+					// reportTerminalError - e.lastErr[spec.Path] can never
+					// have been set for it, so there is never a real error to
+					// recover from.
 					delete(e.lastErr, spec.Path)
 					markChanged(spec, Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"})
 				case onFailFail:
@@ -962,6 +969,9 @@ func (e *engine[T]) handleChainNotFound(spec fieldSpec, err error, unblock func(
 		// failed and now returns a tolerated not-found becomes healthy
 		// again. The field's last-observed value is left untouched;
 		// re-applying the default at runtime is a separate concern.
+		if _, had := e.lastErr[spec.Path]; had {
+			e.o.log().Info("resolve recovered", logAttrField, spec.Path)
+		}
 		delete(e.lastErr, spec.Path)
 		return
 	}
@@ -977,10 +987,15 @@ func (e *engine[T]) handleChainNotFound(spec fieldSpec, err error, unblock func(
 // this reduces to byte-identical output.
 func (e *engine[T]) reportTerminalError(spec fieldSpec, ref Ref, err error) {
 	e.o.meter.RecordWatchError(ref.Scheme)
+	e.o.log().Warn("watch error",
+		append([]any{logAttrScheme, ref.Scheme, logAttrRef, redactRef(ref)}, errAttrs(err)...)...)
 	pe := &ProviderError{Scheme: ref.Scheme, Ref: redactRef(ref), Err: err}
 	if e.o.stale > 0 {
 		if last, ok := e.lastOK[spec.Path]; ok && e.o.clock.Now().Sub(last) > e.o.stale {
 			se := &StaleError{Ref: redactRef(ref), Err: err}
+			e.o.log().Warn("value is stale",
+				logAttrField, spec.Path, logAttrRef, redactRef(ref),
+				logAttrErr, se.Error())
 			e.lastErr[spec.Path] = se
 			e.emitErr(se)
 			return
@@ -1040,6 +1055,8 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 	}
 	if err := e.o.validator.Validate(cand); err != nil {
 		ve := &ValidationError{Err: err}
+		e.o.log().Error("candidate rejected by validation; continuing to serve the previous config",
+			errAttrs(err)...)
 		e.emitErr(ve)
 		return cand, nil, ve
 	}
@@ -1168,6 +1185,8 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 		for _, f := range fields {
 			e.applied[f.Path] = f.OldVersion
 		}
+		e.o.log().Warn("change rejected by PreApply; continuing to serve the previous config",
+			append([]any{logAttrCount, len(fields)}, errAttrs(err)...)...)
 		e.emitErr(err)
 		return err
 	}
@@ -1201,6 +1220,11 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 	e.w.cfg.Store(&cand)
 	for _, f := range fields {
 		e.o.meter.RecordRefresh(e.schemeForPath(f.Path))
+	}
+	e.o.log().Info("config change applied", logAttrCount, len(fields))
+	for _, f := range fields {
+		e.o.log().Debug("field updated",
+			logAttrField, f.Path, logAttrVersion, f.NewVersion)
 	}
 	e.enqueue(Change[T]{Old: old, New: cand, Fields: fields})
 	e.w.report.Store(e.buildReport())
@@ -1538,6 +1562,8 @@ func (e *engine[T]) enqueue(ev Change[T]) {
 		default:
 			select {
 			case <-e.dispatch: // drop oldest, retry
+				e.o.log().Warn("change event dropped, dispatch queue full; the OnChange handler is not keeping up",
+					logAttrCount, cap(e.dispatch))
 			default:
 			}
 		}
