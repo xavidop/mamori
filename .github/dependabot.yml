@@ -135,6 +135,13 @@ updates:
     directory: "/providers/goff"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:goff]
+  # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
+  # whichever provider the application installed, including vendors with no
+  # dedicated module above.
+  - package-ecosystem: gomod
+    directory: "/providers/openfeature"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:openfeature]
   # The client half of the config server: a mamori:// provider that resolves
   # binding names against a running server rather than an upstream ref.
   - package-ecosystem: gomod
