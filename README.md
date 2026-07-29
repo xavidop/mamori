@@ -32,7 +32,7 @@ go get github.com/xavidop/mamori
 `env:` and `file://` work out of the box. Cloud providers are separate modules so the core has **zero cloud-SDK dependencies**:
 
 ```bash
-go get github.com/xavidop/mamori/providers/aws     # aws-sm://  aws-ps://
+go get github.com/xavidop/mamori/providers/aws     # aws-sm://  aws-ps://  aws-appconfig://
 go get github.com/xavidop/mamori/providers/vault   # vault://
 go get github.com/xavidop/mamori/providers/k8s     # k8s-secret://  k8s-cm://
 # ... gcp, azure, consul, doppler, onepassword, sops
@@ -119,7 +119,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | Module | Schemes | Watch | Errors classified beyond not-found |
 |---|---|---|---|
 | core (built-in) | `env:` · `dotenv://` · `file://` · `exec:` (opt-in) | fsnotify (file/dotenv) · poll (env/exec) | ✅ |
-| `providers/aws` | `aws-sm://` · `aws-ps://` | poll | ✅ |
+| `providers/aws` | `aws-sm://` · `aws-ps://` · `aws-appconfig://` | poll | ✅ |
 | `providers/gcp` | `gcp-sm://` | poll | ✅ |
 | `providers/azure` | `azure-kv://` | poll | ✅ |
 | `providers/vault` | `vault://` | lease-aware poll (`NotAfter`) | ✅ |

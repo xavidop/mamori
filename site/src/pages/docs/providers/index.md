@@ -29,6 +29,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `exec:` | exec | yes | poll | ✅ |
 | `mamori://` | mamori (client) | passthrough | **native** (SSE) | ✅ |
 | `aws-sm://` `aws-ps://` | AWS | yes / secure | poll | ✅ |
+| `aws-appconfig://` | AWS AppConfig | no | poll | ✅ |
 | `vault://` | Vault | yes | lease-aware poll | ✅ |
 | `gcp-sm://` | GCP | yes | poll | ✅ |
 | `azure-kv://` | Azure | yes | poll | ✅ |

@@ -31,6 +31,8 @@ func TestClassifyAWS(t *testing.T) {
 		{"ValidationException", &smithy.GenericAPIError{Code: "ValidationException"}, mamori.KindInvalid},
 		{"InvalidKeyId", &smithy.GenericAPIError{Code: "InvalidKeyId"}, mamori.KindInvalid},
 		{"ParameterVersionNotFound", &smithy.GenericAPIError{Code: "ParameterVersionNotFound"}, mamori.KindNotFound},
+		{"BadRequest", &smithy.GenericAPIError{Code: "BadRequestException"}, mamori.KindInvalid},
+		{"InternalServerException", &smithy.GenericAPIError{Code: "InternalServerException"}, mamori.KindUnavailable},
 		{"UnmappedCode", &smithy.GenericAPIError{Code: "SomeFutureException"}, mamori.KindUnknown},
 		{"PlainError", errors.New("connection reset"), mamori.KindUnknown},
 		// DecryptionFailure is a real Secrets Manager error, but it can mean a
@@ -182,5 +184,30 @@ func TestPSResolveClassifiesNonNotFoundError(t *testing.T) {
 	}
 	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
 		t.Fatalf("ErrorKind(err) = %q, want %q; classifyAWS may not be wired into mapPSError", got, mamori.KindPermissionDenied)
+	}
+}
+
+// TestAppConfigResolvePreservesClassification proves the classification
+// actually reaches a caller through this provider's own error path, the same
+// way TestSMResolveClassifiesNonNotFoundError and
+// TestPSResolveClassifiesNonNotFoundError do for their providers. Getting the
+// classification table right and getting the wrapping right are independent
+// mistakes, and this locks in the second one.
+func TestAppConfigResolvePreservesClassification(t *testing.T) {
+	fake := newFakeAppConfig()
+	fake.set("myapp/prod/flags", `{"a":1}`)
+	fake.fail("myapp/prod/flags", &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "denied"})
+	p := newAppConfigWithClient(fake)
+
+	ref, err := mamori.ParseRef("aws-appconfig://myapp/prod/flags")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	_, err = p.Resolve(context.Background(), ref)
+	if err == nil {
+		t.Fatal("Resolve returned nil error")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyAWS may not be wired into the AppConfig resolve path", got, mamori.KindPermissionDenied)
 	}
 }

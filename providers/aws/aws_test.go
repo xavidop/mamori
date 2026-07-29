@@ -294,7 +294,7 @@ func TestRegisteredSchemes(t *testing.T) {
 	for _, s := range mamori.RegisteredSchemes() {
 		got[s] = true
 	}
-	for _, want := range []string{schemeSM, schemePS} {
+	for _, want := range []string{schemeSM, schemePS, schemeAppConfig} {
 		if !got[want] {
 			t.Errorf("scheme %q was not registered by init()", want)
 		}
@@ -307,6 +307,9 @@ func TestConstructorSchemes(t *testing.T) {
 	}
 	if s := NewParameterStore(WithRegion("eu-west-1")).Scheme(); s != schemePS {
 		t.Errorf("PSProvider.Scheme() = %q, want %q", s, schemePS)
+	}
+	if s := NewAppConfig(WithRegion("eu-west-1")).Scheme(); s != schemeAppConfig {
+		t.Errorf("AppConfigProvider.Scheme() = %q, want %q", s, schemeAppConfig)
 	}
 }
 

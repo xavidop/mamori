@@ -1,24 +1,28 @@
 // Package aws provides mamori value providers backed by Amazon Web Services.
 //
-// It registers two schemes, each handled by its own provider type:
+// It registers three schemes, each handled by its own provider type:
 //
-//   - aws-sm://<secret-id>[#json-key]      AWS Secrets Manager  (SMProvider)
-//   - aws-ps://<parameter-name>[#json-key] SSM Parameter Store  (PSProvider)
+//   - aws-sm://<secret-id>[#json-key]              AWS Secrets Manager    (SMProvider)
+//   - aws-ps://<parameter-name>[#json-key]          SSM Parameter Store    (PSProvider)
+//   - aws-appconfig://<app>/<env>/<profile>[#json-key] AWS AppConfig       (AppConfigProvider)
 //
-// Both providers create their underlying AWS SDK client lazily on first use,
-// using the default AWS credential chain (environment, shared config/profile,
-// EC2/ECS/EKS role, SSO, ...). The AWS region is taken from the same ambient
-// configuration unless overridden with WithRegion.
+// All three providers create their underlying AWS SDK client lazily on first
+// use, using the default AWS credential chain (environment, shared
+// config/profile, EC2/ECS/EKS role, SSO, ...). The AWS region is taken from
+// the same ambient configuration unless overridden with WithRegion.
 //
 // A #json-key fragment selects a single field from a JSON object payload using
 // mamori.SelectKey, identically to every other mamori provider. Secrets Manager
 // values are always marked Sensitive; Parameter Store values are marked
-// Sensitive only when the parameter is a SecureString.
+// Sensitive only when the parameter is a SecureString; AppConfig values are
+// never marked Sensitive, since AppConfig is a configuration service rather
+// than a secret store.
 //
-// Neither backend has native change notification, so neither provider
-// implements WatchableProvider - mamori polls them. Both implement
-// mamori.BatchProvider (BatchGetSecretValue / GetParameters) so mamori can
-// resolve many refs in a single API call.
+// None of the three backends has native change notification, so none of the
+// providers implements WatchableProvider - mamori polls them. Secrets Manager
+// and Parameter Store additionally implement mamori.BatchProvider
+// (BatchGetSecretValue / GetParameters) so mamori can resolve many refs in a
+// single API call.
 //
 // Usage with ambient credentials is automatic via the registered providers.
 // Callers who need explicit configuration use:
@@ -26,6 +30,7 @@
 //	cfg, _ := mamori.Load[Config](ctx,
 //	    mamori.WithProvider(aws.NewSecretsManager(aws.WithRegion("us-east-1"))),
 //	    mamori.WithProvider(aws.NewParameterStore(aws.WithRegion("us-east-1"))),
+//	    mamori.WithProvider(aws.NewAppConfig(aws.WithRegion("us-east-1"))),
 //	)
 package aws
 
@@ -40,13 +45,14 @@ import (
 	"github.com/xavidop/mamori"
 )
 
-// options holds the construction-time configuration shared by both providers.
+// options holds the construction-time configuration shared by all three
+// providers.
 type options struct {
 	region string
 }
 
-// Option customizes a provider constructed with NewSecretsManager or
-// NewParameterStore.
+// Option customizes a provider constructed with NewSecretsManager,
+// NewParameterStore, or NewAppConfig.
 type Option func(*options)
 
 // WithRegion pins the AWS region for the provider's client. When unset, the
@@ -106,10 +112,11 @@ func classifyAWS(err error) error {
 		"RequestLimitExceeded":
 		sentinel = mamori.ErrRateLimited
 	case "InternalServiceError", "InternalServerError", "InternalFailure",
+		"InternalServerException",
 		"ServiceUnavailable", "ServiceUnavailableException":
 		sentinel = mamori.ErrUnavailable
 	case "InvalidParameterException", "InvalidRequestException", "ValidationException",
-		"InvalidParameterValue", "InvalidKeyId":
+		"InvalidParameterValue", "InvalidKeyId", "BadRequestException":
 		sentinel = mamori.ErrInvalid
 	default:
 		return err
@@ -118,10 +125,11 @@ func classifyAWS(err error) error {
 }
 
 // init registers a lazily-initialized instance of each provider so that
-// aws-sm:// and aws-ps:// refs resolve out of the box under ambient AWS
-// credentials. Two distinct types are registered because mamori.Register
-// panics on a duplicate scheme.
+// aws-sm://, aws-ps://, and aws-appconfig:// refs resolve out of the box under
+// ambient AWS credentials. Three distinct types are registered because
+// mamori.Register panics on a duplicate scheme.
 func init() {
 	mamori.Register(NewSecretsManager())
 	mamori.Register(NewParameterStore())
+	mamori.Register(NewAppConfig())
 }
