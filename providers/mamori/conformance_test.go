@@ -298,6 +298,10 @@ func runConformance(t *testing.T, serverOpts []server.Option, endpointFor func(*
 	cfg := providertest.Config{
 		New: func() mamori.Provider { return newClient() },
 		Ref: func(key string) string { return "mamori://" + key },
+		// The server sends a snapshot per subscribed name at subscribe time
+		// (server/handler.go, sendWatchSnapshot), so the first Update the SSE
+		// watch delivers proves the subscription is registered upstream.
+		WatchDeliversBaseline: true,
 		Key: func(name string) string {
 			switch {
 			case strings.HasPrefix(name, "classify-"):

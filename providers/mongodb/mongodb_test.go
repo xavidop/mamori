@@ -203,6 +203,9 @@ func TestConformance(t *testing.T) {
 		// The conformance kit stores each value as a document's "value" field and
 		// selects it with #value, so the resolved bytes equal the seeded string.
 		Ref: func(key string) string { return "mongodb://conformance/" + key + "#value" },
+		// mongodb.go: the change stream is opened before the goroutine runs and
+		// the baseline is read after it ("Emit the current value as a baseline").
+		WatchDeliversBaseline: true,
 		Seed: func(_ context.Context, key, val string) error {
 			fake.put("conformance", key, bson.M{"_id": key, "value": val})
 			return nil

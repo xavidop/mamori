@@ -74,11 +74,14 @@ func TestIntegrationConformance(t *testing.T) {
 	}
 
 	providertest.Run(t, providertest.Config{
-		New:               func() mamori.Provider { return New(WithClient(client), WithDatabase(db)) },
-		Ref:               func(key string) string { return "mongodb://" + collName + "/" + key + "#value" },
-		Seed:              upsert,
-		Mutate:            upsert,
-		EventuallyTimeout: 15 * time.Second,
+		New:    func() mamori.Provider { return New(WithClient(client), WithDatabase(db)) },
+		Ref:    func(key string) string { return "mongodb://" + collName + "/" + key + "#value" },
+		Seed:   upsert,
+		Mutate: upsert,
+		// See the unit-test conformance config: change stream opened, then
+		// baseline read.
+		WatchDeliversBaseline: true,
+		EventuallyTimeout:     15 * time.Second,
 		// live-backend integration test; error injection not possible, unit test covers classification
 		NoResolveErrors: true,
 	})

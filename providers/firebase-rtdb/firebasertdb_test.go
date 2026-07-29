@@ -189,8 +189,11 @@ func TestConformance(t *testing.T) {
 		New: func() mamori.Provider {
 			return New(withBackend(fake), WithReconnectBackoff(200*time.Millisecond))
 		},
-		Ref:  func(key string) string { return "firebase-rtdb://" + key },
-		Seed: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Ref: func(key string) string { return "firebase-rtdb://" + key },
+		// firebasertdb.go: the stream is opened first, then "Emit the current
+		// value as a baseline once, after the stream is open".
+		WatchDeliversBaseline: true,
+		Seed:                  func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

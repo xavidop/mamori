@@ -148,8 +148,12 @@ func TestConformance(t *testing.T) {
 		New: func() mamori.Provider {
 			return New(withKV(fake), WithWaitTime(500*time.Millisecond))
 		},
-		Ref:  func(key string) string { return "consul://" + key },
-		Seed: func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
+		Ref: func(key string) string { return "consul://" + key },
+		// consul.go: the first blocking query (lastIndex == 0) reads and emits
+		// the baseline, and the index it returns is the subscription position,
+		// so nothing written after it can be missed.
+		WatchDeliversBaseline: true,
+		Seed:                  func(_ context.Context, key, val string) error { fake.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error {
 			fake.set(key, val)
 			return nil

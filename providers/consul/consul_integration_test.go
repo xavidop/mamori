@@ -49,12 +49,15 @@ func TestIntegrationConformance(t *testing.T) {
 	}
 
 	providertest.Run(t, providertest.Config{
-		New:               func() mamori.Provider { return New(WithClient(client)) },
-		Ref:               func(key string) string { return "consul://" + key },
-		Key:               func(name string) string { return prefix + name },
-		Seed:              put,
-		Mutate:            put,
-		EventuallyTimeout: 15 * time.Second,
+		New:    func() mamori.Provider { return New(WithClient(client)) },
+		Ref:    func(key string) string { return "consul://" + key },
+		Key:    func(name string) string { return prefix + name },
+		Seed:   put,
+		Mutate: put,
+		// See the unit-test conformance config: the first blocking query emits
+		// the baseline and establishes the index the watch resumes from.
+		WatchDeliversBaseline: true,
+		EventuallyTimeout:     15 * time.Second,
 		// live-backend integration test; error injection not possible, unit test covers classification
 		NoResolveErrors: true,
 	})

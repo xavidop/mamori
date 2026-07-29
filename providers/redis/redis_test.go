@@ -209,6 +209,9 @@ func TestConformance(t *testing.T) {
 		Ref:    func(key string) string { return "redis://" + key },
 		Seed:   func(_ context.Context, key, val string) error { f.set(key, val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { f.set(key, val); return nil },
+		// redis.go: "Subscribe before emitting the baseline so no notification
+		// is missed between the baseline GET and the start of the read loop."
+		WatchDeliversBaseline: true,
 		Fail: func(_ context.Context, key string, err error) error {
 			f.fail(key, err)
 			return nil

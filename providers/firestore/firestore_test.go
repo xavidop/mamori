@@ -164,6 +164,9 @@ func TestConformance(t *testing.T) {
 		// The document stores the value under a "value" field so a scalar can be
 		// round-tripped through a document-shaped backend.
 		Ref: func(key string) string { return "firestore://" + collection + "/" + key + "#value" },
+		// firestore.go: the snapshot stream is created before the goroutine
+		// runs, and its first event is the current document.
+		WatchDeliversBaseline: true,
 		Seed: func(_ context.Context, key, val string) error {
 			store.set(collection, key, map[string]interface{}{"value": val})
 			return nil

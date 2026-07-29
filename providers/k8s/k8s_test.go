@@ -169,6 +169,9 @@ func TestConformanceSecret(t *testing.T) {
 		},
 		Seed:   func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
+		// k8s.go: "Emit the current snapshot after the watch is established so
+		// no change occurring between snapshot and watch is lost."
+		WatchDeliversBaseline: true,
 		// The kit's key is a namespaced conformance key; the reactor only sees
 		// the object name that Ref/Seed derived from it via sanitize, so Fail
 		// and Clear must apply the same translation or the reactor never fires.
@@ -206,6 +209,8 @@ func TestConformanceConfigMap(t *testing.T) {
 		Ref:    func(key string) string { return "k8s-cm://" + testNamespace + "/" + sanitize(key) + "#value" },
 		Seed:   func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
 		Mutate: func(_ context.Context, key, val string) error { upsert(sanitize(key), val); return nil },
+		// Same Watch as the Secret case above: snapshot after the watch starts.
+		WatchDeliversBaseline: true,
 		Fail: func(_ context.Context, key string, err error) error {
 			fi.fail(sanitize(key), err)
 			return nil

@@ -160,8 +160,11 @@ func TestConformance(t *testing.T) {
 				return failQueryer{inner: q, reg: reg}
 			}))
 		},
-		Ref:  func(key string) string { return "sqlite://cfg/" + key },
-		Seed: func(_ context.Context, key, val string) error { return writeKV(path, "cfg", key, val) },
+		Ref: func(key string) string { return "sqlite://cfg/" + key },
+		// sqlite.go: the fsnotify watch is added before the goroutine starts,
+		// and the baseline emit happens inside it.
+		WatchDeliversBaseline: true,
+		Seed:                  func(_ context.Context, key, val string) error { return writeKV(path, "cfg", key, val) },
 		Mutate: func(_ context.Context, key, val string) error {
 			return writeKV(path, "cfg", key, val)
 		},

@@ -54,6 +54,41 @@ type Config struct {
 	// implements WatchableProvider (e.g. when the backend can't push in CI).
 	SkipWatch bool
 
+	// WatchDeliversBaseline declares that Watch emits an Update carrying the
+	// current value - a "baseline" - before any change notification, and, the
+	// load-bearing half, that the backend subscription is already established
+	// by the time that baseline is emitted.
+	//
+	// It exists because WatchEmitsOnMutate has to mutate the backend after the
+	// watch is live, and nothing in the WatchableProvider interface says when
+	// that happened. Watch may return its channel and subscribe afterwards in a
+	// goroutine - mamori explicitly permits this ("a native-watch subscription
+	// is asynchronous", reconciler.go) - so a mutation issued too early is
+	// simply not seen by anybody. Unset, the kit copes by waiting a fixed
+	// interval and hoping (see drainNonBlocking). Set, it waits for the
+	// baseline instead, which is an actual happens-after signal: a provider
+	// that subscribes before it reads-and-emits cannot produce that Update
+	// without having already subscribed. The wait is then deterministic rather
+	// than timing-dependent, and typically finishes in microseconds instead of
+	// the fixed 200ms.
+	//
+	// Subscribe-then-read is the ordering a watch wants regardless of this kit
+	// (see the redis provider: "Subscribe before emitting the baseline so no
+	// notification is missed between the baseline GET and the start of the read
+	// loop"), which is why declaring it is safe for a correct provider and only
+	// awkward for an incorrect one. If your Watch reads the value first and
+	// subscribes second, do not set this: that ordering drops any write landing
+	// in between, and setting the field will surface that as a watch failure -
+	// correctly, but the bug to fix is the ordering, not the declaration.
+	//
+	// The zero value keeps the previous behavior exactly, so leaving it unset
+	// is always safe. Providers that emit no baseline at all (a pure
+	// change-event stream, e.g. etcd or launchdarkly here) must leave it unset;
+	// for those the kit has no signal to wait on and falls back to the fixed
+	// interval. Declaring it when no baseline is coming fails the case with an
+	// explicit message rather than hanging silently.
+	WatchDeliversBaseline bool
+
 	// EventuallyTimeout bounds how long watch/poll tests wait for a change to
 	// propagate. Defaults to 5s.
 	EventuallyTimeout time.Duration
@@ -133,7 +168,7 @@ func Run(t *testing.T, c Config) {
 	t.Run("ContextCancel", func(t *testing.T) { testContextCancel(t, c) })
 	t.Run("ConcurrentResolve", func(t *testing.T) { testConcurrentResolve(t, c) })
 	t.Run("VersionMonotonic", func(t *testing.T) { testVersionMonotonic(t, c) })
-	t.Run("WatchEmitsOnMutate", func(t *testing.T) { testWatch(t, c) })
+	t.Run("WatchEmitsOnMutate", func(t *testing.T) { RunWatch(t, c) })
 	t.Run("WatchClosesOnCancel", func(t *testing.T) { testWatchCloses(t, c) })
 	t.Run("NoGoroutineLeak", func(t *testing.T) { testNoLeak(t, c) })
 }
@@ -319,33 +354,66 @@ func testVersionMonotonic(t *testing.T, c Config) {
 	}
 }
 
-func testWatch(t *testing.T, c Config) {
+// RunWatch runs only the watch-emits-on-mutate case. Run calls it; it is
+// exported for the same reason RunErrorClassification is, so the kit can test
+// itself against deliberately misbehaving providers - one that subscribes late,
+// one that declares a baseline it never sends - without running the whole suite
+// and without those expected failures failing the enclosing test.
+//
+// As in RunErrorClassification, every Fatal/Fatalf/Skip is followed by an
+// explicit return: driven by a recording testing.TB rather than a real
+// *testing.T, none of them stop execution on their own.
+func RunWatch(tb testing.TB, c Config) {
+	tb.Helper()
 	p := c.New()
 	wp, ok := p.(mamori.WatchableProvider)
 	if !ok || c.SkipWatch || c.Mutate == nil {
-		t.Skip("provider is not watchable or watch disabled")
+		tb.Skip("provider is not watchable or watch disabled")
+		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	key := c.key("watch")
 	if err := c.Seed(ctx, key, "start"); err != nil {
-		t.Fatalf("Seed: %v", err)
+		tb.Fatalf("Seed: %v", err)
+		return
 	}
-	ch, err := wp.Watch(ctx, c.parseRef(t, key))
+	ref, err := mamori.ParseRef(c.Ref(key))
 	if err != nil {
-		t.Fatalf("Watch: %v", err)
+		tb.Fatalf("Ref(%q) produced an unparseable ref: %v", key, err)
+		return
 	}
-	// Drain the baseline (if any), then mutate.
-	drainNonBlocking(ch)
+	ch, werr := wp.Watch(ctx, ref)
+	if werr != nil {
+		tb.Fatalf("Watch: %v", werr)
+		return
+	}
+
+	// Get past whatever the subscription itself emits, so the mutation below is
+	// the next thing on the channel and, more importantly, so the subscription
+	// is actually live when it happens.
+	if c.WatchDeliversBaseline {
+		if !awaitBaseline(ch, c.timeout()) {
+			tb.Fatalf("Config.WatchDeliversBaseline is set, but Watch delivered no Update "+
+				"within %v. Either this provider emits no baseline at subscribe time, in "+
+				"which case unset the field, or its watch never started.", c.timeout())
+			return
+		}
+	} else {
+		drainNonBlocking(ch)
+	}
+
 	if err := c.Mutate(ctx, key, "changed"); err != nil {
-		t.Fatalf("Mutate: %v", err)
+		tb.Fatalf("Mutate: %v", err)
+		return
 	}
 	deadline := time.After(c.timeout())
 	for {
 		select {
 		case u, open := <-ch:
 			if !open {
-				t.Fatal("watch channel closed before delivering the mutation")
+				tb.Fatal("watch channel closed before delivering the mutation")
+				return
 			}
 			if u.Err != nil {
 				continue
@@ -354,7 +422,8 @@ func testWatch(t *testing.T, c Config) {
 				return
 			}
 		case <-deadline:
-			t.Fatal("watch did not deliver the mutation within the timeout")
+			tb.Fatal("watch did not deliver the mutation within the timeout")
+			return
 		}
 	}
 }
@@ -406,6 +475,72 @@ func testNoLeak(t *testing.T, c Config) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// awaitBaseline blocks for the first Update a Watch delivers - the baseline a
+// provider emits for the current value at subscribe time - and reports whether
+// one arrived before timeout. A closed channel counts as no baseline.
+//
+// This is the deterministic half of the watch case, and it works only because
+// of what Config.WatchDeliversBaseline promises: that the subscription is
+// established before the baseline is emitted. Given that ordering, receiving
+// the baseline is a genuine happens-after signal for "the subscription is
+// live", so the mutation that follows cannot be issued into a window where
+// nobody is listening. No sleep is involved and none is needed.
+//
+// Having taken the baseline, it consumes anything else already queued but does
+// not wait for more. Some providers emit several Updates around subscribe time
+// (a reconnect that re-emits, say). Left sitting in a small channel buffer,
+// those cost nothing for a provider that blocks on a full channel, but a
+// provider that drops sends into a full buffer would lose the mutation
+// notification to them - which is the one job drainNonBlocking did that was
+// never about timing.
+func awaitBaseline(ch <-chan mamori.Update, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case _, open := <-ch:
+		if !open {
+			return false
+		}
+	case <-timer.C:
+		return false
+	}
+	for {
+		select {
+		case _, open := <-ch:
+			if !open {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+}
+
+// drainNonBlocking consumes Updates until the channel has been quiet for 200ms.
+// It is the fallback for a provider that has not set
+// Config.WatchDeliversBaseline, and it is worth being precise about what it
+// does and does not buy, because the answer is less than it looks.
+//
+// What it reliably does: empty the channel, so a provider that drops sends into
+// a full buffer still has room for the mutation notification.
+//
+// What it only appears to do: make an asynchronous subscription safe. The 200ms
+// is not a synchronization point with anything - it is a guess that whatever
+// goroutine Watch spawned has subscribed by now. It is enough for providers
+// whose subscription completes quickly and useless for one that takes longer,
+// and the kit cannot tell those apart. Two shapes explain why it has held up in
+// practice anyway. A provider that subscribes first and then reads-and-emits
+// the current value recovers on its own without help from any wait, because the
+// baseline read happens after the subscription and therefore observes a
+// mutation that the subscription missed; those providers should set
+// WatchDeliversBaseline and skip the wait entirely. A provider that subscribes
+// synchronously inside Watch was never at risk to begin with.
+//
+// The residual gap, which no amount of waiting closes: a provider that
+// subscribes asynchronously and emits no baseline offers the kit nothing to
+// synchronize on, so the wait is the only option and it is a guess. The fix
+// there belongs in the provider - subscribe before returning from Watch, or
+// emit a baseline after subscribing - not in a longer sleep here.
 func drainNonBlocking(ch <-chan mamori.Update) {
 	for {
 		select {

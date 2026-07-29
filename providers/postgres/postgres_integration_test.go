@@ -82,11 +82,14 @@ func TestIntegrationConformance(t *testing.T) {
 	setupTable(t, pool, table)
 
 	providertest.Run(t, providertest.Config{
-		New:               func() mamori.Provider { return New(WithPool(pool)) },
-		Ref:               func(key string) string { return "postgres://" + table + "/" + key },
-		Seed:              upsert(pool, table),
-		Mutate:            upsert(pool, table),
-		EventuallyTimeout: 15 * time.Second,
+		New:    func() mamori.Provider { return New(WithPool(pool)) },
+		Ref:    func(key string) string { return "postgres://" + table + "/" + key },
+		Seed:   upsert(pool, table),
+		Mutate: upsert(pool, table),
+		// See the unit-test conformance config: LISTEN precedes the baseline
+		// query, and pgx buffers a NOTIFY arriving before the next wait.
+		WatchDeliversBaseline: true,
+		EventuallyTimeout:     15 * time.Second,
 		// live-backend integration test; error injection not possible, unit test covers classification
 		NoResolveErrors: true,
 	})
