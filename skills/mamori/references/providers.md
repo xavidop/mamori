@@ -21,10 +21,10 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 
 | Module | Scheme(s) | Ref example |
 | --- | --- | --- |
-| `aws` | `aws-sm://` `aws-ps://` | `aws-sm://prod/db#password`, `aws-ps://svc/port` |
+| `aws` | `aws-sm://` `aws-ps://` `aws-appconfig://` | `aws-sm://prod/db#password`, `aws-ps://svc/port`, `aws-appconfig://myapp/prod/flags#/db/port` |
 | `vault` | `vault://` | `vault://kv/data/api#token` |
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
-| `azure` | `azure-kv://` | `azure-kv://vaultname/secret-name` |
+| `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
@@ -57,9 +57,10 @@ Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).
 
-`mamori vet` flags a secret scheme stored in a plain type. `k8s-cm` (ConfigMap)
-and config schemes (`env`, `file`, `consul`, ...) are not secret-bearing. For a
-custom provider, add its scheme: `mamori vet --secret-schemes=mysecrets ./...`.
+`mamori vet` flags a secret scheme stored in a plain type. `k8s-cm` (ConfigMap),
+`aws-appconfig`, and `azure-appconfig` (config services, not secret stores) -
+and config schemes (`env`, `file`, `consul`, ...) - are not secret-bearing. For
+a custom provider, add its scheme: `mamori vet --secret-schemes=mysecrets ./...`.
 
 ## Composition
 

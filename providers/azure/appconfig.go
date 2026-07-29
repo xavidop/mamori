@@ -105,7 +105,7 @@ func (p *AppConfigProvider) Resolve(ctx context.Context, ref mamori.Ref) (mamori
 	store, key, ok := strings.Cut(ref.Path, "/")
 	if !ok || store == "" || key == "" {
 		return mamori.Value{}, fmt.Errorf(
-			"azure-appconfig: ref %q must be azure-appconfig://<store>/<key>[#json-key][?label=l]: %w",
+			"azure-appconfig: ref %q must be azure-appconfig://<store>/<key>[#json-key][?label=<label>]: %w",
 			ref.Raw, mamori.ErrInvalid)
 	}
 
@@ -173,30 +173,47 @@ func (p *AppConfigProvider) Resolve(ctx context.Context, ref mamori.Ref) (mamori
 	}, nil
 }
 
+// keyVaultGenericHint is the advice given when the reference payload is not
+// the shape the service documents, or is a shape this helper does not (yet)
+// understand well enough to name a specific ref for.
+const keyVaultGenericHint = "use an azure-kv:// ref for the referenced secret"
+
 // keyVaultHint turns a Key Vault reference payload into the azure-kv:// ref the
-// user should write instead. It degrades to generic advice when the payload is
-// not the shape the service documents, since this only ever builds an error
-// message and must never itself fail.
+// user should write instead. It degrades to keyVaultGenericHint whenever the
+// payload is not the shape the service documents, since this only ever builds
+// an error message and must never itself fail or panic.
 func keyVaultHint(value string) string {
 	var ref struct {
 		URI string `json:"uri"`
 	}
 	if err := json.Unmarshal([]byte(value), &ref); err != nil || ref.URI == "" {
-		return "use an azure-kv:// ref for the referenced secret"
+		return keyVaultGenericHint
 	}
-	// https://<vault>.vault.azure.net/secrets/<name>
+	// https://<vault>.vault.azure.net/secrets/<name>[/<version>]
 	rest, ok := strings.CutPrefix(ref.URI, "https://")
 	if !ok {
-		return "use an azure-kv:// ref for the referenced secret"
+		return keyVaultGenericHint
 	}
 	host, path, ok := strings.Cut(rest, "/")
 	if !ok {
-		return "use an azure-kv:// ref for the referenced secret"
+		return keyVaultGenericHint
 	}
 	vault, _, _ := strings.Cut(host, ".")
-	name := strings.TrimPrefix(path, "secrets/")
-	if vault == "" || name == "" {
-		return "use an azure-kv:// ref for the referenced secret"
+	if vault == "" {
+		return keyVaultGenericHint
+	}
+	secretsPath, ok := strings.CutPrefix(path, "secrets/")
+	if !ok {
+		// Not a secret reference at all (e.g. a "keys/" or "certificates/"
+		// reference) - do not guess at a name that was never a secret name.
+		return keyVaultGenericHint
+	}
+	name, version, hasVersion := strings.Cut(secretsPath, "/")
+	if name == "" {
+		return keyVaultGenericHint
+	}
+	if hasVersion && version != "" {
+		return fmt.Sprintf("use azure-kv://%s/%s?version=%s instead", vault, name, version)
 	}
 	return fmt.Sprintf("use azure-kv://%s/%s instead", vault, name)
 }

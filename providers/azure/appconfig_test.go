@@ -65,6 +65,24 @@ func (f *fakeAppConfig) remove(key, label string) {
 	delete(f.settings, settingKey{key, label})
 }
 
+// setNoETag stores a setting with no ETag at all, modeling a response the
+// service never actually sends but which the provider must still tolerate,
+// to exercise the mamori.VersionHash fallback.
+func (f *fakeAppConfig) setNoETag(key, label, val string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settings[settingKey{key, label}] = fakeSetting{value: val}
+}
+
+// etagOf returns the ETag stored for key/label, for tests that must assert
+// Value.Version equals the specific ETag the fake returned rather than merely
+// being non-empty.
+func (f *fakeAppConfig) etagOf(key, label string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.settings[settingKey{key, label}].etag
+}
+
 func (f *fakeAppConfig) fail(key string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -88,20 +106,45 @@ func (f *fakeAppConfig) GetSetting(ctx context.Context, key string, opts *azappc
 		return azappconfig.GetSettingResponse{}, err
 	}
 
-	var label string
+	var s fakeSetting
+	var found bool
 	if opts != nil && opts.Label != nil {
-		label = *opts.Label
+		// A non-nil Label - including a pointer to the empty string - selects
+		// exactly that setting. The empty string means the null label
+		// specifically, not "no filter".
+		s, found = f.settings[settingKey{key, *opts.Label}]
+	} else {
+		// A nil Label has no real analogue in the actual azappconfig SDK
+		// (the generated client only ever sends the label query parameter
+		// when the pointer is non-nil); we model it here as a wildcard that
+		// matches any label for this key, preferring a labelled setting over
+		// the null-labelled one when both exist. This is deliberately more
+		// permissive than the real service, so that an implementation which
+		// forgets to pass the label explicitly for an absent ?label= gets
+		// served a plausible-looking wrong answer here too, instead of the
+		// fake silently agreeing with a bug by coincidence.
+		for k, v := range f.settings {
+			if k.key != key {
+				continue
+			}
+			if k.label != "" {
+				s, found = v, true
+				break
+			}
+			s, found = v, true
+		}
 	}
-	s, ok := f.settings[settingKey{key, label}]
-	if !ok {
+	if !found {
 		return azappconfig.GetSettingResponse{}, &azcore.ResponseError{StatusCode: http.StatusNotFound}
 	}
 
-	etag := azcore.ETag(s.etag)
 	resp := azappconfig.GetSettingResponse{}
 	resp.Key = &key
 	resp.Value = &s.value
-	resp.ETag = &etag
+	if s.etag != "" {
+		etag := azcore.ETag(s.etag)
+		resp.ETag = &etag
+	}
 	if s.contentType != "" {
 		ct := s.contentType
 		resp.ContentType = &ct
@@ -128,8 +171,30 @@ func TestAzureAppConfigResolve(t *testing.T) {
 	if v.Sensitive {
 		t.Error("Sensitive = true, want false: App Configuration is not a secret store")
 	}
-	if v.Version == "" {
-		t.Error("Version is empty, want the setting's ETag")
+	if want := fake.etagOf("db/port", ""); v.Version != want {
+		t.Errorf("Version = %q, want the setting's own ETag %q", v.Version, want)
+	}
+}
+
+// TestAzureAppConfigResolveVersionHashFallback asserts that when the service
+// returns no ETag at all, Version falls back to mamori.VersionHash(data)
+// rather than staying empty.
+func TestAzureAppConfigResolveVersionHashFallback(t *testing.T) {
+	fake := newFakeAppConfig()
+	fake.setNoETag("db/port", "", "5432")
+	p := newAppConfigWithClient(fake)
+
+	ref, err := mamori.ParseRef("azure-appconfig://mystore/db/port")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	v, err := p.Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := mamori.VersionHash(v.Bytes)
+	if v.Version != want {
+		t.Errorf("Version = %q, want the VersionHash fallback %q", v.Version, want)
 	}
 }
 
@@ -184,8 +249,72 @@ func TestAzureAppConfigKeyVaultReferenceRejected(t *testing.T) {
 	if !errors.Is(err, mamori.ErrInvalid) {
 		t.Errorf("error %v does not satisfy errors.Is(ErrInvalid)", err)
 	}
-	if !strings.Contains(err.Error(), "azure-kv://") {
-		t.Errorf("error %q does not name the azure-kv:// ref the user should write instead", err)
+	// Must name the *specific* ref for this reference's vault and secret, not
+	// merely mention the azure-kv:// scheme - keyVaultHint's generic fallback
+	// text also contains "azure-kv://", so a substring check on the scheme
+	// alone would pass even if the hint degraded to generic advice.
+	const wantRef = "azure-kv://myvault/dbpass"
+	if !strings.Contains(err.Error(), wantRef) {
+		t.Errorf("error %q does not name the specific %s ref the user should write instead", err, wantRef)
+	}
+}
+
+// TestKeyVaultHint covers keyVaultHint directly: the well-formed unversioned
+// and versioned Key Vault reference shapes, and every malformed payload shape
+// that must degrade to keyVaultGenericHint rather than naming a bogus ref.
+func TestKeyVaultHint(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			name:  "unversioned secret",
+			value: `{"uri":"https://myvault.vault.azure.net/secrets/dbpass"}`,
+			want:  "use azure-kv://myvault/dbpass instead",
+		},
+		{
+			name:  "versioned secret",
+			value: `{"uri":"https://myvault.vault.azure.net/secrets/dbpass/abc123"}`,
+			want:  "use azure-kv://myvault/dbpass?version=abc123 instead",
+		},
+		{
+			name:  "non-JSON payload",
+			value: "not json at all",
+			want:  keyVaultGenericHint,
+		},
+		{
+			name:  "empty JSON object",
+			value: "{}",
+			want:  keyVaultGenericHint,
+		},
+		{
+			name:  "missing https scheme",
+			value: `{"uri":"myvault.vault.azure.net/secrets/dbpass"}`,
+			want:  keyVaultGenericHint,
+		},
+		{
+			name:  "empty host",
+			value: `{"uri":"https:///secrets/dbpass"}`,
+			want:  keyVaultGenericHint,
+		},
+		{
+			name:  "empty secret name",
+			value: `{"uri":"https://myvault.vault.azure.net/secrets/"}`,
+			want:  keyVaultGenericHint,
+		},
+		{
+			name:  "path not under secrets/",
+			value: `{"uri":"https://myvault.vault.azure.net/keys/dbpass"}`,
+			want:  keyVaultGenericHint,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := keyVaultHint(tc.value); got != tc.want {
+				t.Errorf("keyVaultHint(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -210,6 +339,27 @@ func TestAzureAppConfigResolveNotFoundAfterRemove(t *testing.T) {
 
 	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrNotFound) {
 		t.Errorf("Resolve after remove error = %v, want errors.Is(ErrNotFound)", err)
+	}
+}
+
+// TestAzureAppConfigResolveBadRef mirrors azure_test.go's TestResolveBadRef
+// for the Key Vault provider: a malformed ref (missing store or missing key)
+// must fail, but not with ErrNotFound - it never reached the backend at all.
+func TestAzureAppConfigResolveBadRef(t *testing.T) {
+	p := newAppConfigWithClient(newFakeAppConfig())
+	for _, raw := range []string{
+		"azure-appconfig://onlystore", // no key
+		"azure-appconfig:///keyonly",  // no store
+	} {
+		ref, err := mamori.ParseRef(raw)
+		if err != nil {
+			t.Fatalf("ParseRef(%q): %v", raw, err)
+		}
+		if _, err := p.Resolve(context.Background(), ref); err == nil {
+			t.Errorf("Resolve(%q) = nil error, want a malformed-ref error", raw)
+		} else if errors.Is(err, mamori.ErrNotFound) {
+			t.Errorf("Resolve(%q) returned ErrNotFound; a malformed ref is not not-found", raw)
+		}
 	}
 }
 

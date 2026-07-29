@@ -28,7 +28,7 @@ Full docs: https://mamorigo.dev/docs . Core module: `github.com/xavidop/mamori`.
 import (
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/secret"
-	_ "github.com/xavidop/mamori/providers/aws" // registers aws-sm:// and aws-ps://
+	_ "github.com/xavidop/mamori/providers/aws" // registers aws-sm://, aws-ps://, and aws-appconfig://
 )
 
 type Config struct {
