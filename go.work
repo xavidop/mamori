@@ -27,6 +27,7 @@ use (
 	./providers/mongodb
 	./providers/mysql
 	./providers/onepassword
+	./providers/openfeature
 	./providers/postgres
 	./providers/redis
 	./providers/s3

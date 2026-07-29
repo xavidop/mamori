@@ -45,6 +45,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcs` | `gcs://` | Google Cloud Storage object |
 | `azblob` | `azblob://` | Azure Blob Storage object |
 | `launchdarkly` `unleash` `flagsmith` `configcat` `split` `growthbook` `flipt` `goff` | feature-flag schemes | one module per flag backend |
+| `openfeature` | `openfeature://` | vendor-neutral flag standard; evaluates through whatever `openfeature.FeatureProvider` your app installs. `openfeature://new-checkout?type=bool`, `openfeature://limits#/upload/maxMB?type=object` |
 | `mamori` | `mamori://` | client of a mamori config server (native watch) |
 
 ## Secret-bearing schemes

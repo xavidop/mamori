@@ -585,7 +585,13 @@ func testWatchCloses(t *testing.T, c Config) {
 }
 
 func testNoLeak(t *testing.T, c Config) {
-	defer goleak.VerifyNone(t)
+	// Snapshot the goroutines that already exist before the provider is
+	// constructed, so a dependency that starts a permanent goroutine from its
+	// package init (the OpenFeature SDK's event executor is one) is not
+	// mistaken for a leak by this provider. Anything started after this line
+	// and still running at VerifyNone is still reported.
+	ignore := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, ignore)
 	p := c.New()
 	key := c.key("leak")
 	_ = c.Seed(context.Background(), key, "x")
