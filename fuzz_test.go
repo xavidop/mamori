@@ -58,6 +58,17 @@ func FuzzRefGrammar(f *testing.F) {
 		"a:b?decode=bogus",
 		"a:b?decode=base64,",
 		"a:b?decode= base64 ",
+		// Codings that run FIRST, so the mutator reaches each decoder's own
+		// parsing with arbitrary bytes. Without these the only gzip seed is
+		// "decode=base64,gzip", where base64 fails on any non-base64 payload
+		// and the loop breaks before gunzip is ever called - so gunzip, the
+		// one decoder here that parses attacker-influenceable binary and the
+		// only one with a bomb bound, would get no coverage at all. Verified
+		// by planting a panic in gunzip: without these seeds it is not hit.
+		"a:b?decode=gzip",
+		"a:b?decode=hex",
+		"a:b?decode=base64url",
+		"a:b?decode=trim,gzip",
 		// JSON Pointer edge cases: index 0, the RFC 6901 "-" token, a
 		// leading zero, and a dangling escape.
 		"a:b#/0",
@@ -107,6 +118,35 @@ func FuzzRefGrammar(f *testing.F) {
 			if err != nil {
 				if got != nil {
 					t.Fatalf("SelectKey(%q) returned both bytes and an error %v", r.Key, err)
+				}
+			}
+
+			// Run the pipeline, do not merely parse it. Validating the coding
+			// names proves nothing about the decoders themselves, and gunzip is
+			// the only code in this package that parses attacker-influenceable
+			// binary: it is handed whatever bytes a backend returned, and its
+			// 16 MiB bomb bound is the one guard here a hostile input is meant
+			// to trip. A harness that never executes a step leaves exactly that
+			// untested.
+			//
+			// Go through applyDecode rather than calling steps[i].fn directly,
+			// for two reasons. It is what the engine actually calls
+			// (resolve.go, reconciler.go), so this exercises production's own
+			// entry point including the bomb bound. And the value-plus-error
+			// property below is mamori's promise, not the stdlib's: the raw
+			// codecs deliberately return partial output alongside an error
+			// (base64.DecodeString documents returning the bytes decoded
+			// before the failure), so asserting it against them fails on
+			// perfectly correct code. applyDecode is where the partial result
+			// is discarded and the invariant becomes true.
+			//
+			// Ordering mirrors production: the provider selects the key, then
+			// core decodes what was selected, so a successful SelectKey feeds
+			// the pipeline and a failed one has nothing to feed it.
+			if err == nil && len(steps) > 0 {
+				dec, derr := applyDecode(r, Value{Bytes: got})
+				if derr != nil && dec.Bytes != nil {
+					t.Fatalf("applyDecode(%q) returned both bytes and an error %v", r.Opt("decode"), derr)
 				}
 			}
 
