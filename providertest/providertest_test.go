@@ -454,3 +454,49 @@ func (r *recordingTB) Error(args ...any)                 { r.failed = true }
 func (r *recordingTB) Skip(args ...any)                  { r.skipped = true }
 func (r *recordingTB) SkipNow()                          { r.skipped = true }
 func (r *recordingTB) Helper()                           {}
+
+// --- NoGoroutineLeak ---
+//
+// Every test below leaks a goroutine deliberately and permanently for the
+// life of this test binary process. That is harmless only because each one
+// is declared after every other test in this file that checks for goroutine
+// leaks of its own (TestConformanceKitPassesForCorrectProvider included,
+// which runs the full suite via Run) - Go runs a file's tests in declaration
+// order, so nothing earlier ever observes what these leak.
+
+// leakyProvider starts a goroutine on every Resolve that never exits, so it
+// can prove RunNoGoroutineLeak's check actually detects a leak rather than
+// being dead code that always passes.
+type leakyProvider struct{}
+
+func (leakyProvider) Scheme() string { return "leaky" }
+
+func (leakyProvider) Resolve(context.Context, mamori.Ref) (mamori.Value, error) {
+	go func() { select {} }() //nolint:staticcheck // deliberately permanent, see the section comment above
+	return mamori.Value{Bytes: []byte("x")}, nil
+}
+
+func TestNoGoroutineLeakFailsForLeakyProvider(t *testing.T) {
+	fake := &recordingTB{TB: t}
+	providertest.RunNoGoroutineLeak(fake, providertest.Config{
+		New:  func() mamori.Provider { return leakyProvider{} },
+		Ref:  func(key string) string { return "leaky://" + key },
+		Seed: func(context.Context, string, string) error { return nil },
+	})
+	if !fake.failed {
+		t.Fatal("NoGoroutineLeak passed a provider that leaks a goroutine on every Resolve; it must fail")
+	}
+}
+
+func TestNoGoroutineLeakPassesForCleanProvider(t *testing.T) {
+	backend := newFake()
+	fake := &recordingTB{TB: t}
+	providertest.RunNoGoroutineLeak(fake, providertest.Config{
+		New:  func() mamori.Provider { return backend },
+		Ref:  func(key string) string { return "fake://" + key },
+		Seed: func(_ context.Context, key, val string) error { backend.set(key, val); return nil },
+	})
+	if fake.failed {
+		t.Fatal("NoGoroutineLeak failed for a provider that leaks nothing")
+	}
+}

@@ -365,6 +365,74 @@ func TestResolveAutoExhaustedReportsInvalid(t *testing.T) {
 	}
 }
 
+// TestResolveAutoStopsOnNonTypeMismatchFailure guards evaluateAuto's retry
+// guard itself, not just its outcome: a failure that is not a type mismatch
+// must be reported after exactly one evaluation, never retried against a
+// different shape. Neutering the guard (retrying every failure regardless of
+// its code) leaves every other test in this file green, since a missing flag
+// or an unready provider fails identically no matter which type is tried -
+// only the call counts asserted here catch the extra, wasted evaluations.
+func TestResolveAutoStopsOnNonTypeMismatchFailure(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*fakeClient)
+	}{
+		{name: "missing flag", setup: func(*fakeClient) {}},
+		{name: "provider not ready", setup: func(f *fakeClient) { f.fail("f", of.ProviderNotReadyCode) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeClient()
+			tt.setup(fake)
+			_, err := resolve(t, newTestProvider(fake), "openfeature://f")
+			if err == nil {
+				t.Fatal("Resolve returned nil error")
+			}
+			if n := fake.callCount("object"); n != 1 {
+				t.Errorf("object evaluations = %d, want 1", n)
+			}
+			if n := fake.callCount("bool"); n != 0 {
+				t.Errorf("bool evaluations = %d, want 0: a non-type-mismatch failure must not be retried", n)
+			}
+			if n := fake.callCount("string"); n != 0 {
+				t.Errorf("string evaluations = %d, want 0: a non-type-mismatch failure must not be retried", n)
+			}
+		})
+	}
+}
+
+// TestResolveAutoDoesNotConfuseFlagKeyWithErrorCode guards isTypeMismatch
+// against substring-matching the formatted error message: a flag key that
+// happens to contain the literal text "TYPE_MISMATCH" must not be mistaken
+// for one when the evaluation actually fails with PARSE_ERROR. A
+// string-matching implementation retries all three auto-chain evaluations and
+// tells the operator to pin ?type=, when the real, cheaper, more accurate
+// answer is a single evaluation reporting the parse failure directly.
+func TestResolveAutoDoesNotConfuseFlagKeyWithErrorCode(t *testing.T) {
+	const flag = "flag-with-TYPE_MISMATCH-in-its-key"
+	fake := newFakeClient()
+	fake.fail(flag, of.ParseErrorCode)
+	_, err := resolve(t, newTestProvider(fake), "openfeature://"+flag)
+	if err == nil {
+		t.Fatal("Resolve returned nil error")
+	}
+	if n := fake.callCount("object"); n != 1 {
+		t.Errorf("object evaluations = %d, want 1", n)
+	}
+	if n := fake.callCount("bool"); n != 0 {
+		t.Errorf("bool evaluations = %d, want 0: a PARSE_ERROR must not be retried as a type mismatch merely because the flag key contains that text", n)
+	}
+	if n := fake.callCount("string"); n != 0 {
+		t.Errorf("string evaluations = %d, want 0", n)
+	}
+	if strings.Contains(err.Error(), "could not be evaluated as object, bool, or string") {
+		t.Errorf("error %q is the exhausted-chain message; a single PARSE_ERROR must be reported directly, not retried into exhaustion", err)
+	}
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Errorf("error %v does not satisfy errors.Is(ErrInvalid)", err)
+	}
+}
+
 func TestResolveVersionPrefersVariant(t *testing.T) {
 	fake := newFakeClient()
 	fake.set("f", "on", "variant-a", "string")
@@ -440,9 +508,7 @@ func TestErrorClassification(t *testing.T) {
 }
 
 func TestTargetingKeyAndAttributes(t *testing.T) {
-	fake := newFakeClient()
-	fake.set("f", "v", "", "string")
-	p := New(WithClient(fake), WithTargetingKey("svc-a"), WithAttributes(map[string]any{"region": "eu"}))
+	p := New(WithClient(newFakeClient()), WithTargetingKey("svc-a"), WithAttributes(map[string]any{"region": "eu"}))
 	if p.evalCtx.TargetingKey() != "svc-a" {
 		t.Errorf("TargetingKey = %q, want %q", p.evalCtx.TargetingKey(), "svc-a")
 	}
@@ -491,7 +557,7 @@ func TestRegisteredScheme(t *testing.T) {
 // method" - exactly what a value with no single fixed kind needs.
 func seedConformanceValue(fake *fakeClient, key, val string) {
 	var decoded any
-	if json.Valid([]byte(val)) && json.Unmarshal([]byte(val), &decoded) == nil {
+	if json.Unmarshal([]byte(val), &decoded) == nil {
 		if _, isObj := decoded.(map[string]any); isObj {
 			fake.set(key, decoded, "", "")
 			return

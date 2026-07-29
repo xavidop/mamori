@@ -29,6 +29,7 @@ package openfeature
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -232,12 +233,16 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	}, nil
 }
 
-// evaluate dispatches to the pinned evaluation, or runs the auto chain.
+// evaluate dispatches to the pinned evaluation, or runs the auto chain. The
+// client is resolved once here (conn() takes a mutex) rather than once per
+// candidate type, so the untyped auto chain locks it at most once per
+// Resolve instead of once per evaluation attempt.
 func (p *Provider) evaluate(ctx context.Context, ref mamori.Ref, typ flagType) ([]byte, string, error) {
+	cli := p.conn()
 	if typ == typeAuto {
-		return p.evaluateAuto(ctx, ref)
+		return p.evaluateAuto(ctx, cli, ref)
 	}
-	return p.evaluateOne(ctx, ref, typ)
+	return p.evaluateOne(ctx, cli, ref, typ)
 }
 
 // autoChain is the order the untyped fallback tries. object comes first
@@ -252,10 +257,10 @@ var autoChain = []flagType{typeObject, typeBool, typeString}
 // Stopping matters as much as ordering: every attempt is a real evaluation
 // against the configured vendor, which may rate-limit or bill per call, so an
 // author who knows the type should pin ?type= and pay exactly one.
-func (p *Provider) evaluateAuto(ctx context.Context, ref mamori.Ref) ([]byte, string, error) {
+func (p *Provider) evaluateAuto(ctx context.Context, cli of.IClient, ref mamori.Ref) ([]byte, string, error) {
 	var lastErr error
 	for _, typ := range autoChain {
-		data, variant, err := p.evaluateOne(ctx, ref, typ)
+		data, variant, err := p.evaluateOne(ctx, cli, ref, typ)
 		if err == nil {
 			return data, variant, nil
 		}
@@ -267,31 +272,34 @@ func (p *Provider) evaluateAuto(ctx context.Context, ref mamori.Ref) ([]byte, st
 			return nil, "", err
 		}
 	}
+	// lastErr is never nil here (autoChain is non-empty, and the loop above
+	// only falls through to this line after every iteration's error passed
+	// isTypeMismatch, i.e. every one of them already classifies as
+	// mamori.ErrInvalid), so it needs no further classification before being
+	// wrapped.
 	return nil, "", fmt.Errorf(
 		"openfeature: flag %q could not be evaluated as object, bool, or string; pin the flag's type with ?type= (bool, string, int, float, object): %w",
-		ref.Path, errOrInvalid(lastErr))
+		ref.Path, lastErr)
 }
 
-// isTypeMismatch reports whether err is this provider's own TYPE_MISMATCH
-// wrapping (see wrap), which is the only failure evaluateAuto retries with a
-// different shape.
+// isTypeMismatch reports whether err is a TYPE_MISMATCH from this provider's
+// own evaluation - the only failure evaluateAuto retries with a different
+// shape - by recovering the OpenFeature error code wrap attached with
+// errors.As.
+//
+// This deliberately does not string-match err.Error(): a flag key or message
+// that happens to contain another code's literal text (e.g. a key named
+// "...TYPE_MISMATCH..." that actually fails with PARSE_ERROR) would
+// substring-match and be retried as a type mismatch it is not, silently
+// tripling the evaluation count and misclassifying the underlying failure.
 func isTypeMismatch(err error) bool {
-	return mamori.ErrorKind(err) == mamori.KindInvalid && strings.Contains(err.Error(), string(of.TypeMismatchCode))
-}
-
-// errOrInvalid returns err when it already carries a mamori sentinel, and
-// ErrInvalid otherwise, so the exhausted-chain error is always classifiable.
-func errOrInvalid(err error) error {
-	if err != nil && mamori.ErrorKind(err) != mamori.KindUnknown {
-		return err
-	}
-	return mamori.ErrInvalid
+	var ee *evalError
+	return errors.As(err, &ee) && ee.code == of.TypeMismatchCode
 }
 
 // evaluateOne performs a single typed evaluation and renders the result.
-func (p *Provider) evaluateOne(ctx context.Context, ref mamori.Ref, typ flagType) ([]byte, string, error) {
+func (p *Provider) evaluateOne(ctx context.Context, cli of.IClient, ref mamori.Ref, typ flagType) ([]byte, string, error) {
 	flag := ref.Path
-	cli := p.conn()
 	switch typ {
 	case typeBool:
 		d, err := cli.BooleanValueDetails(ctx, flag, false, p.evalCtx)
@@ -330,22 +338,47 @@ func (p *Provider) evaluateOne(ctx context.Context, ref mamori.Ref, typ flagType
 		}
 		return b, d.Variant, nil
 	}
-	return nil, "", fmt.Errorf("openfeature: unhandled flag type %v: %w", typ, mamori.ErrInvalid)
+	// Unreachable: evaluate never calls evaluateOne with typeAuto (it routes
+	// that to evaluateAuto instead), and the switch above exhaustively
+	// handles every other flagType value. This panics rather than returning a
+	// mamori.ErrInvalid because reaching it would be this package's own bug,
+	// not a malformed ref or an OpenFeature-side failure - the two things
+	// ErrInvalid is for.
+	panic(fmt.Sprintf("openfeature: evaluateOne called with unhandled flag type %v", typ))
 }
 
-// wrap annotates an evaluation failure with the ref and classifies it from the
-// resolution detail's ErrorCode.
+// evalError wraps an evaluation failure with the OpenFeature error code it
+// came from, so a caller can recover the code with errors.As instead of
+// searching the formatted message for a code's literal text - the latter
+// false-positives whenever the flag key or an intermediate message happens to
+// contain another code's name (a flag key containing "TYPE_MISMATCH" that
+// actually fails with PARSE_ERROR, for instance). isTypeMismatch is the one
+// caller that needs this.
+type evalError struct {
+	code of.ErrorCode
+	err  error
+}
+
+func (e *evalError) Error() string { return e.err.Error() }
+func (e *evalError) Unwrap() error { return e.err }
+
+// wrap annotates an evaluation failure with the ref, classifies it from the
+// resolution detail's ErrorCode, and returns it as an *evalError carrying that
+// code for isTypeMismatch to recover.
 //
 // The code is read from the ResolutionDetail rather than the error, because
 // openfeature.ResolutionError keeps its code unexported and offers no
 // accessor; the detail struct is the only place the code is readable.
 func (p *Provider) wrap(flag string, typ flagType, rd of.ResolutionDetail, err error) error {
 	sentinel := classifyOF(rd.ErrorCode)
+	var msg error
 	if sentinel == nil {
-		return fmt.Errorf("openfeature: evaluate %q as %s: %w", flag, typ, err)
+		msg = fmt.Errorf("openfeature: evaluate %q as %s: %w", flag, typ, err)
+	} else {
+		msg = fmt.Errorf("openfeature: evaluate %q as %s [%s]: %w: %w",
+			flag, typ, rd.ErrorCode, sentinel, err)
 	}
-	return fmt.Errorf("openfeature: evaluate %q as %s [%s]: %w: %w",
-		flag, typ, rd.ErrorCode, sentinel, err)
+	return &evalError{code: rd.ErrorCode, err: msg}
 }
 
 // classifyOF maps an OpenFeature error code onto a mamori classification

@@ -191,6 +191,19 @@ func Run(t *testing.T, c Config) {
 		t.Fatal("providertest.Config requires New, Ref, and Seed")
 	}
 
+	// Snapshot the goroutines already running before ANY subtest executes -
+	// this must happen here, not inside NoGoroutineLeak's own subtest, which
+	// runs last. A snapshot taken there would also silently absorb a leak
+	// introduced by any of the eleven subtests that ran before it, since they
+	// would already be running (and therefore look "pre-existing") by the
+	// time that later snapshot was captured. Taken here, before the first
+	// t.Run, only what existed before Run started - a dependency's
+	// package-init goroutine, e.g. the OpenFeature SDK's event listener - is
+	// absorbed; a goroutine leaked by ResolveSeeded, ConcurrentResolve, or any
+	// other subtest that runs long before NoGoroutineLeak is still new
+	// relative to this snapshot and is still reported.
+	ignoreGoroutines := goleak.IgnoreCurrent()
+
 	t.Run("Scheme", func(t *testing.T) { testScheme(t, c) })
 	t.Run("ResolveSeeded", func(t *testing.T) { testResolveSeeded(t, c) })
 	t.Run("NotFoundTyped", func(t *testing.T) { testNotFound(t, c) })
@@ -202,7 +215,7 @@ func Run(t *testing.T, c Config) {
 	t.Run("VersionMonotonic", func(t *testing.T) { testVersionMonotonic(t, c) })
 	t.Run("WatchEmitsOnMutate", func(t *testing.T) { RunWatch(t, c) })
 	t.Run("WatchClosesOnCancel", func(t *testing.T) { testWatchCloses(t, c) })
-	t.Run("NoGoroutineLeak", func(t *testing.T) { testNoLeak(t, c) })
+	t.Run("NoGoroutineLeak", func(t *testing.T) { runNoGoroutineLeak(t, c, ignoreGoroutines) })
 }
 
 func testScheme(t *testing.T, c Config) {
@@ -584,28 +597,47 @@ func testWatchCloses(t *testing.T, c Config) {
 	}
 }
 
-func testNoLeak(t *testing.T, c Config) {
-	// Snapshot the goroutines that already exist before the provider is
-	// constructed, so a dependency that starts a permanent goroutine from its
-	// package init (the OpenFeature SDK's event executor is one) is not
-	// mistaken for a leak by this provider. Anything started after this line
-	// and still running at VerifyNone is still reported.
-	ignore := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, ignore)
+// RunNoGoroutineLeak runs only the goroutine-leak case, snapshotting the
+// goroutines already running itself before constructing the provider under
+// test. It is exported for standalone use: testing the case itself against a
+// recording testing.TB (with both a deliberately leaky provider and a clean
+// one), or a provider that wants to run just this case on its own. Run does
+// NOT call this - see runNoGoroutineLeak below for why.
+func RunNoGoroutineLeak(tb testing.TB, c Config) {
+	tb.Helper()
+	runNoGoroutineLeak(tb, c, goleak.IgnoreCurrent())
+}
+
+// runNoGoroutineLeak is the shared body. ignore is the goroutine snapshot to
+// verify against, taken by the caller: Run takes it once, before any of its
+// twelve subtests runs, specifically so that NoGoroutineLeak - which runs
+// last - does not mistake a goroutine leaked by an EARLIER subtest for one
+// that was already running before the suite started. RunNoGoroutineLeak
+// takes its own snapshot immediately before calling this, which is
+// equally valid for standalone use since no earlier subtest has run in that
+// case either.
+func runNoGoroutineLeak(tb testing.TB, c Config, ignore goleak.Option) {
+	tb.Helper()
+	defer goleak.VerifyNone(tb, ignore)
 	p := c.New()
 	key := c.key("leak")
 	_ = c.Seed(context.Background(), key, "x")
+	ref, err := mamori.ParseRef(c.Ref(key))
+	if err != nil {
+		tb.Fatalf("Ref(%q) produced an unparseable ref: %v", key, err)
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if wp, ok := p.(mamori.WatchableProvider); ok && !c.SkipWatch {
-		ch, err := wp.Watch(ctx, c.parseRef(t, key))
-		if err == nil {
+		ch, werr := wp.Watch(ctx, ref)
+		if werr == nil {
 			go func() {
 				for range ch {
 				}
 			}()
 		}
 	}
-	_, _ = p.Resolve(ctx, c.parseRef(t, key))
+	_, _ = p.Resolve(ctx, ref)
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 }

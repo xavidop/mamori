@@ -45,7 +45,7 @@ OpenFeature evaluates a flag *by type* - there is no single "evaluate and tell m
 
 - `openfeature://new-checkout?type=bool` on a boolean flag resolves to `true` or `false`.
 - `openfeature://max-retries?type=int` on a numeric flag resolves to its decimal form.
-- `openfeature://limits?type=object#/upload/maxMB` selects one field out of an object-valued flag.
+- `openfeature://limits#/upload/maxMB?type=object` selects one field out of an object-valued flag.
 
 ```go
 type Config struct {
@@ -64,7 +64,7 @@ Beyond not-found, `Resolve` classifies the [OpenFeature error code](https://open
 
 | OpenFeature error code | mamori kind |
 | --- | --- |
-| `FLAG_NOT_FOUND` | not classified here - already drives not-found |
+| `FLAG_NOT_FOUND` | `not_found` |
 | `TYPE_MISMATCH`, `PARSE_ERROR`, `INVALID_CONTEXT`, `TARGETING_KEY_MISSING` | `invalid` |
 | `PROVIDER_NOT_READY`, `PROVIDER_FATAL` | `unavailable` |
 | `GENERAL` | `unknown` (deliberately unmapped - OpenFeature's catch-all, no reliable cause) |
