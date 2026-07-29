@@ -135,6 +135,10 @@ updates:
     directory: "/providers/goff"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:goff]
+  - package-ecosystem: gomod
+    directory: "/providers/viper"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:viper]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.

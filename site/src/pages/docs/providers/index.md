@@ -17,7 +17,7 @@ The **Errors** column shows which providers classify a failure beyond `not_found
 
 - **✅** - classifies real backend errors beyond `not_found`: thirty-three providers across twenty-eight modules (the `env:` / `dotenv://` / `file://` / `exec:` rows are one core module, counted as four providers).
 - **no (chain preserved)** - `firebase-rtdb`, `growthbook`, and `flagsmith` have no backend-specific error vocabulary to map, so a non-not-found failure still reports `unknown`, but `Resolve` wraps the underlying error with `%w` rather than flattening it, so `errors.Is`/`errors.As` still reach it. This is not classification; it is proof that the chain survives even where there is nothing more specific to name.
-- **n/a (no error surface)** - `unleash`, `configcat`, and `split` wrap client surfaces that return only `bool`/`string`, with no per-key error at all, so `Resolve` can only ever produce `not_found` or a client-construction error. Each is explicitly exempt from the conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable opt-out rather than a silent gap.
+- **n/a (no error surface)** - `unleash`, `configcat`, `split`, and `viper` wrap a client surface with no per-key error at all: the flag SDKs return only `bool`/`string`, and Viper's own read API has no error return (`Get` returns `any`, `IsSet` returns `bool`). `Resolve` can only ever produce `not_found` or a client-construction error. Each is explicitly exempt from the conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable opt-out rather than a silent gap.
 
 Don't read either non-✅ state as broken: `not_found` is detected everywhere regardless of this column, and neither state claims to see permission or availability errors that provider genuinely cannot observe.
 
@@ -62,6 +62,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `flipt://` | Flipt | no | poll | ✅ |
 | `goff://` | GO Feature Flag | no | poll | ✅ |
 | `openfeature://` | OpenFeature | no | poll | ✅ |
+| `viper://` | Viper | no | poll | n/a (no error surface) |
 
 ## Choosing and configuring a provider
 

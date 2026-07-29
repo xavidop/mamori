@@ -36,6 +36,7 @@ use (
 	./providers/sqlite
 	./providers/unleash
 	./providers/vault
+	./providers/viper
 	./server
 	./x/authjwt
 	./x/otel

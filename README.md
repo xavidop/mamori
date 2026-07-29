@@ -151,15 +151,16 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/flipt` | `flipt://` | poll | ✅ |
 | `providers/goff` | `goff://` (GO Feature Flag) | poll | ✅ |
 | `providers/openfeature` | `openfeature://` ([OpenFeature](https://openfeature.dev) standard) | poll | ✅ |
+| `providers/viper` | `viper://` ([Viper](https://github.com/spf13/viper) config library) | poll | n/a (no error surface) |
 | `providers/mamori` | `mamori://` ([config server](#config-server) client) | **native** (SSE stream) | ✅ |
 
 Every provider that passes the [`providertest`](providertest/) conformance kit earns a badge. See each module's README for auth and ref grammar.
 
-The error-classification sweep is complete: every one of the 37 providers now falls into exactly one of three honest states, and `not_found` itself is detected by every provider regardless of which one.
+The error-classification sweep is complete: every one of the 38 providers now falls into exactly one of three honest states, and `not_found` itself is detected by every provider regardless of which one.
 
 - **✅ classifies** - the provider maps real backend errors onto `mamori.ErrorKind` values beyond `not_found` (`permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`, `invalid`, as the backend's own vocabulary supports): thirty-one providers across twenty-eight module rows, since core's single row covers four built-in providers (`env:`, `dotenv://`, `file://`, `exec:`).
 - **no (chain preserved)** - `providers/firebase-rtdb`, `providers/growthbook`, and `providers/flagsmith` have no backend-specific error vocabulary to map, so a non-not-found failure still reports `unknown`. Their `Resolve` wraps the underlying error with `%w` rather than flattening it, so `errors.Is`/`errors.As` and any mamori sentinel injected by a caller's own middleware still reach it - the chain is preserved even though nothing here narrows it to a more specific kind. Do not read this as classifying permission or availability errors these providers cannot see.
-- **n/a (no error surface)** - `providers/unleash`, `providers/configcat`, and `providers/split` wrap SDK client surfaces that return only `bool`/`string` values, with no per-key error at all; their `Resolve` can only ever produce `mamori.ErrNotFound` or a client-construction error, so there is nothing to classify or preserve a chain for. Each is explicitly exempted from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable declaration rather than a silent gap.
+- **n/a (no error surface)** - `providers/unleash`, `providers/configcat`, `providers/split`, and `providers/viper` wrap a client surface with no per-key error at all: the flag SDKs return only `bool`/`string` values, and Viper's own read API has no error return (`Get` returns `any`, `IsSet` returns `bool`). Their `Resolve` can only ever produce `mamori.ErrNotFound` or a client-construction error, so there is nothing to classify or preserve a chain for. Each is explicitly exempted from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable declaration rather than a silent gap.
 
 ## Middleware
 
