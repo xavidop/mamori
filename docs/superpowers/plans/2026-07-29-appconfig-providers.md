@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Go 1.26+. Provider modules are tested with `GOWORK=off` so only their own `go.mod` is exercised.
+- **Every task must run `golangci-lint run` in the module directory before reporting done.** CI lints each provider module with golangci-lint v2.12.2, and `.golangci.yml` sets `default: standard`, which includes `unused`. `go test`, `go vet`, and `gofmt` all pass on code the linter rejects: an unused test helper is the common case, and it fails the build. Task 1 shipped exactly that defect because its verification steps omitted the linter.
 - Never use the em-dash character in any file, code comment, doc, or commit message.
 - Both new providers set `Value.Sensitive = false`. They are configuration services, not secret stores, matching `consul`, `etcd`, `configcat`, and `launchdarkly`.
 - Wrap SDK errors with mamori sentinels using `%w`, never `%v`, so `errors.Is` survives.
@@ -1022,12 +1023,14 @@ document what those tests depend on rather than inheriting it silently.
 - [ ] **Step 6: Run the whole module, including the race detector**
 
 ```bash
-cd providers/aws && GOWORK=off go test ./... && GOWORK=off go test -race -count=2 ./...
+cd providers/aws && GOWORK=off go test ./... && GOWORK=off go test -race -count=2 ./... && GOWORK=off go vet ./... && golangci-lint run
 ```
 
-Expected: PASS both times. `-count=2` matters here: it reruns the watch cases
-and catches a goroutine that outlives its context, which the kit's leak check
-would otherwise only sometimes surface.
+Expected: PASS all four. `-count=2` matters here: it reruns the watch cases and
+catches a goroutine that outlives its context, which the kit's leak check would
+otherwise only sometimes surface. `golangci-lint run` is not optional: it is
+what CI gates on, and it rejects unused test helpers that `go test` and
+`go vet` accept.
 
 - [ ] **Step 7: Update the docs**
 
@@ -1621,10 +1624,13 @@ file.
 - [ ] **Step 9: Run the full module**
 
 ```bash
-cd providers/azure && GOWORK=off go mod tidy && GOWORK=off go test ./... && GOWORK=off go test -race ./... && GOWORK=off go vet ./...
+cd providers/azure && GOWORK=off go mod tidy && GOWORK=off go test ./... && GOWORK=off go test -race ./... && GOWORK=off go vet ./... && golangci-lint run
 ```
 
-Expected: PASS.
+Expected: PASS all five. `golangci-lint run` is not optional: it is what CI
+gates on, and it rejects unused test helpers that `go test` and `go vet`
+accept. If you write a fake method you do not end up calling (`remove` is the
+usual one), either delete it or give it a real test.
 
 - [ ] **Step 10: Write the docs**
 
