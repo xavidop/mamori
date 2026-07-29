@@ -55,6 +55,12 @@ import viperprov "github.com/xavidop/mamori/providers/viper"
 mamori.WithProvider(viperprov.New(viperprov.WithViper(myViper)))
 ```
 
+## Concurrency: do not mutate a Viper instance mamori is polling
+
+**Viper v1.21.0 itself is not safe for concurrent read and write.** Its internal `config`/`override`/`defaults` maps carry no mutex of their own, so mamori's background polling goroutine calling `Resolve` (which reads through `IsSet` and `Get`) races with any concurrent `Set`, `SetDefault`, or a reload triggered by your application's own `viper.WatchConfig()` - confirmed under `go test -race`.
+
+This provider adds no locking of its own: the writes happen in your application code, which this package never sees, so nothing here could serialize them correctly. **Do not call `viper.WatchConfig()` (or otherwise mutate the instance from another goroutine) on a `*viper.Viper` that mamori is polling.** Let mamori's own poller detect changes instead - it only ever reads. If file-level change detection is what you actually want, mamori's built-in [`file://`](/docs/providers/file/) provider already watches a file natively via fsnotify, with no such race.
+
 ## Precedence is inherited, not reimplemented
 
 Viper resolves a key by consulting explicit `Set` calls, then flags, then the environment, then the config file, then key/value stores, then defaults, and returns the winner. A `viper://` ref returns **that winner** - not one particular layer. This is the entire point of the provider: it lets a large existing Viper setup adopt mamori one field at a time.
@@ -67,15 +73,25 @@ A key whose only source is `SetDefault` still resolves rather than reporting not
 | --- | --- |
 | string | passed through unchanged, e.g. `info`, not `"info"` |
 | bool | `true` / `false` |
-| int / int32 / int64 / uint / uint64 | decimal form |
-| float32 / float64 | Go's canonical decimal form |
+| int / int32 / int64 / uint / uint64 (narrower widths too, via the JSON fallback) | decimal form |
+| float32 / float64 | plain decimal (`'f'`, not `'g'` - see below) |
+| time.Duration | `Duration.String()`, e.g. `30s` |
+| time.Time | RFC 3339, e.g. `2026-07-29T00:00:00Z` |
 | map / slice / struct | JSON-encoded, e.g. `{"port":5432}` |
 
 The string case matters: `viper://logging.level` yields `info`, not `"info"`. JSON-encoding a string would leave quotes in a `string` field and in every comparison against it. Everything that is not a plain scalar becomes JSON, which is also what a `#json-key` fragment selects against.
 
+Three cases exist because the JSON fallback silently corrupts them, each confirmed against a real config file:
+
+- **Floats use `'f'`, not `'g'`.** Viper's JSON decoding stores every number as float64. `'g'` switches to exponent notation once the exponent reaches 6, so an ordinary value like `10485760` (10MiB) would render as `"1.048576e+07"`, which mamori's own int decode (`strconv.ParseInt`) rejects.
+- **`time.Duration` renders as `Duration.String()`, not a nanosecond count.** `v.SetDefault("timeout", 30*time.Second)` is canonical Viper wiring; falling through to JSON would render `30000000000`, which `time.ParseDuration` rejects for missing a unit.
+- **`time.Time` renders as RFC 3339, not a quoted string.** `gopkg.in/yaml.v3` decodes a bare YAML timestamp into a `time.Time`, so an ordinary YAML config takes this path, not the string case above; falling through to JSON would wrap it in quotes.
+
 ## Not found
 
-A key with no value from any source resolves to `mamori.ErrNotFound`.
+A key with no value from any source (no `Set`, no environment variable, nothing in the config file, no key/value store entry, no `SetDefault`, and no pflag that was actually changed) resolves to `mamori.ErrNotFound`.
+
+**A `SetDefault` value and an unset bound pflag are not the same, even though `Get` returns a default value in both cases.** Viper's own `IsSet` - which this provider inherits rather than reimplements - only counts the former: a `SetDefault` default is "set", but an unset pflag counts only once it has actually changed (`pflag.Flag.HasChanged()`). Resolving a key backed only by an unset pflag reports not-found, and mamori's own `default:` struct tag applies from there, if one is set.
 
 ## Sensitive
 
@@ -104,4 +120,4 @@ _ = v.ReadInConfig()
 mamori.WithProvider(viperprov.New(viperprov.WithViper(v)))
 ```
 
-Verified against a real `*viper.Viper` (Viper is pure in-memory once loaded, so the real library is both simpler and a stronger test than a double that could drift from Viper's actual precedence rules): every rendered kind, not-found, the `SetDefault`-counts-as-set behavior, explicit-`Set`-outranks-`default` precedence, `#json-key` selection, and the full `providertest` conformance suite.
+Verified against a real `*viper.Viper`, including real YAML parsed with `ReadConfig` for the cases that only actually arise that way (a `time.Time` from a YAML timestamp, a config-file value outranking a default, an env binding outranking a config file): every rendered kind (including a float large enough to require `'f'` over `'g'`, and both the typed and string forms of `time.Duration`), not-found (including the unset-bound-pflag case above), the `SetDefault`-counts-as-set behavior, precedence across every adjacent pair in Viper's chain, `#json-key` selection, and the full `providertest` conformance suite.

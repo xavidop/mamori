@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	spf "github.com/spf13/viper"
 	"github.com/xavidop/mamori"
@@ -49,9 +50,21 @@ func init() { mamori.Register(New()) }
 
 // Provider resolves viper:// refs against a *viper.Viper.
 //
-// It is safe for concurrent use to the same degree the underlying Viper
-// instance is: the provider adds no state of its own beyond the instance
-// pointer, which is set at construction and never mutated.
+// Concurrency: Viper v1.21.0 itself is NOT safe for concurrent read and
+// write. Its internal config/override/defaults maps carry no mutex of their
+// own, so mamori's background polling goroutine calling Resolve (which reads
+// through IsSet and Get) races with any concurrent Set, SetDefault, or a
+// reload triggered by the application's own viper.WatchConfig() - confirmed
+// under go test -race with the write in Viper's Set and the read in
+// Resolve's IsSet. This provider adds no locking of its own to paper over
+// that, deliberately: the writes happen in application code this package
+// never sees, so nothing here could serialize them correctly.
+//
+// Do not call viper.WatchConfig() (or otherwise mutate the instance from
+// another goroutine) on a *viper.Viper that mamori is polling through this
+// provider. Let mamori's own poller detect changes instead. If file-level
+// change detection is what you actually want, mamori's built-in file://
+// provider already watches a file natively via fsnotify, with no such race.
 type Provider struct {
 	v *spf.Viper
 }
@@ -140,8 +153,11 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 // A string passes through unchanged rather than being JSON-encoded, so
 // `viper://logging.level` yields info and not "info"; the quotes would survive
 // into a string field and into any comparison against it. Scalars get their
-// plain text form for the same reason. Everything else becomes JSON, which is
-// also what a #json-key fragment selects against.
+// plain text form for the same reason. time.Duration and time.Time get their
+// own cases below for the same reason, one type switch step later, since
+// json.Marshal would corrupt both in ways this package has already seen in
+// real config files. Everything else becomes JSON, which is also what a
+// #json-key fragment selects against.
 func render(v any) ([]byte, error) {
 	switch x := v.(type) {
 	case nil:
@@ -150,6 +166,32 @@ func render(v any) ([]byte, error) {
 		return []byte(x), nil
 	case bool:
 		return []byte(strconv.FormatBool(x)), nil
+	case time.Duration:
+		// v.SetDefault("timeout", 30*time.Second) is canonical Viper wiring.
+		// time.Duration's underlying type is int64, but a type switch matches
+		// the named type exactly, so it does not fall into the int64 case
+		// below and must be handled here first. Rendered as its String() form
+		// ("30s"), matching what a YAML/TOML file already gives as a plain
+		// string for the same setting, so both paths decode with
+		// time.ParseDuration. Falling through to the int64 case (or to
+		// json.Marshal) would instead render a bare nanosecond count
+		// ("30000000000"), which ParseDuration rejects for missing a unit.
+		return []byte(x.String()), nil
+	case time.Time:
+		// gopkg.in/yaml.v3 decodes a bare YAML timestamp (e.g.
+		// "expires: 2026-07-29T00:00:00Z") into a time.Time when unmarshaling
+		// into `any`, so an ordinary YAML config takes this path, not the
+		// string case above. Falling through to json.Marshal here would wrap
+		// it in quotes - the exact defect the string case exists to prevent,
+		// just arriving through a different Go type. RFC 3339 without quotes
+		// keeps it plain text a string field or time.Parse can consume as-is.
+		return []byte(x.Format(time.RFC3339)), nil
+	// int8/int16/uint8/uint16/uint32 have no case of their own: Viper never
+	// produces them (Get's own type coercion only ever yields the widths
+	// listed below, plus the two below that Viper doesn't produce but Go
+	// programs sometimes pass through Set), and any that do turn up fall
+	// through to json.Marshal, which renders them as the same plain decimal
+	// digits strconv would. Nothing to fix; this is deliberate, not a gap.
 	case int:
 		return []byte(strconv.Itoa(x)), nil
 	case int32:
@@ -161,11 +203,26 @@ func render(v any) ([]byte, error) {
 	case uint64:
 		return []byte(strconv.FormatUint(x, 10)), nil
 	case float32:
-		return []byte(strconv.FormatFloat(float64(x), 'g', -1, 32)), nil
+		// 'f' rather than 'g': Viper's JSON decoding stores every number,
+		// including whole numbers like a byte size or timeout, as float64.
+		// 'g' switches to exponent notation once the exponent reaches 6, so
+		// an entirely ordinary value like 10485760 would render as
+		// "1.048576e+07", which mamori's own int decode path
+		// (strconv.ParseInt) rejects outright. 'f' always renders plain
+		// decimal digits, matching what a YAML/TOML source (which preserves
+		// int) already gives for the same value.
+		return []byte(strconv.FormatFloat(float64(x), 'f', -1, 32)), nil
 	case float64:
-		return []byte(strconv.FormatFloat(x, 'g', -1, 64)), nil
+		return []byte(strconv.FormatFloat(x, 'f', -1, 64)), nil
 	case []byte:
-		return x, nil
+		// Copied rather than returned directly, unlike a bare slice
+		// reference: every other branch above already produces bytes owned
+		// solely by this call, and a caller that mutates the returned
+		// Value.Bytes must not be able to reach back into Viper's own stored
+		// value through this one.
+		cp := make([]byte, len(x))
+		copy(cp, x)
+		return cp, nil
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

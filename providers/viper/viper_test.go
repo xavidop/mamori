@@ -3,7 +3,10 @@ package viper
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 	spf "github.com/spf13/viper"
@@ -104,19 +107,150 @@ func TestResolveDefaultCountsAsSet(t *testing.T) {
 	}
 }
 
-// TestResolveRespectsPrecedence is the reason this provider exists. An
-// explicit Set outranks a default in Viper, and the ref must return the winner
-// Viper picked rather than any particular layer.
+// TestResolveRespectsPrecedence is the reason this provider exists: a ref
+// must return the winner Viper's own precedence chain picked, not any one
+// particular layer. The three subtests each pin one adjacent pair in that
+// chain (Set > flags > env > config file > k/v store > defaults) rather than
+// only the top-vs-bottom pair, since a middle layer winning over its
+// neighbor is just as much this provider's job to preserve.
 func TestResolveRespectsPrecedence(t *testing.T) {
+	t.Run("set over default", func(t *testing.T) {
+		v := spf.New()
+		v.SetDefault("server.port", 8080)
+		v.Set("server.port", 9090)
+		got, err := resolve(t, New(WithViper(v)), "viper://server.port")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if string(got.Bytes) != "9090" {
+			t.Errorf("Bytes = %q, want %q: the ref must return the value Viper resolved, not a single layer", got.Bytes, "9090")
+		}
+	})
+
+	t.Run("config file over default", func(t *testing.T) {
+		v := spf.New()
+		v.SetDefault("server.port", 8080)
+		v.SetConfigType("yaml")
+		if err := v.ReadConfig(strings.NewReader("server:\n  port: 9091\n")); err != nil {
+			t.Fatalf("ReadConfig: %v", err)
+		}
+		got, err := resolve(t, New(WithViper(v)), "viper://server.port")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if string(got.Bytes) != "9091" {
+			t.Errorf("Bytes = %q, want %q: a config-file value must outrank a default", got.Bytes, "9091")
+		}
+	})
+
+	t.Run("env over config file", func(t *testing.T) {
+		v := spf.New()
+		v.SetConfigType("yaml")
+		if err := v.ReadConfig(strings.NewReader("server:\n  port: 9091\n")); err != nil {
+			t.Fatalf("ReadConfig: %v", err)
+		}
+		v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+		v.AutomaticEnv()
+		t.Setenv("SERVER_PORT", "9092")
+		got, err := resolve(t, New(WithViper(v)), "viper://server.port")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if string(got.Bytes) != "9092" {
+			t.Errorf("Bytes = %q, want %q: an env binding must outrank the config file", got.Bytes, "9092")
+		}
+	})
+}
+
+// TestResolveLargeFloatRendersPlainDecimal pins a value-corruption bug found
+// in review. Viper's JSON decoding stores every number as float64, including
+// whole numbers like a byte size or a millisecond timeout, and
+// strconv.FormatFloat's 'g' verb switches to exponent notation once the
+// exponent reaches 6. A config value as ordinary as 10485760 (10MiB, a
+// typical max-upload byte count) was rendering as "1.048576e+07", which
+// mamori's own int decode path (strconv.ParseInt) rejects outright. render
+// must produce plain decimal digits that still parse as an int, matching
+// what a YAML/TOML source (which preserves int) already gives for the same
+// value.
+func TestResolveLargeFloatRendersPlainDecimal(t *testing.T) {
 	v := spf.New()
-	v.SetDefault("server.port", 8080)
-	v.Set("server.port", 9090)
-	got, err := resolve(t, New(WithViper(v)), "viper://server.port")
+	v.Set("maxBytes", float64(10485760)) // as Viper's JSON decoder would store it
+	got, err := resolve(t, New(WithViper(v)), "viper://maxBytes")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if string(got.Bytes) != "9090" {
-		t.Errorf("Bytes = %q, want %q: the ref must return the value Viper resolved, not a single layer", got.Bytes, "9090")
+	if string(got.Bytes) != "10485760" {
+		t.Errorf("Bytes = %q, want %q (plain decimal)", got.Bytes, "10485760")
+	}
+	if _, err := strconv.ParseInt(string(got.Bytes), 10, 64); err != nil {
+		t.Errorf("rendered bytes %q do not parse as an int: %v", got.Bytes, err)
+	}
+}
+
+// TestResolveDuration pins a value-corruption bug found in review.
+// v.SetDefault("timeout", 30*time.Second) is canonical Viper wiring, and
+// before the fix this fell through to json.Marshal and rendered as
+// "30000000000" - a bare nanosecond count that time.ParseDuration rejects
+// for missing a unit. Both the Go-typed path (SetDefault with a
+// time.Duration) and the string path (what a YAML file's `timeout: 30s`
+// already gives) must resolve to the same parseable text.
+func TestResolveDuration(t *testing.T) {
+	t.Run("typed default", func(t *testing.T) {
+		v := spf.New()
+		v.SetDefault("timeout", 30*time.Second)
+		got, err := resolve(t, New(WithViper(v)), "viper://timeout")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if string(got.Bytes) != "30s" {
+			t.Errorf("Bytes = %q, want %q", got.Bytes, "30s")
+		}
+		if _, err := time.ParseDuration(string(got.Bytes)); err != nil {
+			t.Errorf("rendered bytes %q do not parse as a duration: %v", got.Bytes, err)
+		}
+	})
+
+	t.Run("string form from a config file", func(t *testing.T) {
+		v := spf.New()
+		v.Set("timeout", "30s") // what a YAML file's `timeout: 30s` already gives
+		got, err := resolve(t, New(WithViper(v)), "viper://timeout")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if string(got.Bytes) != "30s" {
+			t.Errorf("Bytes = %q, want %q", got.Bytes, "30s")
+		}
+		if _, err := time.ParseDuration(string(got.Bytes)); err != nil {
+			t.Errorf("rendered bytes %q do not parse as a duration: %v", got.Bytes, err)
+		}
+	})
+}
+
+// TestResolveTimeFromYAML pins a value-corruption bug found in review.
+// gopkg.in/yaml.v3 decodes a bare YAML timestamp into a time.Time when
+// unmarshaling into `any`, so an ordinary config file - not a Set call - is
+// what actually produces this Go type. Before the fix this fell through to
+// json.Marshal and arrived as a quoted RFC 3339 string
+// ("\"2026-07-29T00:00:00Z\""), the exact defect the string case in render
+// exists to prevent, just entering through a different Go type. This test
+// reads real YAML rather than calling Set, so it exercises the path that
+// actually produces a time.Time.
+func TestResolveTimeFromYAML(t *testing.T) {
+	v := spf.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(strings.NewReader("expires: 2026-07-29T00:00:00Z\n")); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	got, err := resolve(t, New(WithViper(v)), "viper://expires")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	const want = "2026-07-29T00:00:00Z"
+	if string(got.Bytes) != want {
+		t.Errorf("Bytes = %q, want %q", got.Bytes, want)
+	}
+	if _, err := time.Parse(time.RFC3339, string(got.Bytes)); err != nil {
+		t.Errorf("rendered bytes %q do not parse as RFC 3339: %v", got.Bytes, err)
 	}
 }
 
