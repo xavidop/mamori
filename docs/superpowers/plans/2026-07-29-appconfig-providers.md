@@ -4,7 +4,7 @@
 
 **Goal:** Add AWS AppConfig and Azure App Configuration as mamori providers, inside the `providers/aws` and `providers/azure` modules that already exist.
 
-**Architecture:** `aws-appconfig` wraps a session protocol whose payload is empty when the client already has the current version, so `Resolve` starts a throwaway session per call (a fresh session cannot already be current) and `Watch` owns a long-lived session in its goroutine, threading the single-use token and obeying the server's own poll interval. `azure-appconfig` is a conventional request/response provider shaped like the `azure-kv` provider beside it.
+**Architecture:** `aws-appconfig` wraps a session protocol whose payload is empty when the client already has the current version, so `Resolve` starts a throwaway session per call: a fresh session cannot already be current, which puts that hazard out of reach rather than guarding against it. It implements no `Watch`, so mamori polls it through `pollWatch` like any other backend without native change notification (see the dropped Task 2 below). `azure-appconfig` is a conventional request/response provider shaped like the `azure-kv` provider beside it.
 
 **Tech Stack:** Go 1.26, `aws-sdk-go-v2/service/appconfigdata` v1.26.1, `azure-sdk-for-go/sdk/data/azappconfig` v1.2.0, `providertest` conformance kit.
 
@@ -40,7 +40,7 @@
 
 **Interfaces:**
 - Consumes: `options`, `newOptions`, `loadConfig`, `classifyAWS` from `providers/aws/aws.go`.
-- Produces: `AppConfigProvider` struct; `NewAppConfig(opts ...Option) *AppConfigProvider`; `newAppConfigWithClient(c appConfigAPI) *AppConfigProvider`; `const schemeAppConfig = "aws-appconfig"`; the `appConfigAPI` interface; `parseAppConfigPath(ref mamori.Ref) (app, env, profile string, err error)`. Task 2 adds `Watch` to this same type and reuses all of them.
+- Produces: `AppConfigProvider` struct; `NewAppConfig(opts ...Option) *AppConfigProvider`; `newAppConfigWithClient(c appConfigAPI) *AppConfigProvider`; `const schemeAppConfig = "aws-appconfig"`; the `appConfigAPI` interface; `parseAppConfigPath(ref mamori.Ref) (app, env, profile string, err error)`.
 
 - [ ] **Step 1: Add the SDK dependency**
 
@@ -763,288 +763,38 @@ Report the staged file list. Do not commit.
 
 ---
 
-### Task 2: `aws-appconfig` watch
+### Task 2: `aws-appconfig` watch - DROPPED, do not implement
 
-**Files:**
-- Modify: `providers/aws/appconfig.go`
-- Modify: `providers/aws/appconfig_test.go`
-- Modify: `providers/aws/README.md`
-- Modify: `site/src/pages/docs/providers/aws-appconfig.md`
-- Modify: `README.md` and `site/src/pages/docs/providers/index.md` (the watch column of the coverage tables)
+This task was written, implemented, and then cut. Its steps have been removed
+so no one works from them. It is recorded here rather than deleted because the
+reasoning is the useful part.
 
-**Interfaces:**
-- Consumes: everything Task 1 produced: `AppConfigProvider`, `appConfigAPI`, `parseAppConfigPath`, `appConfigValue`, `appConfigMinPoll`, `schemeAppConfig`, and the fake's `pollInterval` field.
-- Produces: `func (p *AppConfigProvider) Watch(ctx context.Context, ref mamori.Ref, fn func(mamori.Value)) error` satisfying `mamori.WatchableProvider`.
+It specified a `WatchableProvider` implementation owning a long-lived session,
+threading `NextPollConfigurationToken` across calls and sleeping
+`NextPollIntervalInSeconds`. `provider.go` forbids exactly that, on the
+interface itself: "Providers without native watch support are wrapped by mamori
+in a polling adapter - provider authors must never fake a Watch with an
+internal ticker." AppConfig has no push mechanism, so a session is still
+polling. The two providers that do implement `Watch` (`k8s` informers, `sops`
+fsnotify) are genuinely event-driven.
 
-Read `providers/aws/appconfig.go` and the `mamori.WatchableProvider` interface
-definition in the root package before starting. Confirm `Watch`'s exact
-signature from the interface rather than from this plan, and use the real one.
+The rule is load-bearing: `pollWatch` supplies jitter, change deduplication,
+`ErrNotFound` suppression, and a fakeable `Clock`, and a provider-side loop
+forfeits all four. Jitter matters most, because AppConfig gives every session
+the same cadence and replicas starting together would poll in lockstep against
+a priced API.
 
-- [ ] **Step 1: Write the failing watch test**
+The argument that justified the session also failed on inspection:
+`RequiredMinimumPollIntervalInSeconds` constrains calls within one session, and
+`Resolve` creates a fresh session per call, so the service floor is never
+approached.
 
-```go
-// TestAppConfigWatchEmitsOnChangeOnly asserts the three properties that make
-// the session protocol usable as a watch.
-//
-// Note the baseline in phase 1. Watch opens a *fresh* session, and a fresh
-// session holds no version, so its very first GetLatestConfiguration returns
-// the full payload rather than an empty one. Watch therefore always emits once
-// on startup. That is a consequence of the same protocol rule the Resolve path
-// relies on, not a special case, and asserting silence from t=0 would fail
-// against a correct implementation.
-func TestAppConfigWatchEmitsOnChangeOnly(t *testing.T) {
-	fake := newFakeAppConfig()
-	fake.pollInterval = 1 // keep the test well inside its own deadline
-	fake.set("myapp/prod/flags", `{"a":1}`)
-	p := newAppConfigWithClient(fake)
+mamori therefore polls `aws-appconfig` through `pollWatch` like any other
+non-native provider. If the extra API call per poll ever justifies action, the
+fix belongs in core: an optional interface for a provider to suggest a poll
+interval, honored by `pollWatch`.
 
-	ref, err := mamori.ParseRef("aws-appconfig://myapp/prod/flags")
-	if err != nil {
-		t.Fatalf("ParseRef: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	got := make(chan string, 8)
-	go func() {
-		_ = p.Watch(ctx, ref, func(v mamori.Value) { got <- string(v.Bytes) })
-	}()
-
-	// Phase 1: the baseline. A fresh session's first poll carries the payload.
-	select {
-	case v := <-got:
-		if v != `{"a":1}` {
-			t.Fatalf("baseline emission = %q, want %q", v, `{"a":1}`)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("watch never emitted a baseline value")
-	}
-
-	// Phase 2: steady state must be silent. The payload has not changed, so
-	// every later poll returns an empty Configuration, which means "unchanged"
-	// and must not be delivered as a value. This spans several poll intervals,
-	// so it also proves the token is being threaded: a provider that reused
-	// its spent token would error out here rather than poll quietly.
-	select {
-	case v := <-got:
-		t.Fatalf("watch emitted %q with no change to the configuration; an empty payload means unchanged, not empty", v)
-	case <-time.After(2500 * time.Millisecond):
-	}
-
-	// Phase 3: a real change is delivered.
-	fake.set("myapp/prod/flags", `{"a":2}`)
-	select {
-	case v := <-got:
-		if v != `{"a":2}` {
-			t.Errorf("emitted %q, want %q", v, `{"a":2}`)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("watch did not emit after the configuration changed: the session token is probably not being threaded across polls")
-	}
-}
-
-// TestAppConfigWatchStopsOnContextCancel asserts the goroutine exits when its
-// context is cancelled, which the conformance kit's goroutine-leak check also
-// depends on.
-func TestAppConfigWatchStopsOnContextCancel(t *testing.T) {
-	fake := newFakeAppConfig()
-	fake.pollInterval = 1
-	fake.set("myapp/prod/flags", `{"a":1}`)
-	p := newAppConfigWithClient(fake)
-
-	ref, err := mamori.ParseRef("aws-appconfig://myapp/prod/flags")
-	if err != nil {
-		t.Fatalf("ParseRef: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- p.Watch(ctx, ref, func(mamori.Value) {}) }()
-
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Watch did not return after its context was cancelled")
-	}
-}
-```
-
-Add `"time"` to the test imports.
-
-- [ ] **Step 2: Run to confirm failure**
-
-```bash
-cd providers/aws && GOWORK=off go test -run TestAppConfigWatch ./...
-```
-
-Expected: FAIL, `p.Watch undefined`.
-
-- [ ] **Step 3: Implement Watch**
-
-Append to `providers/aws/appconfig.go`:
-
-```go
-// Compile-time interface check.
-var _ mamori.WatchableProvider = (*AppConfigProvider)(nil)
-
-// appConfigDefaultPoll is the interval used when the service does not supply
-// one. It matches the service's own documented default.
-const appConfigDefaultPoll = 60 * time.Second
-
-// appConfigMinSleep floors the interval between polls. The service supplies
-// the cadence and normally sends 60 seconds, but a zero or missing value must
-// never become a hot loop against a priced API.
-const appConfigMinSleep = time.Second
-
-// Watch polls AppConfig for configuration changes and calls fn with each new
-// value.
-//
-// This is the one provider in mamori whose poll cadence is chosen by the
-// server rather than by WithPollInterval. AppConfig returns
-// NextPollIntervalInSeconds on every response and enforces a matching floor on
-// how often a session may call, so honoring it is not a nicety: a client that
-// polls faster than its session allows is rejected.
-//
-// The session lives here, in this goroutine, and nowhere else. Its token is
-// single-use and rotates on every response, which makes a goroutine-local
-// variable the only place it can safely live; sharing one across concurrent
-// callers would have them race to spend the same token, and the loser's call
-// fails with BadRequestException.
-//
-// An empty Configuration is the normal steady-state response, meaning "you
-// already have the current version". It is skipped rather than emitted. Only a
-// non-empty payload is a change.
-//
-// One consequence worth stating: a watch always emits once shortly after it
-// starts. The session is new, so it holds no version, so its first response
-// carries the full payload. That is the same protocol rule Resolve depends on,
-// seen from the other side.
-func (p *AppConfigProvider) Watch(ctx context.Context, ref mamori.Ref, fn func(mamori.Value)) error {
-	client, err := p.getClient(ctx)
-	if err != nil {
-		return err
-	}
-	token, err := p.startSession(ctx, client, ref)
-	if err != nil {
-		return err
-	}
-
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-		}
-
-		out, err := client.GetLatestConfiguration(ctx, &appconfigdata.GetLatestConfigurationInput{
-			ConfigurationToken: awssdk.String(token),
-		})
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("aws-appconfig: watch %q: %w", ref.Path, classifyAWS(err))
-		}
-
-		// Advance the token before anything else can fail. It is single-use,
-		// so the one in hand is already spent; losing the replacement would
-		// strand this session with no way to poll again.
-		if next := awssdk.ToString(out.NextPollConfigurationToken); next != "" {
-			token = next
-		}
-
-		if len(out.Configuration) > 0 {
-			v, err := appConfigValue(ref.Key, out.Configuration, awssdk.ToString(out.VersionLabel))
-			if err != nil {
-				return fmt.Errorf("aws-appconfig: watch %q: %w", ref.Path, err)
-			}
-			fn(v)
-		}
-
-		timer.Reset(appConfigPollInterval(out.NextPollIntervalInSeconds))
-	}
-}
-
-// appConfigPollInterval turns the service's suggested cadence into a duration,
-// substituting the documented default when none is supplied and flooring the
-// result so a zero can never become a hot loop.
-func appConfigPollInterval(secs int32) time.Duration {
-	if secs <= 0 {
-		return appConfigDefaultPoll
-	}
-	d := time.Duration(secs) * time.Second
-	if d < appConfigMinSleep {
-		return appConfigMinSleep
-	}
-	return d
-}
-```
-
-Add `"time"` to the file's imports.
-
-- [ ] **Step 4: Run the watch tests**
-
-```bash
-cd providers/aws && GOWORK=off go test -run TestAppConfigWatch ./...
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Lower the fake's default poll interval**
-
-`AppConfigProvider` now satisfies `WatchableProvider`, so the conformance kit
-starts running its watch cases against it. Those cases wait
-`EventuallyTimeout`, which defaults to 5 seconds, while `newFakeAppConfig`
-currently returns a 60-second cadence: every watch case would time out.
-
-Change the default in `newFakeAppConfig` from 60 to 1:
-
-```go
-func newFakeAppConfig() *fakeAppConfig {
-	return &fakeAppConfig{
-		profiles: map[string]acProfile{},
-		fails:    map[string]error{},
-		sessions: map[string]acSession{},
-		// A one-second cadence keeps the conformance watch cases inside their
-		// default 5s EventuallyTimeout. The real service defaults to 60.
-		pollInterval: 1,
-	}
-}
-```
-
-Leave the explicit `fake.pollInterval = 1` assignments in the unit tests: they
-document what those tests depend on rather than inheriting it silently.
-
-- [ ] **Step 6: Run the whole module, including the race detector**
-
-```bash
-cd providers/aws && GOWORK=off go test ./... && GOWORK=off go test -race -count=2 ./... && GOWORK=off go vet ./... && golangci-lint run
-```
-
-Expected: PASS all four. `-count=2` matters here: it reruns the watch cases and
-catches a goroutine that outlives its context, which the kit's leak check would
-otherwise only sometimes surface. `golangci-lint run` is not optional: it is
-what CI gates on, and it rejects unused test helpers that `go test` and
-`go vet` accept.
-
-- [ ] **Step 7: Update the docs**
-
-- `providers/aws/README.md`: change the AppConfig section to state that it implements `WatchableProvider`, that its poll cadence comes from the service rather than from `WithPollInterval`, that `?minPoll=` raises the service-enforced floor on this session, and that a watch emits once on startup because a fresh session's first response carries the payload. Remove any Task 1 wording saying mamori polls it.
-- `site/src/pages/docs/providers/aws-appconfig.md`: mirror those changes.
-- Root `README.md` and `site/src/pages/docs/providers/index.md`: update the `aws-appconfig` row so the watch column reflects native watch support. Match whatever marker the table already uses for a watchable provider; read a watchable provider's row first.
-
-- [ ] **Step 8: Stage**
-
-```bash
-cd providers/aws && GOWORK=off go test ./... && cd ../.. && go build ./... && git add -A && git status --short
-```
-
-Report the staged file list. Do not commit.
+See `docs/superpowers/specs/2026-07-29-appconfig-providers-design.md`.
 
 ---
 

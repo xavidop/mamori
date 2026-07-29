@@ -87,20 +87,49 @@ The asymmetry is the whole point: one branch costs a few lines and an error
 path that may never fire, and the other costs a silent production config wipe.
 Being wrong about the protocol is cheap; trusting it is not.
 
-**`Watch` owns a long-lived session** inside the watch goroutine, which is the
-only place a single-use rotating token can live safely. It threads
-`NextPollConfigurationToken` from each response into the next request, sleeps
-`NextPollIntervalInSeconds` between calls, and emits only when `Configuration`
-comes back non-empty. An empty payload means "unchanged" and is the normal
-steady-state response, not an event.
+**There is no `Watch`.** mamori polls this provider through `pollWatch`, like
+every other backend without native change notification.
 
-This makes `aws-appconfig` the first provider in the repo whose poll cadence is
-dictated by the server rather than by mamori's `WithPollInterval`. That is the
-correct behaviour for a service that rate-limits its own clients, and it is why
-`WatchableProvider` is worth implementing here even though the underlying
-transport is polling. Every other polled provider in the repo has no opinion
-about how often it is called; this one does, and the service rejects callers
-who ignore it.
+An earlier revision of this design specified a `WatchableProvider`
+implementation that owned a long-lived session, threaded
+`NextPollConfigurationToken` across calls, and slept
+`NextPollIntervalInSeconds`. It was built, and then dropped. Two reasons, in
+order of weight.
+
+The first is that `provider.go` forbids it, on the interface itself:
+
+> Providers without native watch support are wrapped by mamori in a polling
+> adapter - provider authors must never fake a Watch with an internal ticker.
+
+AppConfig has no push mechanism of any kind; a session is still polling, just
+polling that remembers. The two providers in the repo that do implement `Watch`
+(`k8s` via informers, `sops` via fsnotify) are genuinely event-driven. A
+timer-driven AppConfig watch would have been the first ticker in the tree.
+
+The rule is load-bearing rather than stylistic. `pollWatch` supplies jitter
+(`jittered(interval, o.jitter)`), change deduplication, `ErrNotFound`
+suppression, and a `Clock` that tests can fake. A provider-side loop forfeits
+all four. Jitter matters most here: AppConfig hands every session the same
+cadence, so replicas that start together would poll in lockstep forever against
+an API that AWS documents as priced.
+
+The second reason is that the strongest argument *for* the session did not
+survive checking. That argument was that the service enforces a minimum poll
+interval, so mamori's `WithPollInterval` could violate it. It cannot:
+`RequiredMinimumPollIntervalInSeconds` constrains calls made *within one
+session*, and the `Resolve` path creates a fresh session for every call, so the
+floor is never approached.
+
+What remains is a cost difference. Polling `Resolve` spends two API calls
+(`StartConfigurationSession` plus `GetLatestConfiguration`) where a resident
+session would spend one. That is a real cost against a priced API, but it does
+not outweigh an explicit project rule plus the loss of jitter on a
+thundering-herd-prone workload.
+
+If the cost later justifies acting, the principled fix is in core, not here: an
+optional interface by which a provider suggests a poll interval, with
+`pollWatch` honoring it. That keeps jitter and backoff centralized and needs no
+exception to the rule.
 
 ### Ref grammar
 
@@ -117,9 +146,11 @@ is `ErrInvalid`.
 and RFC 6901 JSON Pointers work and `providertest.Config.PointerRef` applies.
 
 `?minPoll=<seconds>` sets `RequiredMinimumPollIntervalInSeconds` on the
-session. It is only meaningful on the `Watch` path, where it raises the floor
-the service enforces. It is accepted and ignored on the `Resolve` path, whose
-session is discarded before a second call could be rate-limited.
+session. With no `Watch` path it has no observable effect, since every session
+is discarded after one call and the floor constrains only a session's second
+and later calls. It is kept because it is the correct plumbing for the field,
+costs nothing, and would become meaningful the moment a resident session
+exists. It is documented as inert rather than presented as a tuning knob.
 
 ### Version
 
@@ -207,14 +238,15 @@ docs-site page under `site/`, a row in both provider coverage tables (root
 
 ## Delivery
 
-Three stacked PRs on top of #62:
+Two stacked PRs on top of #62:
 
-1. `aws-appconfig` `Resolve` - correct and useful alone, since mamori polls
-   any provider that does not implement `WatchableProvider`.
-2. `aws-appconfig` `Watch` - the session-owning goroutine. Separated because
-   its risk profile is entirely different from task 1's and it deserves its own
-   review gate.
-3. `azure-appconfig` - independent of both.
+1. `aws-appconfig` - resolve only; mamori polls it.
+2. `azure-appconfig` - independent of it.
+
+A third PR for `aws-appconfig` `Watch` was planned and cut, for the reasons in
+the AWS section above. Splitting it out is what made cutting it cheap: task 1
+was complete and reviewed on its own, so dropping the watch work cost nothing
+already delivered.
 
 The stack base is #62 rather than `main` because
 `providertest.Config.PointerRef` is introduced in #52/#53 and has not merged
