@@ -1,6 +1,8 @@
-// Package azure provides a mamori Provider for Azure Key Vault secrets.
+// Package azure provides mamori Providers for two Azure services: Key Vault
+// secrets and App Configuration settings.
 //
-// It resolves refs of the form:
+// The Key Vault provider (Provider, registered under Scheme = "azure-kv")
+// resolves refs of the form:
 //
 //	azure-kv://<vault-name>/<secret-name>[#json-key]?version=<v>
 //
@@ -11,9 +13,22 @@
 // ?version=<v> query pins a specific secret version; when omitted the latest
 // version is returned.
 //
-// Values are always marked Sensitive. Azure Key Vault has no native change
-// notification for secrets, so this provider does not implement Watch; mamori
-// polls it instead.
+// The App Configuration provider (AppConfigProvider, registered under
+// SchemeAppConfig = "azure-appconfig") resolves refs of the form:
+//
+//	azure-appconfig://<store>/<key>[#json-key][?label=<label>]
+//
+// The store name is turned into the endpoint https://<store>.azconfig.io and
+// the setting is fetched with the azappconfig SDK. An absent ?label= requests
+// Azure's null label, not any label, since the two are distinct settings in
+// the service. A setting stored as a Key Vault reference (content type
+// application/vnd.microsoft.appconfig.keyvaultref+json) is never resolved;
+// Resolve fails with mamori.ErrInvalid naming the equivalent azure-kv:// ref.
+//
+// Key Vault values are always marked Sensitive; App Configuration values never
+// are, since App Configuration is a configuration service, not a secret store.
+// Neither provider implements Watch, since neither Azure service has a native
+// change notification usable here; mamori polls both instead.
 package azure
 
 import (
@@ -33,7 +48,10 @@ import (
 // Scheme is the URL scheme handled by this provider.
 const Scheme = "azure-kv"
 
-func init() { mamori.Register(New()) }
+func init() {
+	mamori.Register(New())
+	mamori.Register(NewAppConfig())
+}
 
 // kvClient is the minimal subset of *azsecrets.Client this provider needs. The
 // real SDK client satisfies it, and tests inject an in-memory fake.

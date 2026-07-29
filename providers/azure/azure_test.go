@@ -97,6 +97,27 @@ func TestScheme(t *testing.T) {
 	}
 }
 
+func TestRegisteredSchemes(t *testing.T) {
+	got := map[string]bool{}
+	for _, s := range mamori.RegisteredSchemes() {
+		got[s] = true
+	}
+	for _, want := range []string{Scheme, SchemeAppConfig} {
+		if !got[want] {
+			t.Errorf("scheme %q was not registered by init()", want)
+		}
+	}
+}
+
+func TestConstructorSchemes(t *testing.T) {
+	if s := New().Scheme(); s != Scheme {
+		t.Errorf("Provider.Scheme() = %q, want %q", s, Scheme)
+	}
+	if s := NewAppConfig().Scheme(); s != SchemeAppConfig {
+		t.Errorf("AppConfigProvider.Scheme() = %q, want %q", s, SchemeAppConfig)
+	}
+}
+
 func TestResolve(t *testing.T) {
 	fake := newFakeVault()
 	fake.set("db-password", "s3cr3t")

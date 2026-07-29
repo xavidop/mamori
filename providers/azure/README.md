@@ -1,19 +1,23 @@
-# mamori Azure Key Vault provider
+# mamori Azure providers
 
 [![conformance](https://img.shields.io/badge/mamori%20conformance-passing-brightgreen)](../../providertest)
 
-A [mamori](https://github.com/xavidop/mamori) provider for **Azure Key Vault**
-secrets. Import it for its side effect to register the `azure-kv` scheme:
+[mamori](https://github.com/xavidop/mamori) providers for two Azure services:
+**Azure Key Vault** secrets and **Azure App Configuration** settings. Import the
+module for its side effect to register both schemes:
 
 ```go
-import _ "github.com/xavidop/mamori/providers/azure"
+import _ "github.com/xavidop/mamori/providers/azure" // registers azure-kv:// and azure-appconfig://
 ```
 
-## Scheme
+## Schemes
 
-```
-azure-kv://<vault-name>/<secret-name>[#json-key]?version=<v>
-```
+| Scheme | Backend | Sensitive | Watch |
+|---|---|---|---|
+| `azure-kv://<vault-name>/<secret-name>[#json-key]?version=<v>` | Key Vault | ✅ | poll |
+| `azure-appconfig://<store>/<key>[#json-key][?label=<label>]` | App Configuration | no | poll |
+
+## `azure-kv://`
 
 The `<vault-name>` is expanded to the vault URL
 `https://<vault-name>.vault.azure.net`, and `<secret-name>` is fetched with the
@@ -31,8 +35,6 @@ Resolved values are always marked `Sensitive`. The `Version` is the native Key
 Vault secret version (falling back to a content hash if unavailable), so mamori
 detects changes cheaply.
 
-## Ref examples
-
 ```go
 type Config struct {
     // Whole secret value (latest version).
@@ -46,48 +48,123 @@ type Config struct {
 }
 ```
 
+## `azure-appconfig://`
+
+```text
+azure-appconfig://<store>/<key>[#json-key][?label=<label>]
+```
+
+The `<store>` name is expanded to the endpoint `https://<store>.azconfig.io`,
+and `<key>` (which may itself contain slashes) is fetched with the
+[`azappconfig`](https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/data/azappconfig)
+SDK.
+
+| Part | Required | What it means |
+| --- | --- | --- |
+| `<store>` | yes | The App Configuration store name. The endpoint is built as `https://<store>.azconfig.io`. |
+| `<key>` | yes | The setting key within that store. May contain `/`. |
+| `#json-key` | no | Select one field from a JSON setting value (via `mamori.SelectKey`). |
+| `?label=<label>` | no | Select a labelled setting. |
+
+**An absent `?label=` is not a wildcard.** Azure App Configuration treats "no
+label" as its own distinct **null label**, not as "any label" or "the latest
+label". A setting stored under the null label and a setting stored under the
+label `prod` are two different settings that can hold two different values.
+This provider passes the label explicitly on every call - the empty string
+when `?label=` is absent - so a ref without `?label=` always resolves the
+null-labelled setting and never silently falls back onto (or is shadowed by) a
+labelled one.
+
+```go
+type Config struct {
+    // The null-labelled setting.
+    LogLevel string `source:"azure-appconfig://my-store/app/log-level"`
+
+    // The setting explicitly labelled "prod".
+    LogLevelProd string `source:"azure-appconfig://my-store/app/log-level?label=prod"`
+
+    // A field from a JSON setting value.
+    APIPassword string `source:"azure-appconfig://my-store/app/api-conn#password"`
+}
+```
+
+Resolved values are **never** marked `Sensitive`: App Configuration is a
+configuration service, not a secret store. `Value.Version` is the setting's
+ETag, falling back to `mamori.VersionHash` if the ETag is unavailable.
+
+### Key Vault references are rejected, not resolved
+
+App Configuration can store a **reference** to a Key Vault secret instead of a
+value: a setting with content type
+`application/vnd.microsoft.appconfig.keyvaultref+json` whose value is JSON
+shaped like `{"uri":"https://<vault>.vault.azure.net/secrets/<name>"}`. This
+provider detects that content type and fails the resolve with
+`mamori.ErrInvalid`, naming the equivalent `azure-kv://` ref to use instead,
+rather than resolving or otherwise following the reference.
+
+This is deliberate, not a missing feature: returning the reference's raw JSON
+would hand a caller the literal text `{"uri":"..."}` as, say, their database
+password. That value is a non-empty string, so it passes a typical
+non-empty-string validation and only fails much later, deep inside whatever
+consumes it (a database driver reporting a bogus auth failure, for example),
+far from the actual cause. Point a `secret.String` field at an `azure-kv://`
+ref for the vault named in the error instead.
+
 ## Authentication
 
-Authentication uses the **Azure default credential chain**
+Both providers use the **Azure default credential chain**
 ([`azidentity.NewDefaultAzureCredential`](https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/azidentity#NewDefaultAzureCredential)),
 which tries, in order: environment variables, workload identity, managed
 identity, and the Azure CLI login. No explicit configuration is needed when
 running in an environment with an ambient identity (AKS pod identity, an Azure
 VM with a managed identity, or a developer machine logged in via `az login`).
 
-The identity needs the `secrets/get` permission (data-plane RBAC role
-**Key Vault Secrets User**, or a matching access policy) on the target vault.
+- The Key Vault identity needs the `secrets/get` permission (data-plane RBAC
+  role **Key Vault Secrets User**, or a matching access policy) on the target
+  vault.
+- The App Configuration identity needs the **App Configuration Data Reader**
+  role (or equivalent) on the target store.
 
-Clients are created lazily, one per vault name, on first resolve - so importing
-the package and registering the provider performs no I/O and needs no
-credentials at init time.
+Clients are created lazily, one per vault/store name, on first resolve - so
+importing the package and registering both providers performs no I/O and needs
+no credentials at init time.
 
 ### Explicit configuration
 
-To inject a specific credential, register the provider yourself:
+To inject a specific credential, register the provider(s) yourself:
 
 ```go
 cred, err := azidentity.NewManagedIdentityCredential(nil)
 // handle err
 cfg, err := mamori.Load[Config](ctx,
     mamori.WithProvider(azure.New(azure.WithCredential(cred))),
+    mamori.WithProvider(azure.NewAppConfig(azure.WithAppConfigCredential(cred))),
 )
 ```
 
 Options:
 
-- `azure.WithCredential(cred azcore.TokenCredential)` - use an explicit
-  credential instead of the default chain.
-- `azure.WithClient(c)` - inject a pre-built client (or an in-memory fake in
-  tests) used for every vault.
+- `azure.WithCredential(cred azcore.TokenCredential)` / `azure.WithClient(c)` -
+  Key Vault provider: an explicit credential, or an injected client (a
+  pre-built `*azsecrets.Client` or, in tests, an in-memory fake) used for
+  every vault.
+- `azure.WithAppConfigCredential(cred azcore.TokenCredential)` /
+  `azure.WithAppConfigClient(c)` - App Configuration provider: the same two
+  knobs, used for every store.
+
+`Option` and `AppConfigOption` are distinct types, one per provider, so they
+cannot be mixed up at the call site.
 
 ## Watch
 
-Azure Key Vault has **no native change notification** for secrets, so this
-provider does not implement `WatchableProvider`. mamori polls it on the
-configured interval instead.
+Neither Azure Key Vault nor Azure App Configuration's `GetSetting` call offers
+a native change notification usable here, so neither provider implements
+`WatchableProvider`. mamori polls both instead.
 
 ## Error classification
+
+Both providers share one classifier, `classifyAzure`, since App Configuration
+returns the same HTTP statuses as Key Vault:
 
 | HTTP status | mamori kind |
 |---|---|
@@ -106,13 +183,16 @@ reachable with `errors.As`.
 ## Verified vs. needs a live backend
 
 - **Verified in unit tests (no Azure account):** scheme, resolution, JSON
-  `#key` selection, `?version=` pinning, not-found → `mamori.ErrNotFound`
-  mapping (Azure 404), sensitivity, version monotonicity, context cancellation,
-  concurrency, goroutine hygiene, and the full `providertest.Run` conformance
-  suite - all run against an in-memory fake `kvClient`.
-- **Needs a live backend:** end-to-end auth via the default credential chain and
-  real vault access. A live test is provided behind a build tag and is not run
-  in CI:
+  `#key` selection, not-found → `mamori.ErrNotFound` mapping (Azure 404),
+  version handling, context cancellation, concurrency, goroutine hygiene, and
+  the full `providertest.Run` conformance suite for both schemes - all run
+  against in-memory fakes. For Key Vault: `?version=` pinning and
+  `Sensitive == true`. For App Configuration: the null-label-is-not-a-wildcard
+  behavior of an absent `?label=`, `Sensitive == false`, and the Key Vault
+  reference rejection.
+- **Needs a live backend:** end-to-end auth via the default credential chain
+  and real vault/store access. A live test is provided behind a build tag and
+  is not run in CI:
 
   ```sh
   MAMORI_AZURE_VAULT=<vault-name> \

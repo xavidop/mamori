@@ -82,6 +82,8 @@ Key Vault has no native change notification, so mamori polls (`WithPollInterval`
 | 400 | `invalid` |
 | anything else | `unknown` |
 
+This table is `classifyAzure`, one function shared with [`azure-appconfig://`](/docs/providers/azure-appconfig) in this same module - App Configuration returns the same HTTP statuses as Key Vault, so nothing in this table is specific to secrets.
+
 A transport failure (no HTTP response at all) stays `unknown`, since it could be a client problem rather than a backend one. `*azcore.ResponseError` stays reachable with `errors.As`.
 
 Verified by unit tests and the conformance kit against an in-memory fake; live Azure behavior is covered by `//go:build integration` tests.

@@ -121,7 +121,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | core (built-in) | `env:` · `dotenv://` · `file://` · `exec:` (opt-in) | fsnotify (file/dotenv) · poll (env/exec) | ✅ |
 | `providers/aws` | `aws-sm://` · `aws-ps://` · `aws-appconfig://` | poll | ✅ |
 | `providers/gcp` | `gcp-sm://` | poll | ✅ |
-| `providers/azure` | `azure-kv://` | poll | ✅ |
+| `providers/azure` | `azure-kv://` · `azure-appconfig://` | poll | ✅ |
 | `providers/vault` | `vault://` | lease-aware poll (`NotAfter`) | ✅ |
 | `providers/k8s` | `k8s-secret://` · `k8s-cm://` | **native** (watch API) | ✅ |
 | `providers/consul` | `consul://` | **native** (blocking queries) | ✅ |
