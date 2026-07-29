@@ -82,10 +82,21 @@ type acSession struct {
 	seenVersion int
 }
 
+// failInjection pairs an injected error with which API call it should surface
+// from. Resolve makes exactly one StartConfigurationSession call followed by
+// exactly one GetLatestConfiguration call, and a plain fail() (atGet=false)
+// always trips at the first of those - so without this distinction, no test
+// could make the second call fail while the first succeeds, and the
+// classifyAWS wrap at that call site in Resolve would never be exercised.
+type failInjection struct {
+	err   error
+	atGet bool
+}
+
 type fakeAppConfig struct {
 	mu       sync.Mutex
 	profiles map[string]acProfile
-	fails    map[string]error
+	fails    map[string]failInjection
 	sessions map[string]acSession // token -> session
 	counter  int
 
@@ -95,6 +106,15 @@ type fakeAppConfig struct {
 	// no data. It exists so the defensive branch in Resolve is testable.
 	forceEmptyFirst bool
 
+	// emptyLabel makes every GetLatestConfiguration in this fake omit
+	// VersionLabel, modelling a configuration source that is not an
+	// AppConfig-hosted configuration version (Parameter Store, SSM documents,
+	// Secrets Manager, S3, and Feature Flags sources all have no
+	// VersionLabel). It exists so Resolve's mamori.VersionHash fallback - the
+	// common path for those sources, per appConfigValue's comment - is
+	// exercised by a test rather than merely asserted in a comment.
+	emptyLabel bool
+
 	// pollInterval is returned as NextPollIntervalInSeconds. Task 2's watch
 	// tests set it low so they do not wait on the 60s service default.
 	pollInterval int32
@@ -103,7 +123,7 @@ type fakeAppConfig struct {
 func newFakeAppConfig() *fakeAppConfig {
 	return &fakeAppConfig{
 		profiles:     map[string]acProfile{},
-		fails:        map[string]error{},
+		fails:        map[string]failInjection{},
 		sessions:     map[string]acSession{},
 		pollInterval: 60,
 	}
@@ -133,7 +153,21 @@ func (f *fakeAppConfig) remove(key string) {
 func (f *fakeAppConfig) fail(key string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.fails[key] = err
+	f.fails[key] = failInjection{err: err}
+}
+
+// failGet makes the next GetLatestConfiguration for key return err, until
+// clear(key) is called. Unlike fail, StartConfigurationSession for key still
+// succeeds and mints a session token; the injected error surfaces only when
+// that session is then used to call GetLatestConfiguration. This is the only
+// way to make Resolve's session-start call succeed and its
+// GetLatestConfiguration call fail, since Resolve always makes the two calls
+// back to back with no chance to inject a failure in between from the
+// outside.
+func (f *fakeAppConfig) failGet(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[key] = failInjection{err: err, atGet: true}
 }
 
 func (f *fakeAppConfig) clear(key string) {
@@ -161,8 +195,8 @@ func (f *fakeAppConfig) StartConfigurationSession(ctx context.Context, in *appco
 		awssdk.ToString(in.EnvironmentIdentifier),
 		awssdk.ToString(in.ConfigurationProfileIdentifier),
 	}, "/")
-	if err, ok := f.fails[key]; ok {
-		return nil, err
+	if fi, ok := f.fails[key]; ok && !fi.atGet {
+		return nil, fi.err
 	}
 	if _, ok := f.profiles[key]; !ok {
 		return nil, &smithy.GenericAPIError{Code: "ResourceNotFoundException", Message: "profile " + key + " not found"}
@@ -187,8 +221,8 @@ func (f *fakeAppConfig) GetLatestConfiguration(ctx context.Context, in *appconfi
 	}
 	delete(f.sessions, tok) // single use
 
-	if err, ok := f.fails[s.key]; ok {
-		return nil, err
+	if fi, ok := f.fails[s.key]; ok && fi.atGet {
+		return nil, fi.err
 	}
 
 	p := f.profiles[s.key]
@@ -207,7 +241,9 @@ func (f *fakeAppConfig) GetLatestConfiguration(ctx context.Context, in *appconfi
 
 	s.seenVersion = p.version
 	out.Configuration = []byte(p.data)
-	out.VersionLabel = awssdk.String(p.label)
+	if !f.emptyLabel {
+		out.VersionLabel = awssdk.String(p.label)
+	}
 	out.ContentType = awssdk.String("application/json")
 	out.NextPollConfigurationToken = awssdk.String(f.mint(s))
 	return out, nil
@@ -315,6 +351,126 @@ func TestAppConfigResolveNotFound(t *testing.T) {
 	}
 	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrNotFound) {
 		t.Errorf("Resolve error = %v, want errors.Is(ErrNotFound)", err)
+	}
+}
+
+// TestAppConfigResolveNotFoundAfterRemove exercises fakeAppConfig.remove: a
+// profile that resolved successfully once is then deleted out from under the
+// provider, and the next Resolve must surface ErrNotFound rather than the
+// stale value or a different error. This is also the realistic shape of the
+// not-found case in production - a profile that existed and was later
+// deleted - as opposed to TestAppConfigResolveNotFound, which never had a
+// profile in the first place.
+func TestAppConfigResolveNotFoundAfterRemove(t *testing.T) {
+	fake := newFakeAppConfig()
+	fake.set("myapp/prod/flags", `{"a":1}`)
+	p := newAppConfigWithClient(fake)
+
+	ref, err := mamori.ParseRef("aws-appconfig://myapp/prod/flags")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("first Resolve: %v", err)
+	}
+
+	fake.remove("myapp/prod/flags")
+
+	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrNotFound) {
+		t.Errorf("Resolve after remove error = %v, want errors.Is(ErrNotFound)", err)
+	}
+}
+
+// TestAppConfigResolveClassifiesGetLatestConfigurationError guards the
+// classifyAWS wrap at Resolve's GetLatestConfiguration call site
+// specifically. TestAppConfigResolvePreservesClassification (errors_test.go)
+// injects its failure via fail(), which trips at StartConfigurationSession
+// and never reaches the GetLatestConfiguration call at all, so it cannot
+// catch a regression there (e.g. "%w" silently becoming "%v"). failGet makes
+// the session start succeed and the poll call fail, which is the only way to
+// reach that second call site.
+func TestAppConfigResolveClassifiesGetLatestConfigurationError(t *testing.T) {
+	fake := newFakeAppConfig()
+	fake.set("myapp/prod/flags", `{"a":1}`)
+	fake.failGet("myapp/prod/flags", &smithy.GenericAPIError{Code: "ThrottlingException", Message: "slow down"})
+	p := newAppConfigWithClient(fake)
+
+	ref, err := mamori.ParseRef("aws-appconfig://myapp/prod/flags")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	_, err = p.Resolve(context.Background(), ref)
+	if err == nil {
+		t.Fatal("Resolve returned nil error")
+	}
+	if got := mamori.ErrorKind(err); got != mamori.KindRateLimited {
+		t.Fatalf("ErrorKind(err) = %q, want %q; classifyAWS may not be wired into the GetLatestConfiguration error path", got, mamori.KindRateLimited)
+	}
+	if !strings.Contains(err.Error(), "resolve") {
+		t.Errorf("error %q does not look like it came from the GetLatestConfiguration call site", err)
+	}
+}
+
+// TestAppConfigResolveVersionHashFallbackWhenNoLabel guards appConfigValue's
+// mamori.VersionHash(data) fallback. Every profile fakeAppConfig.set creates
+// carries a non-empty VersionLabel, so without a fake that can produce a
+// configuration with no label, this fallback - which appConfigValue's own
+// comment says is the common path for non-AppConfig-hosted sources, not a
+// defensive one - would never run in the suite.
+func TestAppConfigResolveVersionHashFallbackWhenNoLabel(t *testing.T) {
+	fake := newFakeAppConfig()
+	fake.emptyLabel = true
+	fake.set("myapp/prod/flags", `{"a":1}`)
+	p := newAppConfigWithClient(fake)
+
+	ref, err := mamori.ParseRef("aws-appconfig://myapp/prod/flags")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	v, err := p.Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if v.Version == "" {
+		t.Fatal("Version is empty: the VersionHash fallback did not run")
+	}
+	if want := mamori.VersionHash(v.Bytes); v.Version != want {
+		t.Errorf("Version = %q, want VersionHash fallback %q", v.Version, want)
+	}
+}
+
+// TestAppConfigMinPoll covers appConfigMinPoll's parsing of ?minPoll=: a
+// valid positive integer is honored, and anything else (absent, non-numeric,
+// zero, negative) is ignored rather than rejected, per the function's doc
+// comment.
+func TestAppConfigMinPoll(t *testing.T) {
+	tests := []struct {
+		name   string
+		query  string // appended verbatim after '?'; "" means no query at all
+		want   int32
+		wantOK bool
+	}{
+		{name: "valid", query: "minPoll=30", want: 30, wantOK: true},
+		{name: "non-numeric", query: "minPoll=soon", want: 0, wantOK: false},
+		{name: "zero", query: "minPoll=0", want: 0, wantOK: false},
+		{name: "negative", query: "minPoll=-5", want: 0, wantOK: false},
+		{name: "absent", query: "", want: 0, wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "aws-appconfig://myapp/prod/flags"
+			if tt.query != "" {
+				raw += "?" + tt.query
+			}
+			ref, err := mamori.ParseRef(raw)
+			if err != nil {
+				t.Fatalf("ParseRef(%q): %v", raw, err)
+			}
+			got, ok := appConfigMinPoll(ref)
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("appConfigMinPoll(%q) = (%d, %v), want (%d, %v)", raw, got, ok, tt.want, tt.wantOK)
+			}
+		})
 	}
 }
 

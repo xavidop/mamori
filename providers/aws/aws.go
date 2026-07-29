@@ -2,9 +2,9 @@
 //
 // It registers three schemes, each handled by its own provider type:
 //
-//   - aws-sm://<secret-id>[#json-key]              AWS Secrets Manager    (SMProvider)
-//   - aws-ps://<parameter-name>[#json-key]          SSM Parameter Store    (PSProvider)
-//   - aws-appconfig://<app>/<env>/<profile>[#json-key] AWS AppConfig       (AppConfigProvider)
+//   - aws-sm://<secret-id>[#json-key]                  AWS Secrets Manager   (SMProvider)
+//   - aws-ps://<parameter-name>[#json-key]             SSM Parameter Store   (PSProvider)
+//   - aws-appconfig://<app>/<env>/<profile>[#json-key] AWS AppConfig         (AppConfigProvider)
 //
 // All three providers create their underlying AWS SDK client lazily on first
 // use, using the default AWS credential chain (environment, shared

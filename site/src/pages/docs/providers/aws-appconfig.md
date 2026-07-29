@@ -73,7 +73,7 @@ mamori.WithProvider(awsprov.NewAppConfig(awsprov.WithRegion("eu-west-1")))
 
 ## Watch
 
-AppConfig has no native change notification for this provider (Task 1 of its rollout implements only `Resolve`), so mamori polls (`WithPollInterval` + jitter, `Value.Version` comparison).
+This provider does not currently implement native watch, so mamori polls (`WithPollInterval` + jitter, `Value.Version` comparison).
 
 ## Error classification
 

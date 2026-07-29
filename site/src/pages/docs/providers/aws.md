@@ -80,9 +80,11 @@ Failures are classified so `mamori.ErrorKind` can distinguish them:
 | `AccessDeniedException` | `permission_denied` |
 | `UnrecognizedClientException`, `ExpiredTokenException`, `InvalidSignatureException`, `MissingAuthenticationToken`, `IncompleteSignature` | `unauthenticated` |
 | `ThrottlingException`, `Throttling`, `TooManyRequestsException`, `RequestLimitExceeded` | `rate_limited` |
-| `InternalServiceError`, `InternalServerError`, `InternalFailure`, `ServiceUnavailable`, `ServiceUnavailableException` | `unavailable` |
-| `InvalidParameterException`, `InvalidRequestException`, `ValidationException`, `InvalidParameterValue`, `InvalidKeyId` | `invalid` |
+| `InternalServiceError`, `InternalServerError`, `InternalFailure`, `InternalServerException`, `ServiceUnavailable`, `ServiceUnavailableException` | `unavailable` |
+| `InvalidParameterException`, `InvalidRequestException`, `ValidationException`, `InvalidParameterValue`, `InvalidKeyId`, `BadRequestException` | `invalid` |
 | anything else | `unknown` |
+
+This table is the whole of `classifyAWS`, one function shared by all three schemes in this module - `aws-sm://`, `aws-ps://`, and [`aws-appconfig://`](/docs/providers/aws-appconfig) - so it lists every code any of the three can produce, not only the ones Secrets Manager and Parameter Store return. `InternalServerException` and `BadRequestException` are AppConfig Data's codes; they are included here because a shared classifier means "anything else maps to unknown" has to hold for the whole module, not just for this page's two schemes.
 
 Codes not listed above report `unknown` rather than being guessed at. Notably, Secrets Manager's `DecryptionFailure` is deliberately left unmapped: it can mean a KMS key policy problem, a disabled key, or a KMS outage, and doesn't map cleanly to one kind. The original SDK error stays reachable with `errors.As`.
 
