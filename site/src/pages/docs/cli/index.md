@@ -15,7 +15,7 @@ flowchart TD
   CLI[mamori CLI]
   CLI --> S["Static: explain, schema, policy, vet, diff"]
   CLI --> L["Live: doctor, status"]
-  S -->|"read Go source, never resolve"| Src[("your config structs")]
+  S -->|"most read Go source, none resolve"| Src[("your config structs")]
   L -->|"GET / on the admin endpoint"| Proc[("a running process")]
 ```
 
@@ -68,6 +68,7 @@ $ echo $?
 - [`mamori explain`](/docs/cli/explain/) - list every config struct and its `source:` refs.
 - [`mamori schema`](/docs/cli/schema/) - emit a JSON Schema for a config struct.
 - [`mamori policy`](/docs/cli/policy/) - emit a least-privilege access artifact.
+- [`mamori diff`](/docs/cli/diff/) - compare two `explain --json` outputs and report the config and privilege delta.
 - [`mamori vet`](/docs/cli/vet/) - flag secret-bearing sources stored in plain `string`/`[]byte`.
 - [`mamori doctor` and `status`](/docs/cli/doctor-status/) - check a running process, with exit codes.
 

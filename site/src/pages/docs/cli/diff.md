@@ -92,11 +92,14 @@ privilege delta
 ```
 
 `--policy-format` additionally renders each path as the concrete grant that
-[`mamori policy`](/docs/cli/policy) would emit for it:
+[`mamori policy`](/docs/cli/policy) would emit for it, for the same fixture
+pair as above:
 
 ```
 privilege delta
+  + aws-ps  svc/port  ssm:GetParameter on arn:aws:ssm:*:*:parameter/svc/port
   + aws-sm  prod/stripe  secretsmanager:GetSecretValue on arn:aws:secretsmanager:*:*:secret:prod/stripe
+  - aws-sm  prod/legacy  secretsmanager:GetSecretValue on arn:aws:secretsmanager:*:*:secret:prod/legacy
 ```
 
 A scheme the chosen format has no vocabulary for (`vault://`, `k8s-secret://`,
