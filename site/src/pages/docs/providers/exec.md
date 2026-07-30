@@ -101,6 +101,28 @@ Home string `source:"exec:sh -c 'echo $HOME'"`
 
 Prefer the first. `${HOME}` fails loudly at `Load` if you forget to pass the variable, whereas a shell silently expands an unset variable to nothing. Invoking a shell is also your decision to make, not something mamori does to every `exec:` ref, and anything that shell can expand, it will.
 
+### Shell variables inside the script: use `$X`, not `${X}`
+
+If you invoke a shell and the script sets its own variables, **write them bare**. mamori expands `${...}` in the tag before the shell ever runs, so the braced form belongs to mamori, not to your script.
+
+```go
+// Correct: mamori leaves a bare $X alone, the shell resolves it.
+V string `source:"exec:sh -c 'X=hello; echo $X'"`
+```
+
+The braced form collides:
+
+| Script | What happens |
+| --- | --- |
+| `sh -c 'X=hello; echo $X'` | the shell's `X`, as intended |
+| `sh -c 'X=hello; echo ${X}'` | error at `Load`: `undefined ref variable "X"` |
+| `sh -c 'X=hello; echo ${X}'`, with `X` in `WithRefVars` | **mamori's value wins, silently** |
+| `sh -c 'X=hello; echo $${X}'` | the shell's `X`; `$$` escapes to a literal `$` |
+
+The third row is the one to watch. mamori substitutes first, so the command that actually runs is `sh -c 'X=hello; echo <mamori's value>'` and the script's own assignment is dead code. Nothing warns you, because from mamori's side the ref expanded exactly as asked.
+
+Row two failing loudly is the good case: a name mamori does not know is refused rather than guessed at.
+
 ### Trailing newlines
 
 Whatever the command prints becomes the value, newline included: `echo` gives you `"/home/app\n"`, not `"/home/app"`. That trailing byte fails a `validate:"..."` rule or any comparison expecting an exact match.
