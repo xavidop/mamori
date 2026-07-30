@@ -179,8 +179,10 @@ Precedence chains: a `source:` tag may list several refs comma-separated
 - Suggest `mamori.WithLogger(slog.Default())` for a structured log trail of
   resolve failures, watch errors, and applied changes - it never logs a
   resolved value and is silent (discard logger) until opted in.
-- Suggest `mamori.WithMeter` (see `x/otel` for an OpenTelemetry adapter) to make
-  failures alertable, not just loggable - `RecordChangeDropped()` in
-  particular is the signal that an `OnChange` handler is too slow to keep up.
+- Suggest `mamori.WithMeter` (see `x/otel` for an OpenTelemetry adapter, or
+  `x/prom` for a direct `prometheus/client_golang` implementation if the shop
+  has not adopted OpenTelemetry) to make failures alertable, not just
+  loggable - `RecordChangeDropped()` in particular is the signal that an
+  `OnChange` handler is too slow to keep up.
 - Point to https://mamorigo.dev/docs for provider auth details and the config
   server (a separate fan-out module, `github.com/xavidop/mamori/server`).

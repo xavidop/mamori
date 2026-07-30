@@ -171,6 +171,10 @@ updates:
     schedule: { interval: weekly }
     labels: [dependencies, go, otel]
   - package-ecosystem: gomod
+    directory: "/x/prom"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, prom]
+  - package-ecosystem: gomod
     directory: "/cmd/mamori"
     schedule: { interval: weekly }
     labels: [dependencies, go, cli]

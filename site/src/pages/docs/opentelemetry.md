@@ -7,6 +7,8 @@ title: OpenTelemetry
 
 The `github.com/xavidop/mamori/x/otel` bridge (package `mamoriotel`) turns mamori's config resolves into OpenTelemetry spans and metrics: one `mamori.resolve` span per resolve, plus latency, refresh, watch-error, stale, dropped-change, and rejected-apply instruments, all tagged with the provider scheme and, on failure, a `mamori.error.kind` classification. Reach for it when you already run OTel and want config resolution to show up in the same traces and dashboards as the rest of your service.
 
+Running Prometheus without OpenTelemetry? See [Prometheus](/docs/prometheus/) for `x/prom`, a sibling bridge that implements `mamori.Meter` directly against `prometheus/client_golang` instead of going through OTel.
+
 ## Quick start
 
 Install the bridge module (the core `mamori` module stays free of any OpenTelemetry dependency):
@@ -170,6 +172,8 @@ The Go package is named `mamoriotel` (rather than `otel`) so it can be imported 
 Because the bridge only implements the small `mamori.Meter` / `mamori.Tracer` interfaces, you can also write your own sink (to Prometheus, statsd, or a test recorder) without pulling in OpenTelemetry at all. `mamori.Meter` has six methods (`RecordResolve`, `RecordRefresh`, `RecordWatchError`, `RecordStale`, `RecordChangeDropped`, `RecordApplyRejected`); a hand-written implementation must provide all six. `RecordApplyRejected` takes a `mamori.RejectReason`, a closed string type with exactly two values (`mamori.RejectValidation`, `mamori.RejectPreApply`) so it is safe to use as a metric label without risking unbounded cardinality.
 
 ## See also
+
+[Prometheus](/docs/prometheus/) covers the sibling bridge, `x/prom`: the same `mamori.Meter` surface implemented directly against `prometheus/client_golang`, for shops that have not adopted OpenTelemetry.
 
 [Observability](/docs/observability/) covers `Status`, `Health`, and the pre-deploy `Doctor` check, which answer "what is true right now" where the spans and metrics here answer "what happened over time."
 

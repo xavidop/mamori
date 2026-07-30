@@ -28,7 +28,7 @@ mamori is a multi-module monorepo: the core module and each provider module are 
 | Module | Supported |
 | --- | --- |
 | core (`github.com/xavidop/mamori`) | latest release |
-| `providers/*`, `x/otel`, `cmd/mamori` (incl. `mamori vet`) | latest release |
+| `providers/*`, `x/otel`, `x/prom`, `cmd/mamori` (incl. `mamori vet`) | latest release |
 
 ## Scope
 

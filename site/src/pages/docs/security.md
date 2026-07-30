@@ -93,6 +93,7 @@ Modules are versioned with semantic-version git tags. The core module tags as `v
 v0.1.0                      # core
 providers/aws/v0.1.0        # AWS provider module
 x/otel/v0.1.0               # OpenTelemetry bridge
+x/prom/v0.1.0               # Prometheus bridge
 ```
 
 Import a specific version the usual way:

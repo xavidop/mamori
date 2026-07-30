@@ -40,4 +40,5 @@ use (
 	./server
 	./x/authjwt
 	./x/otel
+	./x/prom
 )
