@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -162,5 +164,119 @@ func TestRenderDiffTextIsDeterministic(t *testing.T) {
 
 	if first.String() != second.String() {
 		t.Errorf("renderDiffText is not deterministic:\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
+	}
+}
+
+func TestRenderDiffJSONRoundTrips(t *testing.T) {
+	d := Diff{
+		Structs: []StructDiff{{
+			Package: "acme/svc", TypeName: "Config", Kind: ChangeModified,
+			Fields: []FieldDiff{{
+				Path: "Key", Kind: ChangeModified, BecameSensitive: true,
+				Attrs: []AttrChange{{Name: "Sensitive", Base: "false", Head: "true"}},
+				Refs:  []RefChange{{Kind: ChangeAdded, Ref: "aws-sm://prod/stripe#key", BasePos: -1, HeadPos: 0}},
+			}},
+		}},
+		Privilege: PrivilegeDelta{Added: map[string][]string{"aws-sm": {"prod/stripe"}}},
+	}
+
+	var stdout, stderr strings.Builder
+	if code := renderDiffJSON(&stdout, &stderr, d); code != 0 {
+		t.Fatalf("want exit 0, got %d (stderr: %q)", code, stderr.String())
+	}
+
+	var back Diff
+	if err := json.Unmarshal([]byte(stdout.String()), &back); err != nil {
+		t.Fatalf("output does not decode as a Diff: %v\n%s", err, stdout.String())
+	}
+	if !reflect.DeepEqual(back, d) {
+		t.Errorf("round trip mismatch\n got: %+v\nwant: %+v", back, d)
+	}
+}
+
+func TestRenderDiffJSONEmptyIsStillValidJSON(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := renderDiffJSON(&stdout, &stderr, Diff{}); code != 0 {
+		t.Fatalf("want exit 0, got %d", code)
+	}
+
+	var back Diff
+	if err := json.Unmarshal([]byte(stdout.String()), &back); err != nil {
+		t.Fatalf("empty diff must still emit valid JSON: %v", err)
+	}
+	if !back.Empty() {
+		t.Error("want the decoded empty diff to report Empty()")
+	}
+}
+
+func TestRenderDiffMarkdownStructure(t *testing.T) {
+	d := Diff{
+		Structs: []StructDiff{{
+			Package: "acme/svc", TypeName: "Config", Kind: ChangeModified,
+			Fields: []FieldDiff{
+				{Path: "StripeKey", Kind: ChangeAdded, BecameSensitive: false, Field: &Field{
+					Path: "StripeKey", GoType: "secret.String", Refs: []string{"aws-sm://prod/stripe#key"}}},
+			},
+		}},
+		Privilege: PrivilegeDelta{Added: map[string][]string{"aws-sm": {"prod/stripe"}}},
+	}
+
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, d, "")
+	got := sb.String()
+
+	if !strings.Contains(got, "### `acme/svc.Config`") {
+		t.Errorf("want a markdown struct heading, got %q", got)
+	}
+	if !strings.Contains(got, "| `StripeKey` |") {
+		t.Errorf("want a markdown table row for the field, got %q", got)
+	}
+	if !strings.Contains(got, "### Privilege delta") {
+		t.Errorf("want a privilege heading, got %q", got)
+	}
+	if !strings.Contains(got, "```") {
+		t.Errorf("want the privilege block fenced, got %q", got)
+	}
+}
+
+func TestRenderDiffMarkdownEmpty(t *testing.T) {
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, Diff{}, "")
+
+	if !strings.Contains(sb.String(), "No configuration surface changes") {
+		t.Errorf("want an explicit no-change line, got %q", sb.String())
+	}
+}
+
+func TestRenderDiffMarkdownEscapesPipes(t *testing.T) {
+	d := Diff{Structs: []StructDiff{{
+		Package: "acme/svc", TypeName: "Config", Kind: ChangeModified,
+		Fields: []FieldDiff{{Path: "V", Kind: ChangeModified,
+			Attrs: []AttrChange{{Name: "Validate", Base: "", Head: "oneof=a|b"}}}},
+	}}}
+
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, d, "")
+	got := sb.String()
+
+	if strings.Contains(got, "oneof=a|b") {
+		t.Errorf("a raw pipe would break the markdown table, got %q", got)
+	}
+	if !strings.Contains(got, `oneof=a\|b`) {
+		t.Errorf("want the pipe escaped, got %q", got)
+	}
+}
+
+func TestRenderDiffMarkdownIsDeterministic(t *testing.T) {
+	d := Diff{Privilege: PrivilegeDelta{Added: map[string][]string{
+		"aws-sm": {"a", "b"}, "vault": {"c"}, "gcp-sm": {"d/e"},
+	}}}
+
+	var first, second strings.Builder
+	renderDiffMarkdown(&first, d, "aws-iam")
+	renderDiffMarkdown(&second, d, "aws-iam")
+
+	if first.String() != second.String() {
+		t.Errorf("renderDiffMarkdown is not deterministic:\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
 	}
 }

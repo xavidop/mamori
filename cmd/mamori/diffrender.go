@@ -8,6 +8,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -176,4 +177,86 @@ func concreteGrant(scheme, path, policyFormat string) string {
 		}
 	}
 	return ""
+}
+
+// renderDiffJSON writes the whole Diff as indented JSON. It mirrors
+// writeExplainJSON (explain.go): the only failure mode is an encoding error,
+// which cannot happen for this plain data, and is reported on stderr with
+// exit 1 rather than being swallowed.
+func renderDiffJSON(stdout, stderr io.Writer, d Diff) int {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(d); err != nil {
+		_, _ = fmt.Fprintf(stderr, "mamori diff: encoding JSON: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// renderDiffMarkdown writes a report suited to a pull request comment or a
+// GitHub step summary: one table per changed struct, then the privilege delta
+// in a fenced block so its alignment survives.
+func renderDiffMarkdown(w io.Writer, d Diff, policyFormat string) {
+	if d.Empty() {
+		_, _ = fmt.Fprintln(w, "No configuration surface changes.")
+		return
+	}
+
+	for _, sd := range d.Structs {
+		switch sd.Kind {
+		case ChangeAdded:
+			_, _ = fmt.Fprintf(w, "### `%s.%s`\n\nNew config struct.\n\n", sd.Package, sd.TypeName)
+			continue
+		case ChangeRemoved:
+			_, _ = fmt.Fprintf(w, "### `%s.%s`\n\nConfig struct removed.\n\n", sd.Package, sd.TypeName)
+			continue
+		}
+
+		_, _ = fmt.Fprintf(w, "### `%s.%s`\n\n", sd.Package, sd.TypeName)
+		_, _ = fmt.Fprintln(w, "| | Field | Change |")
+		_, _ = fmt.Fprintln(w, "| --- | --- | --- |")
+		for _, fd := range sd.Fields {
+			switch fd.Kind {
+			case ChangeAdded:
+				_, _ = fmt.Fprintf(w, "| + | `%s` | %s `%s` |\n",
+					mdEscape(fd.Path), mdEscape(fieldType(fd.Field)), mdEscape(fieldChain(fd.Field)))
+			case ChangeRemoved:
+				_, _ = fmt.Fprintf(w, "| - | `%s` | %s `%s` |\n",
+					mdEscape(fd.Path), mdEscape(fieldType(fd.Field)), mdEscape(fieldChain(fd.Field)))
+			default:
+				for _, a := range fd.Attrs {
+					_, _ = fmt.Fprintf(w, "| ~ | `%s` | %s: %s to %s |\n",
+						mdEscape(fd.Path), mdEscape(a.Name), mdEscape(blank(a.Base)), mdEscape(blank(a.Head)))
+				}
+				for _, r := range fd.Refs {
+					_, _ = fmt.Fprintf(w, "| ~ | `%s` | %s `%s` |\n",
+						mdEscape(fd.Path), mdEscape(chainMarker(r)), mdEscape(r.Ref))
+				}
+			}
+			if fd.BecameSensitive {
+				_, _ = fmt.Fprintf(w, "| ! | `%s` | **now reads secret material** |\n", mdEscape(fd.Path))
+			}
+		}
+		_, _ = fmt.Fprintln(w)
+	}
+
+	lines := privilegeLines(d.Privilege, policyFormat)
+	if len(lines) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintln(w, "### Privilege delta")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "```")
+	for _, l := range lines {
+		_, _ = fmt.Fprintln(w, l)
+	}
+	_, _ = fmt.Fprintln(w, "```")
+}
+
+// mdEscape escapes the characters that would break a markdown table cell. A
+// pipe inside a validate: tag (e.g. oneof=a|b) is the realistic case.
+func mdEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return strings.ReplaceAll(s, "\n", " ")
 }
