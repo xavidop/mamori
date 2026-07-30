@@ -5,7 +5,7 @@ title: Viper provider
 
 # Viper
 
-Load whatever [Viper](https://github.com/spf13/viper) resolved for a key as config. This is an incremental-adoption provider: a team with an existing Viper setup moves fields into a typed, validated mamori struct one at a time, without reimplementing Viper's precedence in struct tags.
+Load whatever [Viper](https://github.com/spf13/viper) resolved for a key as config. This is an incremental-adoption provider: a team with an existing Viper setup moves fields into a typed, validated mamori struct one at a time, without reimplementing Viper's precedence in struct tags. See [Migrating from Viper](/docs/migrating-from-viper/) for the walkthrough, including which fields to move first and what does not carry over.
 
 | | |
 | --- | --- |
