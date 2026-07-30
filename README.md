@@ -203,7 +203,7 @@ See [mamorigo.dev/docs/skill](https://mamorigo.dev/docs/skill) for what it cover
 - 🚀 **Quick start:** [mamorigo.dev/docs/quickstart](https://mamorigo.dev/docs/quickstart)
 - ⚙️ **Options reference:** [mamorigo.dev/docs/usage/options](https://mamorigo.dev/docs/usage/options)
 - 🩺 **Troubleshooting:** [mamorigo.dev/docs/troubleshooting](https://mamorigo.dev/docs/troubleshooting)
-- 🐍 **Coming from Viper?** [mamorigo.dev/docs/migrating-from-viper](https://mamorigo.dev/docs/migrating-from-viper)
+- 🐍 **Coming from Viper?** [mamorigo.dev/docs/providers/viper](https://mamorigo.dev/docs/providers/viper)
 - 📦 **API reference:** https://pkg.go.dev/github.com/xavidop/mamori
 - 🧩 **Write a provider:** [mamorigo.dev/docs/writing-a-provider](https://mamorigo.dev/docs/writing-a-provider)
 - 🏃 **Runnable example:** [examples/basic](examples/basic)
