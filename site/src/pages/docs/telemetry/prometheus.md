@@ -1,5 +1,5 @@
 ---
-layout: ../../layouts/DocsLayout.astro
+layout: ../../../layouts/DocsLayout.astro
 title: Prometheus
 ---
 
@@ -7,7 +7,7 @@ title: Prometheus
 
 The `github.com/xavidop/mamori/x/prom` bridge (package `prom`) implements `mamori.Meter` directly against `prometheus/client_golang`, registering six instruments up front: resolve latency, refresh, watch-error, stale, dropped-change, and rejected-apply, all labeled with the provider scheme and, on failure, an `error_kind` classification. Reach for it when you run Prometheus without OpenTelemetry and want `client_golang` to be the only metrics dependency in your build.
 
-Already on OpenTelemetry? Use [`x/otel`](/docs/opentelemetry/) with a Prometheus exporter instead of this module: it gives you the same `/metrics` endpoint plus spans, through one metrics pipeline rather than two. `x/prom` exists specifically for shops using `client_golang` directly.
+Already on OpenTelemetry? Use [`x/otel`](/docs/telemetry/opentelemetry/) with a Prometheus exporter instead of this module: it gives you the same `/metrics` endpoint plus spans, through one metrics pipeline rather than two. `x/prom` exists specifically for shops using `client_golang` directly.
 
 ## Quick start
 
@@ -92,7 +92,7 @@ The instrument names are also exported as constants (`MetricResolveDuration`, `M
 
 ### Seconds, not milliseconds
 
-`mamori_resolve_duration_seconds` records resolve duration in **seconds**, following the Prometheus convention that a duration histogram's name carries the unit it measures in. [`x/otel`'s `mamori.resolve.duration`](/docs/opentelemetry/#record-metrics) records the very same event in **milliseconds**, per OpenTelemetry's own convention. If you run both bridges side by side, or compare a Prometheus dashboard against an OTel-backed one for the same resolve, the numbers differ by a factor of 1000 - that is expected, not a bug in either bridge.
+`mamori_resolve_duration_seconds` records resolve duration in **seconds**, following the Prometheus convention that a duration histogram's name carries the unit it measures in. [`x/otel`'s `mamori.resolve.duration`](/docs/telemetry/opentelemetry/#record-metrics) records the very same event in **milliseconds**, per OpenTelemetry's own convention. If you run both bridges side by side, or compare a Prometheus dashboard against an OTel-backed one for the same resolve, the numbers differ by a factor of 1000 - that is expected, not a bug in either bridge.
 
 ## The cardinality and credential-leak guard
 
@@ -101,7 +101,7 @@ Every label above is drawn from a small, closed set: a provider scheme, a fixed 
 This is deliberate, not incidental, and it matters for two separate reasons:
 
 - **Cardinality.** A ref is effectively unbounded (it can carry a path, a version, a query string). An unbounded label value is a well-known way to overwhelm a Prometheus server or the time-series database behind it.
-- **Credential leakage.** A ref can carry an inline credential, such as `?token=...`. A label is stored, scraped, retained, and often forwarded to a third-party observability backend, which exposes it far more broadly than the same string in a log line - and mamori's log records already redact exactly this kind of ref (see [OpenTelemetry](/docs/opentelemetry/) for the logging contract).
+- **Credential leakage.** A ref can carry an inline credential, such as `?token=...`. A label is stored, scraped, retained, and often forwarded to a third-party observability backend, which exposes it far more broadly than the same string in a log line - and mamori's log records already redact exactly this kind of ref (see [OpenTelemetry](/docs/telemetry/opentelemetry/) for the logging contract).
 
 ## How it works
 
@@ -113,7 +113,7 @@ Because both bridges only implement the small `mamori.Meter` interface, you can 
 
 ## See also
 
-[OpenTelemetry](/docs/opentelemetry/) covers the sibling bridge: same `mamori.Meter` surface, plus tracing, for shops already on OTel. Use it with a Prometheus exporter if you want both a `/metrics` endpoint and spans through one pipeline.
+[OpenTelemetry](/docs/telemetry/opentelemetry/) covers the sibling bridge: same `mamori.Meter` surface, plus tracing, for shops already on OTel. Use it with a Prometheus exporter if you want both a `/metrics` endpoint and spans through one pipeline.
 
 [Observability](/docs/observability/) covers `Status`, `Health`, and the pre-deploy `Doctor` check, which answer "what is true right now" where the metrics here answer "what happened over time."
 

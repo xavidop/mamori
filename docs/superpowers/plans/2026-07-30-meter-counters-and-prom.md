@@ -236,7 +236,7 @@ Report the staged file list. Do not commit.
 
 **Files:**
 - Create: `x/prom/go.mod`, `x/prom/go.sum`, `x/prom/prom.go`, `x/prom/prom_test.go`, `x/prom/README.md`
-- Create: `site/src/pages/docs/prometheus.md`
+- Create: `site/src/pages/docs/telemetry/prometheus.md`
 - Modify: `go.work`, `.github/dependabot.yml`, `site/src/layouts/DocsLayout.astro`, and the docs index that lists the otel page
 
 **Interfaces:**
@@ -399,7 +399,7 @@ Expected: "All N Go modules are covered by dependabot."
 - [ ] **Step 7: Docs**
 
 `x/prom/README.md` with the metric table, install, and a usage example;
-`site/src/pages/docs/prometheus.md` mirroring it and matching the otel page's
+`site/src/pages/docs/telemetry/prometheus.md` mirroring it and matching the otel page's
 structure; a sidebar entry; and a line wherever the otel bridge is listed so
 the two are discoverable together. State that a shop already using OpenTelemetry
 should use `x/otel` with an OTLP or Prometheus exporter rather than this, and

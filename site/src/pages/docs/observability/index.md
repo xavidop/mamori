@@ -127,5 +127,5 @@ See [Error kinds](/docs/concepts/error-kinds/) for the full list of `Kind` value
 
 - [Config server](/docs/server/) serves resolved config *values* to many callers, the counterpart to this metadata-only endpoint.
 - [Auth](/docs/auth/) covers `WithAuth`, the shipped schemes, and credential rotation for the admin endpoint.
-- [OpenTelemetry](/docs/opentelemetry/) covers metrics and tracing for individual resolves, complementary to these reports: it answers "what happened over time," `Status`/`Health`/`Doctor` answer "what is true right now."
-- [Prometheus](/docs/prometheus/) covers `x/prom`, the sibling metrics bridge for shops running Prometheus without OpenTelemetry.
+- [OpenTelemetry](/docs/telemetry/opentelemetry/) covers metrics and tracing for individual resolves, complementary to these reports: it answers "what happened over time," `Status`/`Health`/`Doctor` answer "what is true right now."
+- [Prometheus](/docs/telemetry/prometheus/) covers `x/prom`, the sibling metrics bridge for shops running Prometheus without OpenTelemetry.
