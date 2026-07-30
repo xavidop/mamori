@@ -1,0 +1,20 @@
+[
+  {
+    "Package": "acme/svc",
+    "TypeName": "Config",
+    "Fields": [
+      {
+        "Path": "Port",
+        "GoType": "string",
+        "Source": "env:PORT,aws-ps://svc/port",
+        "Refs": ["env:PORT", "aws-ps://svc/port"],
+        "Default": "8080",
+        "HasDefault": true,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      }
+    ]
+  }
+]

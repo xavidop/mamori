@@ -1,7 +1,9 @@
 // Command mamori is the mamori CLI. It has two halves that never mix:
-// static commands (explain, schema, policy) load Go source and extract
-// source: refs without resolving anything, and live commands (doctor,
-// status) are thin clients of a running process's admin endpoint.
+// static commands (explain, schema, policy, vet, diff) never resolve
+// anything, and live commands (doctor, status) are thin clients of a
+// running process's admin endpoint. Most static commands extract source:
+// refs from Go source; diff is the exception, comparing two prior
+// `explain --json` outputs, so it needs no source and no build.
 package main
 
 import (
@@ -52,6 +54,7 @@ Static commands (read source, never resolve):
   explain    Explain the config structs and source: refs found in a package
   schema     Emit a JSON Schema for a config struct
   policy     Emit a least-privilege access policy derived from source: refs
+  diff       Diff two "mamori explain --json" outputs, with a privilege delta
   vet        Report config fields that pull a secret into a plain string/[]byte
 
 Live commands (thin clients of a running process's admin endpoint):
@@ -88,6 +91,8 @@ func run(args []string) int {
 		return schemaCmd(args[1:], os.Stdout, os.Stderr)
 	case "policy":
 		return policyCmd(args[1:], os.Stdout, os.Stderr)
+	case "diff":
+		return diffCmd(args[1:], os.Stdout, os.Stderr)
 	case "vet":
 		return vetCmd(args[1:], os.Stdout, os.Stderr)
 	case "doctor":
