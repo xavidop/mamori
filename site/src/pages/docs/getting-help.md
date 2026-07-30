@@ -15,4 +15,4 @@ title: Getting help
 
 Contributions are welcome, new providers especially. Read [CONTRIBUTING.md](https://github.com/xavidop/mamori/blob/main/CONTRIBUTING.md) and the [Write a provider guide](/docs/writing-a-provider/). A provider that passes the `providertest` conformance kit gets listed in the README with a badge.
 
-Before filing a bug, please check these docs and existing issues. When you do file one, keep secret values out of it.
+Before filing a bug, please check these docs, the [Troubleshooting](/docs/troubleshooting/) page, and existing issues. When you do file one, keep secret values out of it.
