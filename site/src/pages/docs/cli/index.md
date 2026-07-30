@@ -7,13 +7,13 @@ title: CLI
 
 `mamori` (import path `github.com/xavidop/mamori/cmd/mamori`) is a standalone CLI built around the same `source:` tag conventions and `Report` shape the library uses. It has two halves that never mix:
 
-- **Static commands** ([`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), [`policy`](/docs/cli/policy/), [`vet`](/docs/cli/vet/)) read your Go source and never resolve anything.
+- **Static commands** ([`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), [`policy`](/docs/cli/policy/), [`vet`](/docs/cli/vet/), [`diff`](/docs/cli/diff/)) never resolve anything. The first four read your Go source; `diff` reads two `explain --json` outputs and needs no source at all.
 - **Live commands** ([`doctor` and `status`](/docs/cli/doctor-status/)) query a running process's admin endpoint and set an exit code.
 
 ```mermaid
 flowchart TD
   CLI[mamori CLI]
-  CLI --> S["Static: explain, schema, policy, vet"]
+  CLI --> S["Static: explain, schema, policy, vet, diff"]
   CLI --> L["Live: doctor, status"]
   S -->|"read Go source, never resolve"| Src[("your config structs")]
   L -->|"GET / on the admin endpoint"| Proc[("a running process")]

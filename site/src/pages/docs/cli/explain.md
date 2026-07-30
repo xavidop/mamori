@@ -49,6 +49,20 @@ mamori explain --secret-schemes=mysecrets ./...
 
 Pass several as a comma-separated list. The flag adds to the built-in set rather than replacing it, and takes a bare scheme token (`mysecrets`), not a full ref.
 
+## JSON stability
+
+The `--json` output is consumed by [`mamori diff`](/docs/cli/diff), which is
+typically given a `base.json` stored as a CI artifact and produced weeks
+earlier, possibly by an older `mamori` binary. That makes this output a
+compatibility surface, and it is treated as one:
+
+**Fields may be added to this JSON. They will not be removed and will not be
+retyped.**
+
+The top level is a JSON array of struct records and will stay an array. Consumers
+should ignore unknown fields, which is what `encoding/json` does by default, so
+a newer binary's output stays readable by an older consumer and the reverse.
+
 ## See also
 
 [`mamori schema`](/docs/cli/schema/) turns the same structs into a JSON Schema; [`mamori policy`](/docs/cli/policy/) turns their refs into an access artifact. [CLI overview](/docs/cli/).

@@ -189,7 +189,9 @@ For a pre-deploy check, `mamori.Doctor[Config](ctx, opts...)` resolves every fie
 
 ## CLI
 
-[`cmd/mamori`](cmd/mamori/) is a standalone CLI with two halves that never mix: `explain`/`schema`/`policy` statically read your Go source and never resolve anything (struct field tables, JSON Schema, least-privilege IAM/GCP/ExternalSecret artifacts), while `doctor`/`status` are thin clients of a running process's admin endpoint (`WithAdminHTTP` above), exiting `0`-`4` so a script can tell a broken config apart from one it merely couldn't reach.
+[`cmd/mamori`](cmd/mamori/) is a standalone CLI with two halves that never mix: `explain`/`schema`/`policy`/`diff` never resolve anything (struct field tables, JSON Schema, least-privilege IAM/GCP/ExternalSecret artifacts, and the config-surface delta between two revisions), while `doctor`/`status` are thin clients of a running process's admin endpoint (`WithAdminHTTP` above), exiting `0`-`4` so a script can tell a broken config apart from one it merely couldn't reach.
+
+`mamori diff` is built for pull request review: given two `mamori explain --json` outputs it reports which fields and precedence chains changed, flags any field that newly reads secret material, and shows the **privilege delta**, the backend paths the service starts and stops reading, optionally rendered as concrete IAM or GCP grants. `--exit-code=privilege` turns that into a merge gate that fires only when the permission surface grows.
 
 ```bash
 brew install xavidop/tap/mamori

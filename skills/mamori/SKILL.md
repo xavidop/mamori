@@ -1,6 +1,6 @@
 ---
 name: mamori
-description: Use when writing Go code that loads configuration or secrets, wiring providers (env, files, AWS, Vault, GCP, Azure, Kubernetes, Consul, databases, feature flags), watching config for live changes without a restart, validating config structs, keeping secrets redacted, or using the mamori CLI (explain, schema, policy, vet, doctor, status). Covers github.com/xavidop/mamori.
+description: Use when writing Go code that loads configuration or secrets, wiring providers (env, files, AWS, Vault, GCP, Azure, Kubernetes, Consul, databases, feature flags), watching config for live changes without a restart, validating config structs, keeping secrets redacted, or using the mamori CLI (explain, schema, policy, diff, vet, doctor, status). Covers github.com/xavidop/mamori.
 ---
 
 # mamori: typed, validated, watchable config and secrets for Go
@@ -166,6 +166,7 @@ Precedence chains: a `source:` tag may list several refs comma-separated
 - `mamori explain ./...` - list every `source:` ref in a package's config structs.
 - `mamori schema ./...` - emit JSON Schema from field types and `validate:` tags.
 - `mamori policy ./... --format=aws-iam|gcp|external-secret` - least-privilege access artifact.
+- `mamori diff <base.json> <head.json>` - compare two `mamori explain --json` outputs: fields and chains added, removed, or modified, fields that newly read secret material, and the privilege delta (backend paths gained and lost). Built for pull request CI: `--markdown` suits a PR comment, and `--exit-code=privilege` fails the build only when the permission surface grows.
 - `mamori vet ./...` - flag secret-bearing sources stored in a plain `string`/`[]byte`. Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`.
 - `--secret-schemes=mysecrets` - accepted by `explain`, `schema`, `policy`, `vet`, and `doctor --compare`; adds a custom provider's scheme to the built-in secret-bearing set so every command agrees on what is a secret.
 - `mamori doctor --endpoint <ep>` / `mamori status` - probe a running process's admin endpoint; exit codes 0 healthy, 1 unhealthy, 2 admin off, 3 unreachable, 4 auth failed.

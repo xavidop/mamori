@@ -50,7 +50,7 @@ const usage = `mamori is a CLI for the mamori configuration library.
 Usage:
   mamori <command> [arguments]
 
-Static commands (read source, never resolve):
+Static commands (never resolve):
   explain    Explain the config structs and source: refs found in a package
   schema     Emit a JSON Schema for a config struct
   policy     Emit a least-privilege access policy derived from source: refs
