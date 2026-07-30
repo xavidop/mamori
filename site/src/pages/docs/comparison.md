@@ -36,7 +36,7 @@ The operational layer is a second axis the alternatives mostly leave to you: kno
 
 - **gocloud.dev/runtimevar** is the closest primitive. mamori adds struct composition, tags, validation, diff callbacks, and secret hygiene. A `runtimevar` bridge provider could even inherit its driver matrix.
 - **External Secrets Operator** solves the same provider problem at the cluster layer by materializing Kubernetes Secrets. mamori is complementary: it is for apps that want to skip the Kubernetes Secret hop, or that do not run on Kubernetes at all. It keeps no persistent external state, so there is no finalizer lifecycle to manage.
-- **Viper / koanf** are config-first with secrets bolted on. mamori is secrets-first with config included. Already running Viper? See [Migrating from Viper](/docs/migrating-from-viper/) for an incremental, field-by-field path that keeps Viper doing exactly what it does today.
+- **Viper / koanf** are config-first with secrets bolted on. mamori is secrets-first with config included. Already running Viper? The [`viper://` provider](/docs/providers/viper/#migrating-an-existing-viper-setup) gives you an incremental, field-by-field path that keeps Viper doing exactly what it does today.
 - **spring-cloud-config** and **.NET `IOptionsMonitor<T>`** are the developer-experience benchmark from other ecosystems. `Watch().Get()` is mamori's `IOptionsMonitor<T>.CurrentValue`.
 
 ## What mamori is not
