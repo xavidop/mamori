@@ -52,10 +52,47 @@ func (s String) Sensitive() bool { return true }
 // IsZero reports whether the secret holds no bytes.
 func (s String) IsZero() bool { return len(s.b) == 0 }
 
+// Clone returns a copy backed by its own bytes, so the caller can Zero it
+// without touching any other copy.
+//
+// This is the safe way to wipe a secret that came from Watcher.Get: that
+// returns your config by value, which shares the secret's backing array with
+// the reconciler and with every other caller. Clone breaks the sharing, and
+// only then is Zero yours to call.
+//
+// A cloned nil or empty secret stays empty rather than allocating.
+func (s String) Clone() String {
+	if len(s.b) == 0 {
+		return String{}
+	}
+	return String{b: append([]byte(nil), s.b...)}
+}
+
 // Zero best-effort wipes the underlying bytes. This is a defense-in-depth
 // measure only: Go's garbage collector may have already copied the value
 // elsewhere (during string conversion, interface boxing, or GC compaction), so
-// zeroization cannot be guaranteed. It is still worth doing on rotation.
+// zeroization cannot be guaranteed.
+//
+// Only call this on a secret whose bytes you own. A String is a struct holding
+// a slice, so copying one copies the slice header and shares the backing
+// array: every copy reads through to the same bytes, and zeroing any of them
+// zeroes all of them.
+//
+// That matters because Watcher.Get returns your config by value, which copies
+// the struct without copying the secret's bytes. Zeroing a secret obtained
+// that way does not wipe "your" copy, it wipes the live one the reconciler is
+// still serving, and every other caller's too. A request in flight would
+// authenticate with null bytes.
+//
+// Use Clone to take ownership first when you need to wipe:
+//
+//	pw := cfg.DBPassword.Clone()
+//	defer pw.Zero()
+//	db.Connect(pw.Reveal())
+//
+// mamori itself never calls Zero. It cannot know when the last caller has
+// finished with a superseded value, so wiping one on rotation would be a use
+// after free with extra steps.
 func (s *String) Zero() {
 	for i := range s.b {
 		s.b[i] = 0
@@ -92,7 +129,19 @@ func (b Bytes) Sensitive() bool { return true }
 // IsZero reports whether the secret holds no bytes.
 func (b Bytes) IsZero() bool { return len(b.b) == 0 }
 
-// Zero best-effort wipes the underlying bytes (see String.Zero for caveats).
+// Clone returns a copy backed by its own bytes, so the caller can Zero it
+// without touching any other copy. See String.Clone.
+func (b Bytes) Clone() Bytes {
+	if len(b.b) == 0 {
+		return Bytes{}
+	}
+	return Bytes{b: append([]byte(nil), b.b...)}
+}
+
+// Zero best-effort wipes the underlying bytes. Only call it on a secret whose
+// bytes you own: copies share one backing array, so zeroing any copy zeroes
+// every copy, including the live one the reconciler is serving. Use Clone to
+// take ownership first. See String.Zero for the full rationale.
 func (b *Bytes) Zero() {
 	for i := range b.b {
 		b.b[i] = 0
