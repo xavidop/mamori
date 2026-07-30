@@ -246,11 +246,40 @@ func renderDiffMarkdown(w io.Writer, d Diff, policyFormat string) {
 	}
 	_, _ = fmt.Fprintln(w, "### Privilege delta")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "```")
+	fence := mdFence(lines)
+	_, _ = fmt.Fprintln(w, fence)
 	for _, l := range lines {
 		_, _ = fmt.Fprintln(w, l)
 	}
-	_, _ = fmt.Fprintln(w, "```")
+	_, _ = fmt.Fprintln(w, fence)
+}
+
+// mdFence returns a fence long enough to hold lines verbatim. CommonMark
+// closes a fenced block at the first run of backticks at least as long as
+// the opening fence, so content containing ``` would end the block early and
+// let the rest render as live markdown. Since a Diff is decoded from an
+// arbitrary JSON file rather than from compiler-constrained Go source, that
+// content is not trusted: the fence grows past the longest run instead.
+func mdFence(lines []string) string {
+	longest := 0
+	for _, l := range lines {
+		run := 0
+		for _, r := range l {
+			if r == '`' {
+				run++
+				if run > longest {
+					longest = run
+				}
+			} else {
+				run = 0
+			}
+		}
+	}
+	n := 3
+	if longest >= n {
+		n = longest + 1
+	}
+	return strings.Repeat("`", n)
 }
 
 // mdEscape escapes the characters that would break a markdown table cell. A

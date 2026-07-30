@@ -280,3 +280,42 @@ func TestRenderDiffMarkdownIsDeterministic(t *testing.T) {
 		t.Errorf("renderDiffMarkdown is not deterministic:\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
 	}
 }
+
+func TestRenderDiffMarkdownFenceSurvivesBacktickContent(t *testing.T) {
+	d := Diff{Privilege: PrivilegeDelta{Added: map[string][]string{
+		"aws-sm": {"prod/```evil"},
+	}}}
+
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, d, "")
+	got := sb.String()
+
+	if !strings.Contains(got, "prod/```evil") {
+		t.Errorf("want the path rendered verbatim, got %q", got)
+	}
+	// The fence must be longer than the longest backtick run in the content,
+	// so the block cannot be closed early.
+	if !strings.Contains(got, "````") {
+		t.Errorf("want a fence longer than the content's backtick run, got %q", got)
+	}
+}
+
+func TestMdFenceLength(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{name: "no backticks uses three", lines: []string{"+ aws-sm  prod/x"}, want: "```"},
+		{name: "one backtick still three", lines: []string{"a `b"}, want: "```"},
+		{name: "triple run grows to four", lines: []string{"a ``` b"}, want: "````"},
+		{name: "longest run across lines wins", lines: []string{"a ``` b", "c ````` d"}, want: "``````"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mdFence(tc.lines); got != tc.want {
+				t.Errorf("mdFence = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
