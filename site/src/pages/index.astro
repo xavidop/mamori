@@ -35,9 +35,9 @@ const features = [
 // the docs. Each card links to a representative provider page.
 const categories = [
   {
-    name: "Built-in",
-    count: 4,
-    items: "env · dotenv · file · exec",
+    name: "Local sources",
+    count: 5,
+    items: "env · dotenv · file · exec · Viper",
     href: `${base}docs/providers/env`,
   },
   {
@@ -65,12 +65,6 @@ const categories = [
     href: `${base}docs/providers/kubernetes`,
   },
   {
-    name: "Config libraries",
-    count: 1,
-    items: "Viper",
-    href: `${base}docs/providers/viper`,
-  },
-  {
     name: "Object storage & Firebase",
     count: 6,
     items: "S3 · GCS · Azure Blob · Firestore · Firebase RTDB · Remote Config",
@@ -95,16 +89,10 @@ const operational = [
     cta: "CLI",
   },
   {
-    t: "Observability",
-    d: "Status and Health expose per-field health live, Doctor runs the same check in CI before a deploy, and an opt-in admin endpoint serves the report as metadata, never a value.",
+    t: "Health & telemetry",
+    d: "Status and Health expose per-field health right now, and Doctor runs the same check in CI before a deploy. Structured slog, metrics and tracing cover what happened over time, with OpenTelemetry and Prometheus bridges that ship separately so neither reaches a core consumer.",
     href: `${base}docs/observability`,
-    cta: "Observability",
-  },
-  {
-    t: "Telemetry",
-    d: "Structured slog for what happened to a field, metrics for how often it happens across all of them, and tracing per resolve. OpenTelemetry and Prometheus bridges ship separately, so neither reaches a core consumer.",
-    href: `${base}docs/telemetry`,
-    cta: "Telemetry",
+    cta: "Health & telemetry",
   },
   {
     t: "Built for agents",
