@@ -39,14 +39,78 @@ exec:command arg1 arg2 ...
 | --- | --- | --- |
 | `exec:` | yes | Opaque scheme - the entire remainder is the command line, with no `//` authority. |
 | `command` | yes | The executable to run (resolved on `PATH`). |
-| `arg1 arg2 ...` | no | Arguments, split on spaces. Taken verbatim from the ref, never interpolated from other resolved values. |
+| `arg1 arg2 ...` | no | Arguments, split on whitespace. Quote an argument to keep spaces in it. Taken verbatim from the ref, never interpolated from other resolved values. |
 
 **Examples**
 
 - `exec:vault-agent token` runs `vault-agent token` and captures its stdout as the value - pair it with a `secret.String` field.
 - `exec:aws ecr get-login-password` shells out to the AWS CLI to mint a short-lived registry password.
+- `exec:mytool --msg "hello world"` passes one argument containing a space.
 
 The `exec:` scheme must be enabled per call with `WithExecProvider()` (see above), and its output is always marked `Sensitive`. See Security below.
+
+### Quoting
+
+Arguments split on whitespace, and single or double quotes keep an argument together. Single quotes are literal; inside double quotes a backslash escapes the next character. An unterminated quote is an error rather than a guess, since closing it silently would run a command you did not write.
+
+### There is no shell
+
+mamori runs the binary directly. There is no globbing, no pipes, no command substitution, and **no variable expansion**:
+
+```go
+// Does NOT work: no shell, so $HOME is passed as the literal text "$HOME".
+Home string `source:"exec:echo $HOME"`
+```
+
+That one produces the string `$HOME` and no error, which is the failure most worth knowing about on this page.
+
+### Using an environment variable
+
+Three ways, depending on what you actually need.
+
+**The value itself.** Do not use `exec:` at all:
+
+```go
+Home string `source:"env:HOME"`
+```
+
+**The command should see your environment.** It already does. mamori does not clear the environment, so the command inherits it and a script reading `$HOME` internally works:
+
+```go
+Token secret.String `source:"exec:vault-agent token"`
+```
+
+**The variable must appear in the command line.** Two routes, and they differ in who does the substituting.
+
+Let mamori substitute it, with [`${VAR}` interpolation](/docs/concepts/ref-interpolation/). You name the variables explicitly, so nothing ambient can reach the command:
+
+```go
+Home string `source:"exec:printf %s ${HOME}"`
+
+cfg, err := mamori.Load[Config](ctx,
+	mamori.WithExecProvider(),
+	mamori.WithRefVars(mamori.EnvVars("HOME")),
+)
+```
+
+Or ask for a shell yourself, quoting the script so it arrives as one argument:
+
+```go
+Home string `source:"exec:sh -c 'echo $HOME'"`
+```
+
+Prefer the first. `${HOME}` fails loudly at `Load` if you forget to pass the variable, whereas a shell silently expands an unset variable to nothing. Invoking a shell is also your decision to make, not something mamori does to every `exec:` ref, and anything that shell can expand, it will.
+
+### Trailing newlines
+
+Whatever the command prints becomes the value, newline included: `echo` gives you `"/home/app\n"`, not `"/home/app"`. That trailing byte fails a `validate:"..."` rule or any comparison expecting an exact match.
+
+Trim it with [`?decode=trim`](/docs/concepts/decoding/), or use a command that emits no newline:
+
+```go
+Home  string        `source:"exec:sh -c 'echo $HOME'?decode=trim"`
+Token secret.String `source:"exec:printf %s hunter2"`  // printf adds none
+```
 
 ## Security
 
