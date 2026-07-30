@@ -106,14 +106,26 @@ Use `WithRefVars` for anything you would be comfortable seeing on a status
 page. A secret belongs in the value a ref *resolves to*, never in the ref's
 own text.
 
-## One upgrade note
+## Upgrading: check any tag containing a `$`
 
-The scan runs whether or not you call `WithRefVars`, so `$$` collapses and a
-stray `${` errors even with no variables supplied. A pre-existing tag
-containing either, most plausibly an `exec:` command line, changes meaning.
-Gating the scan on opt-in would mean a caller who simply forgot the option
-gets `${ENV}` left literal, which resolves not-found and silently takes the
-default, which is the failure this feature exists to prevent.
+mamori scans every `source` tag for `${...}` and `$$`, **even if you never call
+`WithRefVars`**. So a tag you already had can change meaning:
+
+| Tag | What it does now |
+| --- | --- |
+| `exec:echo $$` | `$$` collapses to one `$`, so the command becomes `echo $` |
+| `exec:sh -c 'echo ${HOME'` | the unterminated `${` is now an error at `Load` |
+| `env:MY_$VAR` | unchanged, a bare `$` without braces is left alone |
+
+An `exec:` command line is the likely place to find one. Grep your tags for
+`$$` and `${` before upgrading.
+
+Scanning unconditionally is the safer of two bad options. If the scan only ran
+when you passed `WithRefVars`, then forgetting the option would leave `${ENV}`
+sitting in the ref as literal text, producing `aws-sm://${ENV}/db`, which
+resolves not-found and quietly takes the field's `default:`. You would get a
+wrong value instead of an error, which is the exact failure this feature
+exists to prevent.
 
 ## See also
 
