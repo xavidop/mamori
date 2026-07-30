@@ -50,12 +50,29 @@ const (
 	// MetricWatchErrors is a counter of provider watch-channel errors, with
 	// attribute "scheme".
 	MetricWatchErrors = "mamori.watch.errors"
+	// MetricStaleCount is a counter of values that have gone unrefreshed past
+	// the WithStale threshold, with attribute "scheme".
+	MetricStaleCount = "mamori.stale.count"
+	// MetricChangeDroppedCount is a counter of OnChange dispatch events
+	// discarded because the queue was full. It carries no attributes: it is a
+	// process-wide property of the dispatch queue, not a per-scheme one. A
+	// non-zero rate means an OnChange handler is not keeping up with the rate
+	// of applied changes.
+	MetricChangeDroppedCount = "mamori.change.dropped.count"
+	// MetricApplyRejectedCount is a counter of candidate configurations
+	// refused before being applied, with attribute "reason" (see
+	// mamori.RejectReason: "validation" or "preapply").
+	MetricApplyRejectedCount = "mamori.apply.rejected.count"
 )
 
 // Metric attribute keys.
 const (
 	attrScheme = "scheme"
 	attrStatus = "status"
+	// attrReason carries the mamori.RejectReason of a rejected apply
+	// ("validation" or "preapply"), a closed two-value set so it stays a safe
+	// metric label.
+	attrReason = "reason"
 
 	statusOK    = "ok"
 	statusError = "error"
@@ -84,15 +101,21 @@ type meter struct {
 	resolveDuration metric.Float64Histogram
 	refreshCount    metric.Int64Counter
 	watchErrors     metric.Int64Counter
+	staleCount      metric.Int64Counter
+	changeDropped   metric.Int64Counter
+	applyRejected   metric.Int64Counter
 }
 
 // NewMeter builds a mamori.Meter backed by the given OpenTelemetry meter. It
-// creates three instruments up front:
+// creates six instruments up front:
 //
 //   - a Float64Histogram "mamori.resolve.duration" (unit ms) recording resolve
 //     latency, tagged with "scheme" and "status" (ok|error);
 //   - an Int64Counter "mamori.refresh.count" tagged with "scheme";
-//   - an Int64Counter "mamori.watch.errors" tagged with "scheme".
+//   - an Int64Counter "mamori.watch.errors" tagged with "scheme";
+//   - an Int64Counter "mamori.stale.count" tagged with "scheme";
+//   - an Int64Counter "mamori.change.dropped.count", with no attributes;
+//   - an Int64Counter "mamori.apply.rejected.count" tagged with "reason".
 //
 // An error is returned if any instrument cannot be created. The returned Meter
 // records measurements against context.Background(); pass it to
@@ -123,11 +146,38 @@ func NewMeter(m metric.Meter) (mamori.Meter, error) {
 		return nil, err
 	}
 
+	staleCount, err := m.Int64Counter(
+		MetricStaleCount,
+		metric.WithDescription("Number of mamori watched values that exceeded the WithStale threshold."),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	changeDropped, err := m.Int64Counter(
+		MetricChangeDroppedCount,
+		metric.WithDescription("Number of mamori OnChange dispatch events dropped because the queue was full."),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	applyRejected, err := m.Int64Counter(
+		MetricApplyRejectedCount,
+		metric.WithDescription("Number of mamori candidate configurations rejected before being applied."),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &meter{
 		ctx:             context.Background(),
 		resolveDuration: resolveDuration,
 		refreshCount:    refreshCount,
 		watchErrors:     watchErrors,
+		staleCount:      staleCount,
+		changeDropped:   changeDropped,
+		applyRejected:   applyRejected,
 	}, nil
 }
 
@@ -162,6 +212,24 @@ func (m *meter) RecordRefresh(scheme string) {
 // RecordWatchError increments the watch-error counter for the scheme.
 func (m *meter) RecordWatchError(scheme string) {
 	m.watchErrors.Add(m.ctx, 1, metric.WithAttributes(attribute.String(attrScheme, scheme)))
+}
+
+// RecordStale increments the stale-value counter for the scheme.
+func (m *meter) RecordStale(scheme string) {
+	m.staleCount.Add(m.ctx, 1, metric.WithAttributes(attribute.String(attrScheme, scheme)))
+}
+
+// RecordChangeDropped increments the dropped-change-event counter. It carries
+// no attributes: the dispatch queue it reports on is process-wide, not
+// per-scheme.
+func (m *meter) RecordChangeDropped() {
+	m.changeDropped.Add(m.ctx, 1)
+}
+
+// RecordApplyRejected increments the rejected-apply counter, tagged with
+// reason ("validation" or "preapply").
+func (m *meter) RecordApplyRejected(reason mamori.RejectReason) {
+	m.applyRejected.Add(m.ctx, 1, metric.WithAttributes(attribute.String(attrReason, string(reason))))
 }
 
 // tracer implements mamori.Tracer on top of an OpenTelemetry trace.Tracer.

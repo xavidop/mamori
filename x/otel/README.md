@@ -16,7 +16,7 @@ go get github.com/xavidop/mamori/x/otel
 
 ## What it does
 
-- **Metrics** - `NewMeter` wraps an OTel `metric.Meter` and registers three
+- **Metrics** - `NewMeter` wraps an OTel `metric.Meter` and registers six
   instruments, recording to them as mamori resolves and reconciles config.
 - **Tracing** - `NewTracer` wraps an OTel `trace.Tracer` and starts one span per
   resolve, ending it with the correct status (and a recorded error on failure).
@@ -77,6 +77,9 @@ records measurements against `context.Background()`.
 | Resolve duration | `mamori.resolve.duration` | Float64 histogram | `ms` | `scheme`, `status` (`ok` \| `error`), `mamori.error.kind` (failed resolves only) |
 | Refresh count | `mamori.refresh.count` | Int64 counter | - | `scheme` |
 | Watch errors | `mamori.watch.errors` | Int64 counter | - | `scheme` |
+| Stale count | `mamori.stale.count` | Int64 counter | - | `scheme` |
+| Change dropped count | `mamori.change.dropped.count` | Int64 counter | - | none |
+| Apply rejected count | `mamori.apply.rejected.count` | Int64 counter | - | `reason` (`validation` \| `preapply`) |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws`,
   `vault`).
@@ -86,9 +89,17 @@ records measurements against `context.Background()`.
   `unauthenticated`, `unavailable`, `rate_limited`, `invalid`, or `unknown`. It
   lets a dashboard separate a denied permission from a rate limit from a missing
   key rather than lumping every failure into one `error` bucket.
+- `mamori.change.dropped.count` carries no attributes: the dispatch queue it
+  reports on is a process-wide property, not a per-scheme one. A non-zero rate
+  means an `OnChange` handler is not keeping up with the rate of applied
+  changes, and callers are missing changes as a result.
+- `reason` on the apply-rejected counter is `mamori.RejectReason`, a closed set
+  of two values (`validation`, `preapply`) so it stays a safe, bounded metric
+  label.
 
 The instrument names and metric attribute keys are also exported as constants
-(`MetricResolveDuration`, `MetricRefreshCount`, `MetricWatchErrors`).
+(`MetricResolveDuration`, `MetricRefreshCount`, `MetricWatchErrors`,
+`MetricStaleCount`, `MetricChangeDroppedCount`, `MetricApplyRejectedCount`).
 
 ## Traces
 

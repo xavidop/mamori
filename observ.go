@@ -17,7 +17,29 @@ type Meter interface {
 	RecordRefresh(scheme string)
 	// RecordWatchError reports a provider watch-channel error.
 	RecordWatchError(scheme string)
+	// RecordStale reports that a value has not refreshed within the WithStale
+	// threshold.
+	RecordStale(scheme string)
+	// RecordChangeDropped reports that a change event was discarded because the
+	// OnChange dispatch queue was full. A non-zero rate means handlers are not
+	// keeping up and callers are missing changes.
+	RecordChangeDropped()
+	// RecordApplyRejected reports that a candidate configuration was refused
+	// and the previous one is still being served.
+	RecordApplyRejected(reason RejectReason)
 }
+
+// RejectReason names why a candidate configuration was refused. It is a closed
+// set of two so an adapter can use it as a metric label without unbounded
+// cardinality, which a free-form string would invite.
+type RejectReason string
+
+const (
+	// RejectValidation means the candidate failed the configured Validator.
+	RejectValidation RejectReason = "validation"
+	// RejectPreApply means a PreApply hook refused the change.
+	RejectPreApply RejectReason = "preapply"
+)
 
 // Tracer is the minimal tracing sink mamori emits to (see Meter for the no-dep
 // rationale). Pass one with WithTracer.
@@ -33,6 +55,9 @@ type noopMeter struct{}
 func (noopMeter) RecordResolve(string, time.Duration, error) {}
 func (noopMeter) RecordRefresh(string)                       {}
 func (noopMeter) RecordWatchError(string)                    {}
+func (noopMeter) RecordStale(string)                         {}
+func (noopMeter) RecordChangeDropped()                       {}
+func (noopMeter) RecordApplyRejected(RejectReason)           {}
 
 type noopTracer struct{}
 

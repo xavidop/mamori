@@ -19,11 +19,7 @@ import (
 
 // collect builds a manual-reader-backed meter, runs fn against the adapter, and
 // returns the collected metrics.
-func collect(t *testing.T, fn func(m interface {
-	RecordResolve(string, time.Duration, error)
-	RecordRefresh(string)
-	RecordWatchError(string)
-})) metricdata.ResourceMetrics {
+func collect(t *testing.T, fn func(m mamori.Meter)) metricdata.ResourceMetrics {
 	t.Helper()
 
 	reader := sdkmetric.NewManualReader()
@@ -69,11 +65,7 @@ func attrString(t *testing.T, set attribute.Set, key string) string {
 func TestMeter_RecordResolve(t *testing.T) {
 	resolveErr := errors.New("boom")
 
-	rm := collect(t, func(m interface {
-		RecordResolve(string, time.Duration, error)
-		RecordRefresh(string)
-		RecordWatchError(string)
-	}) {
+	rm := collect(t, func(m mamori.Meter) {
 		m.RecordResolve("file", 5*time.Millisecond, nil)
 		m.RecordResolve("aws", 20*time.Millisecond, resolveErr)
 	})
@@ -122,11 +114,7 @@ func TestMeter_RecordResolve(t *testing.T) {
 }
 
 func TestMeter_RecordRefreshAndWatchError(t *testing.T) {
-	rm := collect(t, func(m interface {
-		RecordResolve(string, time.Duration, error)
-		RecordRefresh(string)
-		RecordWatchError(string)
-	}) {
+	rm := collect(t, func(m mamori.Meter) {
 		m.RecordRefresh("file")
 		m.RecordRefresh("file")
 		m.RecordWatchError("aws")
@@ -160,6 +148,85 @@ func TestMeter_RecordRefreshAndWatchError(t *testing.T) {
 	}
 	if s := attrString(t, watchSum.DataPoints[0].Attributes, "scheme"); s != "aws" {
 		t.Errorf("watch errors scheme = %q, want %q", s, "aws")
+	}
+}
+
+func TestMeter_RecordStale(t *testing.T) {
+	rm := collect(t, func(m mamori.Meter) {
+		m.RecordStale("file")
+		m.RecordStale("file")
+	})
+
+	stale := findMetric(t, rm, mamoriotel.MetricStaleCount)
+	staleSum, ok := stale.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("stale count data has type %T, want Sum[int64]", stale.Data)
+	}
+	if len(staleSum.DataPoints) != 1 {
+		t.Fatalf("stale count data points = %d, want 1", len(staleSum.DataPoints))
+	}
+	if got := staleSum.DataPoints[0].Value; got != 2 {
+		t.Errorf("stale count = %d, want 2", got)
+	}
+	if s := attrString(t, staleSum.DataPoints[0].Attributes, "scheme"); s != "file" {
+		t.Errorf("stale scheme = %q, want %q", s, "file")
+	}
+}
+
+// TestMeter_RecordChangeDropped confirms the dropped-change-event counter
+// carries no attributes: it is a process-wide property of the dispatch queue,
+// not a per-scheme one.
+func TestMeter_RecordChangeDropped(t *testing.T) {
+	rm := collect(t, func(m mamori.Meter) {
+		m.RecordChangeDropped()
+		m.RecordChangeDropped()
+		m.RecordChangeDropped()
+	})
+
+	dropped := findMetric(t, rm, mamoriotel.MetricChangeDroppedCount)
+	droppedSum, ok := dropped.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("change dropped data has type %T, want Sum[int64]", dropped.Data)
+	}
+	if len(droppedSum.DataPoints) != 1 {
+		t.Fatalf("change dropped data points = %d, want 1", len(droppedSum.DataPoints))
+	}
+	if got := droppedSum.DataPoints[0].Value; got != 3 {
+		t.Errorf("change dropped count = %d, want 3", got)
+	}
+	if n := droppedSum.DataPoints[0].Attributes.Len(); n != 0 {
+		t.Errorf("change dropped attributes = %d, want 0", n)
+	}
+}
+
+// TestMeter_RecordApplyRejected confirms the rejected-apply counter is tagged
+// with reason, and that mamori.RejectValidation and mamori.RejectPreApply
+// produce distinct data points.
+func TestMeter_RecordApplyRejected(t *testing.T) {
+	rm := collect(t, func(m mamori.Meter) {
+		m.RecordApplyRejected(mamori.RejectValidation)
+		m.RecordApplyRejected(mamori.RejectPreApply)
+		m.RecordApplyRejected(mamori.RejectPreApply)
+	})
+
+	rejected := findMetric(t, rm, mamoriotel.MetricApplyRejectedCount)
+	rejectedSum, ok := rejected.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("apply rejected data has type %T, want Sum[int64]", rejected.Data)
+	}
+	if len(rejectedSum.DataPoints) != 2 {
+		t.Fatalf("apply rejected data points = %d, want 2", len(rejectedSum.DataPoints))
+	}
+
+	got := map[string]int64{}
+	for _, dp := range rejectedSum.DataPoints {
+		got[attrString(t, dp.Attributes, "reason")] = dp.Value
+	}
+	if got["validation"] != 1 {
+		t.Errorf("apply rejected[validation] = %d, want 1", got["validation"])
+	}
+	if got["preapply"] != 2 {
+		t.Errorf("apply rejected[preapply] = %d, want 2", got["preapply"])
 	}
 }
 
@@ -233,11 +300,7 @@ func TestTracer_StartResolveError(t *testing.T) {
 // mamori.ErrorKind, so a dashboard can split a denied permission from a
 // throttled request without parsing error strings.
 func TestMeter_RecordResolveErrorKind(t *testing.T) {
-	rm := collect(t, func(m interface {
-		RecordResolve(string, time.Duration, error)
-		RecordRefresh(string)
-		RecordWatchError(string)
-	}) {
+	rm := collect(t, func(m mamori.Meter) {
 		m.RecordResolve("aws-sm", 5*time.Millisecond, fmt.Errorf("%w: denied by policy", mamori.ErrPermissionDenied))
 	})
 
@@ -259,11 +322,7 @@ func TestMeter_RecordResolveErrorKind(t *testing.T) {
 // carries no mamori.error.kind attribute at all, rather than an empty or
 // placeholder value, so the attribute's mere presence selects failures.
 func TestMeter_RecordResolveOmitsErrorKindOnSuccess(t *testing.T) {
-	rm := collect(t, func(m interface {
-		RecordResolve(string, time.Duration, error)
-		RecordRefresh(string)
-		RecordWatchError(string)
-	}) {
+	rm := collect(t, func(m mamori.Meter) {
 		m.RecordResolve("env", time.Millisecond, nil)
 	})
 

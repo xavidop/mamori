@@ -993,6 +993,7 @@ func (e *engine[T]) reportTerminalError(spec fieldSpec, ref Ref, err error) {
 	if e.o.stale > 0 {
 		if last, ok := e.lastOK[spec.Path]; ok && e.o.clock.Now().Sub(last) > e.o.stale {
 			se := &StaleError{Ref: redactRef(ref), Err: err}
+			e.o.meter.RecordStale(ref.Scheme)
 			e.o.log().Warn("value is stale",
 				logAttrField, spec.Path, logAttrRef, redactRef(ref),
 				logAttrErr, se.Error())
@@ -1055,6 +1056,7 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 	}
 	if err := e.o.validator.Validate(cand); err != nil {
 		ve := &ValidationError{Err: err}
+		e.o.meter.RecordApplyRejected(RejectValidation)
 		e.o.log().Error("candidate rejected by validation; continuing to serve the previous config",
 			errAttrs(err)...)
 		e.emitErr(ve)
@@ -1185,6 +1187,7 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 		for _, f := range fields {
 			e.applied[f.Path] = f.OldVersion
 		}
+		e.o.meter.RecordApplyRejected(RejectPreApply)
 		e.o.log().Warn("change rejected by PreApply; continuing to serve the previous config",
 			append([]any{logAttrCount, len(fields)}, errAttrs(err)...)...)
 		e.emitErr(err)
@@ -1562,6 +1565,7 @@ func (e *engine[T]) enqueue(ev Change[T]) {
 		default:
 			select {
 			case <-e.dispatch: // drop oldest, retry
+				e.o.meter.RecordChangeDropped()
 				e.o.log().Warn("change event dropped, dispatch queue full; the OnChange handler is not keeping up",
 					logAttrCount, cap(e.dispatch))
 			default:
