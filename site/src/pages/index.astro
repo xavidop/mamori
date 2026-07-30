@@ -22,7 +22,7 @@ const features = [
   {
     k: "03",
     t: "Atomic & gated",
-    d: "An update that fails validation is rejected, and PreApply lets you prove a rotated credential actually works before it becomes live. Get() keeps returning the last good config; your process never observes a half-applied or unverified one.",
+    d: "A bad update never goes live. Validation rejects it, and you can add your own check on top: try the new credential, and say no if it fails. Until then your app keeps serving the last good config.",
   },
   {
     k: "04",
@@ -90,7 +90,7 @@ const operational = [
   },
   {
     t: "Health & telemetry",
-    d: "Status and Health expose per-field health right now, and Doctor runs the same check in CI before a deploy. Structured slog, metrics and tracing cover what happened over time, with OpenTelemetry and Prometheus bridges that ship separately so neither reaches a core consumer.",
+    d: "See every field's health right now, or run the same check in CI before you deploy. Logs, metrics and traces cover what happened over time. The OpenTelemetry and Prometheus bridges are separate modules, so neither lands in your build unless you ask.",
     href: `${base}docs/observability`,
     cta: "Health & telemetry",
   },
@@ -312,16 +312,15 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
         <span class="eyebrow">security</span>
         <h2>Secret-safe by construction.</h2>
         <p>
-          Config code is where every secret passes through, and it is also the code most
-          likely to end up in a log line, an error message, or a bug report. These are
-          defaults, not switches you have to remember.
+          Every secret passes through your config code. That code also ends up in logs,
+          errors, and bug reports. So these are on by default.
         </p>
       </div>
       <div class="sec">
-        <article class="card"><h3>Secrets stay out of your logs</h3><p>A secret is its own type, and it prints as <code>[REDACTED]</code> everywhere Go would otherwise show it: log lines, <code>fmt</code>, JSON, an error, a panic. Reading the real value takes a deliberate call, which is one word to grep for when you want every place that handles one.</p></article>
-        <article class="card"><h3>A leak fails the build</h3><p>mamori ships a <code>go vet</code> analyzer. Point it at your code and a secret assigned to an ordinary string fails in CI, before a human is asked to notice it in a diff.</p></article>
-        <article class="card"><h3>One secret cannot unlock another</h3><p>Running commands is off unless you switch it on. A value mamori has resolved can never be spliced into the next lookup, and neither can the ambient environment, so a leaked secret cannot redirect where the following one is read from.</p></article>
-        <article class="card"><h3>Honest about what it cannot do</h3><p>Wiping a secret from memory is best effort, and the docs say so rather than promising something Go's runtime cannot deliver. The guarantees that are real are the ones under test: no secret value is ever written to a log.</p></article>
+        <article class="card"><h3>Secrets stay out of your logs</h3><p>Secrets have their own type. Print one and you get <code>[REDACTED]</code>. That holds in logs, in JSON, in errors, in a panic. Getting the real value takes an explicit call, so it is one word to grep for.</p></article>
+        <article class="card"><h3>A leak fails the build</h3><p>mamori ships a <code>go vet</code> analyzer. Put a secret in a plain string and CI fails. Nobody has to catch it in review.</p></article>
+        <article class="card"><h3>One secret cannot unlock another</h3><p>Running commands is off by default. A secret mamori resolved can never build the next lookup. Neither can your environment. So a leaked secret cannot point mamori somewhere new.</p></article>
+        <article class="card"><h3>Honest about what it cannot do</h3><p>Wiping a secret from memory is best effort. Go's runtime cannot promise more, and we do not pretend otherwise. What we do promise is tested: no secret value ever reaches a log.</p></article>
       </div>
     </div>
   </section>
