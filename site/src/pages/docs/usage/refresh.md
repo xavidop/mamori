@@ -33,6 +33,20 @@ for range sighup {
 
 ## Reading the return value
 
+```mermaid
+flowchart TD
+  R["w.Refresh(ctx)"] --> Q{"Called from inside your own<br/>PreApply hook or OnError callback?"}
+  Q -->|yes| RE["ErrReentrantCall<br/>nothing re-resolved"]
+  Q -->|no| W["Re-resolve every field"]
+  W --> C{"Anything changed?"}
+  C -->|no| NIL["nil - Get() was already current"]
+  C -->|yes| G{"Validation and PreApply"}
+  G -->|accepted| OK["nil - snapshot applied"]
+  G -->|rejected| REJ["The rejection reason<br/>Get() keeps the previous config"]
+  W --> X{"You cancelled ctx<br/>while waiting?"}
+  X -->|yes| CE["ctx.Err() - you stopped waiting<br/>the reload proceeds anyway"]
+```
+
 `nil` means `Get()` is current, either because a snapshot was applied or
 because nothing had changed.
 
@@ -58,6 +72,20 @@ previous config" for a reload that actually landed.
 Cancelling `ctx` makes `Refresh` return and stop waiting, but the command is
 already with the reconciler and still applies or is rejected as usual. There is
 no way to recall it, and no half-applied snapshot either way.
+
+```mermaid
+sequenceDiagram
+  participant You as your goroutine
+  participant Rec as reconciler
+  You->>Rec: Refresh(ctx)
+  activate Rec
+  Note over Rec: re-resolving every field
+  You-->>You: ctx cancelled
+  You-->>You: Refresh returns ctx.Err()
+  Note over Rec: still applies or rejects
+  deactivate Rec
+  Note over You,Rec: w.Status() tells you which happened
+```
 
 ## It does not bypass `PreApply`
 

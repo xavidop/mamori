@@ -841,10 +841,15 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
     });
     try {
       await mermaid.run({ querySelector: "pre.mermaid" });
-      setupDiagramZoom();
     } catch (err) {
       console.error("mermaid render failed", err);
     }
+    // Outside the catch on purpose. mermaid.run rejects on the first diagram
+    // that fails, so wiring zoom inside the try meant one bad diagram cost
+    // every other diagram on the page its zoom, silently. setupDiagramZoom
+    // already selects only diagrams that actually rendered, so running it
+    // regardless gives the survivors their zoom back.
+    setupDiagramZoom();
   }
 
   // Click-to-maximize for rendered diagrams: a full-screen viewer with wheel /

@@ -66,6 +66,23 @@ Retained snapshots hold a full copy of `T`, including any `secret.String` / `sec
 
 During a rollout you often want the config to hold still while you investigate, without stopping the watcher: sources keep being watched and reconciled, but whatever `Get()` returns should not shift under you mid-investigation.
 
+A pin freezes only what `Get()` serves. Everything upstream of that keeps moving, which is the whole point:
+
+```mermaid
+flowchart LR
+  subgraph Running["While pinned"]
+    direction TB
+    U["Sources keep being watched"] --> V["Candidates keep being validated"]
+    V --> L["Live keeps advancing<br/>history keeps filling"]
+    V -.->|"a failure still reaches OnError"| E["OnError"]
+    L -. "blocked by the pin" .-> G["Get() stays at Snapshot"]
+  end
+  Running --> Un["Unpin()"]
+  Un --> Now["Get() jumps to the newest<br/>validated snapshot"]
+```
+
+`Status()` reports both numbers, so `Snapshot` is what `Get()` serves and `Live` is what it would serve if you unpinned right now. They are equal, and `Pinned` is false, whenever no pin is held.
+
 ```go
 func (w *Watcher[T]) Pin(version uint64) error // ErrNoSuchSnapshot if version is not retained
 func (w *Watcher[T]) PinCurrent() uint64       // pins whatever Get() serves right now; always succeeds
