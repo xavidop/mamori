@@ -72,6 +72,7 @@ Batch-capable providers (for example AWS Secrets Manager) are resolved in a sing
 - [Source chains](/docs/concepts/source-chains/) - comma-separated precedence and the `onfail` policy.
 - [Snapshots and pinning](/docs/usage/snapshots/) - `Status`, `WithHistory`, and `Pin` / `Unpin`.
 - [Rotation safety](/docs/usage/rotation/) - `PreApply`, a gate that proves a rotated credential works before it becomes current.
+- [Watching one ref](/docs/usage/watch-ref/) - `WatchRef`, for when you want to watch a single value instead of a whole config struct.
 
 ## See also
 
