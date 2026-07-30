@@ -21,8 +21,8 @@ const features = [
   },
   {
     k: "03",
-    t: "Atomic & validated",
-    d: "An update that fails validation is rejected. Get() keeps returning the last good config. Your process never observes a half-applied or invalid state.",
+    t: "Atomic & gated",
+    d: "An update that fails validation is rejected, and PreApply lets you prove a rotated credential actually works before it becomes live. Get() keeps returning the last good config; your process never observes a half-applied or unverified one.",
   },
   {
     k: "04",
@@ -48,8 +48,8 @@ const categories = [
   },
   {
     name: "Feature flags",
-    count: 8,
-    items: "LaunchDarkly · Unleash · Flagsmith · ConfigCat · Split · GrowthBook · Flipt · GO Feature Flag",
+    count: 9,
+    items: "LaunchDarkly · Unleash · Flagsmith · ConfigCat · Split · GrowthBook · Flipt · GO Feature Flag · OpenFeature",
     href: `${base}docs/providers/launchdarkly`,
   },
   {
@@ -59,10 +59,16 @@ const categories = [
     href: `${base}docs/providers/postgres`,
   },
   {
-    name: "KV & Kubernetes",
-    count: 4,
-    items: "Consul · etcd · Kubernetes Secret · ConfigMap",
+    name: "KV, app config & Kubernetes",
+    count: 6,
+    items: "Consul · etcd · AWS AppConfig · Azure AppConfig · Kubernetes Secret · ConfigMap",
     href: `${base}docs/providers/kubernetes`,
+  },
+  {
+    name: "Config libraries",
+    count: 1,
+    items: "Viper",
+    href: `${base}docs/providers/viper`,
   },
   {
     name: "Object storage & Firebase",
@@ -93,6 +99,12 @@ const operational = [
     d: "Status and Health expose per-field health live, Doctor runs the same check in CI before a deploy, and an opt-in admin endpoint serves the report as metadata, never a value.",
     href: `${base}docs/observability`,
     cta: "Observability",
+  },
+  {
+    t: "Telemetry",
+    d: "Structured slog for what happened to a field, metrics for how often it happens across all of them, and tracing per resolve. OpenTelemetry and Prometheus bridges ship separately, so neither reaches a core consumer.",
+    href: `${base}docs/telemetry`,
+    cta: "Telemetry",
   },
   {
     t: "Built for agents",
@@ -315,7 +327,7 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
       <div class="sec">
         <article class="card"><h3>Redacted everywhere</h3><p><code>secret.String</code> and <code>secret.Bytes</code> render as <code>[REDACTED]</code> in <code>String()</code>, <code>fmt</code>, JSON, and <code>slog</code>. Only <code>Reveal()</code> exposes the value - and it's greppable in review.</p></article>
         <article class="card"><h3>A vet analyzer</h3><p><code>mamori vet</code> flags any secret-bearing ref assigned to a plain <code>string</code> or <code>[]byte</code>, so a leak can't slip past code review.</p></article>
-        <article class="card"><h3>No injection chains</h3><p>The <code>exec:</code> provider is off by default. Refs are never interpolated from other resolved values - one secret can't build another's command.</p></article>
+        <article class="card"><h3>No injection chains</h3><p>The <code>exec:</code> provider is off by default. A ref can carry <code>${"{VAR}"}</code>, but only from the map you pass to <code>WithRefVars</code> - never from the ambient environment, and never from another resolved value. One secret can't build another's command.</p></article>
         <article class="card"><h3>Honest about limits</h3><p><code>Zero()</code> is best-effort and documented as such - no false promises about Go's GC. No payloads are ever logged; the conformance kit asserts it.</p></article>
       </div>
     </div>
