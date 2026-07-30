@@ -313,10 +313,10 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
         <h2>Secret-safe by construction.</h2>
       </div>
       <div class="sec">
-        <article class="card"><h3>Redacted everywhere</h3><p><code>secret.String</code> and <code>secret.Bytes</code> render as <code>[REDACTED]</code> in <code>String()</code>, <code>fmt</code>, JSON, and <code>slog</code>. Only <code>Reveal()</code> exposes the value - and it's greppable in review.</p></article>
-        <article class="card"><h3>A vet analyzer</h3><p><code>mamori vet</code> flags any secret-bearing ref assigned to a plain <code>string</code> or <code>[]byte</code>, so a leak can't slip past code review.</p></article>
-        <article class="card"><h3>No injection chains</h3><p>The <code>exec:</code> provider is off by default. A ref can carry <code>${"{VAR}"}</code>, but only from the map you pass to <code>WithRefVars</code> - never from the ambient environment, and never from another resolved value. One secret can't build another's command.</p></article>
-        <article class="card"><h3>Honest about limits</h3><p><code>Zero()</code> is best-effort and documented as such - no false promises about Go's GC. No payloads are ever logged; the conformance kit asserts it.</p></article>
+        <article class="card"><h3>Secrets stay out of your logs</h3><p>A secret prints as <code>[REDACTED]</code> anywhere it could leak - logs, error messages, JSON, a stack trace. Getting the real value takes an explicit call, so every place that touches one is easy to find in review.</p></article>
+        <article class="card"><h3>A leak fails the build</h3><p>Put a secret somewhere it does not belong and a shipped analyzer fails your build, rather than trusting a reviewer to spot it.</p></article>
+        <article class="card"><h3>One secret cannot unlock another</h3><p>Running commands is off unless you switch it on. Nothing a secret resolves to, and nothing sitting in the environment, can change where the next secret is read from.</p></article>
+        <article class="card"><h3>Honest about what it cannot do</h3><p>Wiping a secret from memory is best effort, and the docs say so rather than promising something Go's runtime cannot deliver. What is guaranteed is tested: no secret value is ever written to a log.</p></article>
       </div>
     </div>
   </section>
