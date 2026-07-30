@@ -796,14 +796,54 @@ const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
       if (slug) linkBySlug.get(slug)?.classList.add("page-toc__link--active");
     };
 
+    // A click on a TOC link wins over the scroll-spy until the reader scrolls
+    // again. Without this, clicking an entry whose section sits in the last
+    // screenful highlights a different one the moment the smooth scroll
+    // settles, because that heading can never reach the activation line (see
+    // the bottom-of-page case in update below).
+    let pinned: string | null = null;
+
     const update = () => {
+      if (pinned) {
+        setActive(pinned);
+        return;
+      }
+
       let current = headingEls[0];
       for (const h of headingEls) {
         if (h.getBoundingClientRect().top - 100 <= 0) current = h;
         else break;
       }
+
+      // Once the page is scrolled to the bottom, every remaining heading is
+      // stuck below the activation line forever: there is no scroll left to
+      // bring it up. The reader is looking at the last section, so say so
+      // rather than leaving the previous one highlighted.
+      const doc = document.documentElement;
+      const atBottom =
+        Math.ceil(window.scrollY + window.innerHeight) >= doc.scrollHeight - 1;
+      if (atBottom) {
+        const last = headingEls[headingEls.length - 1];
+        if (last) current = last;
+      }
+
       setActive(current ? current.id : null);
     };
+
+    // Pin on click, release on the reader's next deliberate scroll. A plain
+    // scroll listener cannot release it, because the click's own smooth scroll
+    // fires scroll events too.
+    for (const a of tocLinks) {
+      a.addEventListener("click", () => {
+        const slug = a.getAttribute("data-toc-link");
+        if (!slug) return;
+        pinned = slug;
+        setActive(slug);
+      });
+    }
+    for (const ev of ["wheel", "touchmove", "keydown"]) {
+      window.addEventListener(ev, () => { pinned = null; }, { passive: true });
+    }
 
     let ticking = false;
     window.addEventListener(
