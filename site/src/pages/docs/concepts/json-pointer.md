@@ -109,5 +109,5 @@ type Config struct {
 ## See also
 
 - [Ref grammar](/docs/concepts/ref-grammar/) - where the fragment sits in a tag.
-- [Value decoding](/docs/usage/decoding/) - runs after selection, so `#key` cannot look inside what decoding produces.
+- [Value decoding](/docs/concepts/decoding/) - runs after selection, so `#key` cannot look inside what decoding produces.
 - [Error kinds](/docs/concepts/error-kinds/) - how these sentinels surface.

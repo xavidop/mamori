@@ -69,7 +69,7 @@ Every other scheme (`env:`, `aws-sm:`, `vault:`, `file:`, `gcp-sm:`, and so on) 
 
 ## `?decode=` is rejected on a binding
 
-A binding ref may not carry [`?decode=`](/docs/usage/decoding/). `New` fails at construction:
+A binding ref may not carry [`?decode=`](/docs/concepts/decoding/). `New` fails at construction:
 
 ```yaml
 # rejected: "?decode= is applied by the consuming client, not by this server"

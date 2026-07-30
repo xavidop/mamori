@@ -70,13 +70,13 @@ type Config struct {
 
 | Option | Does |
 | --- | --- |
-| `?decode=` | [Decodes the value](/docs/usage/decoding/) before it reaches your field |
+| `?decode=` | [Decodes the value](/docs/concepts/decoding/) before it reaches your field |
 | `?debounce=` | Overrides the coalescing window for this field |
 | `?optional=` | Lets this ref be absent without failing the load |
 
 ## Next
 
 - [JSON Pointer selection](/docs/concepts/json-pointer/) - escapes, array indices, and which failures your `default:` absorbs.
-- [Value decoding](/docs/usage/decoding/) - `?decode=base64`, `gzip`, and stacking them.
-- [Ref interpolation](/docs/usage/ref-interpolation/) - `${VAR}` in the tag itself.
+- [Value decoding](/docs/concepts/decoding/) - `?decode=base64`, `gzip`, and stacking them.
+- [Ref interpolation](/docs/concepts/ref-interpolation/) - `${VAR}` in the tag itself.
 - [Source chains](/docs/concepts/source-chains/) - several refs on one field, with precedence.

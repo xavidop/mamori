@@ -18,7 +18,7 @@ Every other path, and every other method, is `404`.
 
 **This is a metadata endpoint. It never serves a configuration value, under any option, on any route.** The JSON body is always `w.Status()`, whose `Ref` fields are already redacted and which never carries a resolved value. `Watcher.Pin` / `Watcher.PinCurrent` / `Watcher.Unpin` are not reachable through either route: `GET /` reports `Pinned` (and the `Snapshot`/`Live` divergence it causes) read-only, but nothing here changes it. For the surface that serves resolved config *values* to many callers, see the [config server](/docs/server/).
 
-**`WithRefVars` values must not be secrets.** After [`${VAR}` interpolation](/docs/usage/ref-interpolation/) expands a ref, that ref's `Raw` holds the expanded string - and this endpoint's `Report` is exactly where it becomes visible, alongside `Status()` and `mamori doctor` output. Variables are for environment names, regions, service names, and tenant identifiers, not for anything that itself needs to stay confidential.
+**`WithRefVars` values must not be secrets.** After [`${VAR}` interpolation](/docs/concepts/ref-interpolation/) expands a ref, that ref's `Raw` holds the expanded string - and this endpoint's `Report` is exactly where it becomes visible, alongside `Status()` and `mamori doctor` output. Variables are for environment names, regions, service names, and tenant identifiers, not for anything that itself needs to stay confidential.
 
 ## Mount Handler on your own mux
 
