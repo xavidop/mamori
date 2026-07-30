@@ -72,7 +72,7 @@ type StructDiff struct {
 }
 
 // PrivilegeDelta is the set of backend paths gained and lost, bucketed by
-// scheme. Populated by Task 3.
+// scheme, as computed by computePrivilegeDelta.
 type PrivilegeDelta struct {
 	Added   map[string][]string `json:"added,omitempty"`
 	Removed map[string][]string `json:"removed,omitempty"`
@@ -222,9 +222,9 @@ func indexFields(in []Field) map[string]Field {
 
 // diffAttrs compares two matched fields attribute by attribute, in a fixed
 // declared order so output never churns. Source is deliberately NOT compared
-// here: it is the raw tag whose meaningful content is the chain, which Task 2
-// compares at ref granularity instead. Comparing both would report every
-// chain edit twice.
+// here: it is the raw tag whose meaningful content is the chain, which
+// diffChain compares at ref granularity instead. Comparing both would report
+// every chain edit twice.
 func diffAttrs(base, head Field) []AttrChange {
 	var out []AttrChange
 	add := func(name, b, h string) {

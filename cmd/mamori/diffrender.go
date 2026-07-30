@@ -16,14 +16,6 @@ import (
 	"text/tabwriter"
 )
 
-// Policy format names accepted by --policy-format. The empty string means the
-// scheme-neutral default.
-const (
-	policyFormatAWSIAM         = "aws-iam"
-	policyFormatGCP            = "gcp"
-	policyFormatExternalSecret = "external-secret"
-)
-
 // renderDiffText writes the default human-readable report: one section per
 // changed struct, then the privilege delta.
 func renderDiffText(w io.Writer, d Diff, policyFormat string) {
@@ -36,30 +28,32 @@ func renderDiffText(w io.Writer, d Diff, policyFormat string) {
 		if i > 0 {
 			_, _ = fmt.Fprintln(w)
 		}
+		pkg, typeName := sanitizeControl(sd.Package), sanitizeControl(sd.TypeName)
 		switch sd.Kind {
 		case ChangeAdded:
-			_, _ = fmt.Fprintf(w, "+ %s.%s (new config struct)\n", sd.Package, sd.TypeName)
+			_, _ = fmt.Fprintf(w, "+ %s.%s (new config struct)\n", pkg, typeName)
 			continue
 		case ChangeRemoved:
-			_, _ = fmt.Fprintf(w, "- %s.%s (config struct removed)\n", sd.Package, sd.TypeName)
+			_, _ = fmt.Fprintf(w, "- %s.%s (config struct removed)\n", pkg, typeName)
 			continue
 		}
 
-		_, _ = fmt.Fprintf(w, "%s.%s\n", sd.Package, sd.TypeName)
+		_, _ = fmt.Fprintf(w, "%s.%s\n", pkg, typeName)
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		for _, fd := range sd.Fields {
+			path := sanitizeControl(fd.Path)
 			switch fd.Kind {
 			case ChangeAdded:
-				_, _ = fmt.Fprintf(tw, "  + %s\t%s\t%s\n", fd.Path, fieldType(fd.Field), fieldChain(fd.Field))
+				_, _ = fmt.Fprintf(tw, "  + %s\t%s\t%s\n", path, sanitizeControl(fieldType(fd.Field)), sanitizeControl(fieldChain(fd.Field)))
 			case ChangeRemoved:
-				_, _ = fmt.Fprintf(tw, "  - %s\t%s\t%s\n", fd.Path, fieldType(fd.Field), fieldChain(fd.Field))
+				_, _ = fmt.Fprintf(tw, "  - %s\t%s\t%s\n", path, sanitizeControl(fieldType(fd.Field)), sanitizeControl(fieldChain(fd.Field)))
 			default:
-				_, _ = fmt.Fprintf(tw, "  ~ %s\t\t\n", fd.Path)
+				_, _ = fmt.Fprintf(tw, "  ~ %s\t\t\n", path)
 				for _, a := range fd.Attrs {
-					_, _ = fmt.Fprintf(tw, "      %s\t%s -> %s\t\n", a.Name, blank(a.Base), blank(a.Head))
+					_, _ = fmt.Fprintf(tw, "      %s\t%s -> %s\t\n", sanitizeControl(a.Name), sanitizeControl(blank(a.Base)), sanitizeControl(blank(a.Head)))
 				}
 				for _, r := range fd.Refs {
-					_, _ = fmt.Fprintf(tw, "      %s\t%s\t\n", chainMarker(r), r.Ref)
+					_, _ = fmt.Fprintf(tw, "      %s\t%s\t\n", chainMarker(r), sanitizeControl(r.Ref))
 				}
 			}
 			if fd.BecameSensitive {
@@ -144,9 +138,16 @@ func privilegeSide(byScheme map[string][]string, marker, policyFormat string) []
 
 	var out []string
 	for _, scheme := range schemes {
+		// scheme and path both originate in an untrusted explain --json
+		// operand (see sanitizeControl), so they are sanitized before being
+		// composed into a line. The sanitized path is also what feeds
+		// concreteGrant, so the ARN/resource-name text it appends cannot
+		// carry a forged line either.
+		safeScheme := sanitizeControl(scheme)
 		for _, path := range byScheme[scheme] {
-			line := fmt.Sprintf("%s %s  %s", marker, scheme, path)
-			if grant := concreteGrant(scheme, path, policyFormat); grant != "" {
+			safePath := sanitizeControl(path)
+			line := fmt.Sprintf("%s %s  %s", marker, safeScheme, safePath)
+			if grant := concreteGrant(scheme, safePath, policyFormat); grant != "" {
 				line += "  " + grant
 			}
 			out = append(out, line)
@@ -159,18 +160,18 @@ func privilegeSide(byScheme map[string][]string, marker, policyFormat string) []
 // the chosen format has no vocabulary for that scheme.
 func concreteGrant(scheme, path, policyFormat string) string {
 	switch policyFormat {
-	case policyFormatAWSIAM:
+	case formatAWSIAM:
 		switch scheme {
 		case awsSMScheme:
 			return "secretsmanager:GetSecretValue on " + awsSecretARN(path)
 		case awsPSScheme:
 			return "ssm:GetParameter on " + awsParameterARN(path)
 		}
-	case policyFormatGCP:
+	case formatGCP:
 		if scheme == gcpSMScheme {
 			return gcpSecretAccessorRole + " on " + gcpResourceName(path)
 		}
-	case policyFormatExternalSecret:
+	case formatExternalSecret:
 		switch scheme {
 		case awsSMScheme, awsPSScheme, gcpSMScheme:
 			return "ExternalSecret remoteRef.key " + path
@@ -203,16 +204,17 @@ func renderDiffMarkdown(w io.Writer, d Diff, policyFormat string) {
 	}
 
 	for _, sd := range d.Structs {
+		pkg, typeName := mdEscape(sd.Package), mdEscape(sd.TypeName)
 		switch sd.Kind {
 		case ChangeAdded:
-			_, _ = fmt.Fprintf(w, "### `%s.%s`\n\nNew config struct.\n\n", sd.Package, sd.TypeName)
+			_, _ = fmt.Fprintf(w, "### `%s.%s`\n\nNew config struct.\n\n", pkg, typeName)
 			continue
 		case ChangeRemoved:
-			_, _ = fmt.Fprintf(w, "### `%s.%s`\n\nConfig struct removed.\n\n", sd.Package, sd.TypeName)
+			_, _ = fmt.Fprintf(w, "### `%s.%s`\n\nConfig struct removed.\n\n", pkg, typeName)
 			continue
 		}
 
-		_, _ = fmt.Fprintf(w, "### `%s.%s`\n\n", sd.Package, sd.TypeName)
+		_, _ = fmt.Fprintf(w, "### `%s.%s`\n\n", pkg, typeName)
 		_, _ = fmt.Fprintln(w, "| | Field | Change |")
 		_, _ = fmt.Fprintln(w, "| --- | --- | --- |")
 		for _, fd := range sd.Fields {
@@ -283,9 +285,29 @@ func mdFence(lines []string) string {
 }
 
 // mdEscape escapes the characters that would break a markdown table cell. A
-// pipe inside a validate: tag (e.g. oneof=a|b) is the realistic case.
+// pipe inside a validate: tag (e.g. oneof=a|b) is the realistic case; a
+// backtick or a control character (a stray "\r", say) is the adversarial
+// one, so sanitizeControl runs first to remove any structural threat before
+// the markdown-specific escaping below.
 func mdEscape(s string) string {
+	s = sanitizeControl(s)
 	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, "|", `\|`)
-	return strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "`", "\\`")
+	return strings.ReplaceAll(s, "|", `\|`)
+}
+
+// sanitizeControl folds every C0 control character (plus DEL) to a space so
+// untrusted content cannot forge structure in any output format. A Diff is
+// decoded from an arbitrary JSON file rather than from compiler-constrained
+// Go source, so a scheme, path, ref, or tag value reaching a renderer is not
+// trusted: a carriage return would end a markdown table row, and a newline
+// would forge an extra line in the privilege delta. Folding to a space keeps
+// the value visible and its length honest rather than dropping it silently.
+func sanitizeControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == 0x7f || (r >= 0 && r < 0x20) {
+			return ' '
+		}
+		return r
+	}, s)
 }

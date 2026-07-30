@@ -300,6 +300,134 @@ func TestRenderDiffMarkdownFenceSurvivesBacktickContent(t *testing.T) {
 	}
 }
 
+func TestRenderDiffMarkdownEscapesCarriageReturn(t *testing.T) {
+	// A lone \r is a CommonMark line ending: left unescaped, it would end the
+	// table row and let the rest of the cell's content render as fresh
+	// markdown outside the table, e.g. injecting a fake bold "reviewed"
+	// claim into a PR summary.
+	d := Diff{Structs: []StructDiff{{
+		Package: "acme/svc", TypeName: "Config", Kind: ChangeModified,
+		Fields: []FieldDiff{{Path: "Port", Kind: ChangeModified,
+			Attrs: []AttrChange{{Name: "Source", Base: "",
+				Head: "env:PORT\r\r**Reviewed: no new permissions.**"}}}},
+	}}}
+
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, d, "")
+	got := sb.String()
+
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	found := false
+	for _, l := range lines {
+		if strings.Contains(l, "env:PORT") {
+			found = true
+			if !strings.Contains(l, "Reviewed: no new permissions.") {
+				t.Errorf("want the injected text to stay on the same table row, got line %q", l)
+			}
+			if !strings.HasPrefix(l, "| ~ |") {
+				t.Errorf("want the row to still start as a table row, got %q", l)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("want the Head value rendered somewhere, got %q", got)
+	}
+	if strings.Contains(got, "\r") {
+		t.Errorf("want the carriage return stripped, got %q", got)
+	}
+}
+
+func TestRenderDiffMarkdownEscapesBacktick(t *testing.T) {
+	d := Diff{Structs: []StructDiff{{
+		Package: "acme/svc", TypeName: "Config", Kind: ChangeModified,
+		Fields: []FieldDiff{{Path: "V", Kind: ChangeModified,
+			Attrs: []AttrChange{{Name: "Validate", Base: "", Head: "oneof=a`b"}}}},
+	}}}
+
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, d, "")
+	got := sb.String()
+
+	if strings.Contains(got, "oneof=a`b") {
+		t.Errorf("a raw backtick would break the inline code span, got %q", got)
+	}
+	if !strings.Contains(got, "oneof=a\\`b") {
+		t.Errorf("want the backtick escaped, got %q", got)
+	}
+}
+
+func TestPrivilegeLinesSanitizesNewlineInPath(t *testing.T) {
+	// A newline in a ref path must not forge an extra privilege line: an
+	// attacker could otherwise fabricate a bogus "- aws-sm  prod/x" removal
+	// line, or pad with newlines to push the real "+" line out of a CI
+	// step summary's visible area.
+	d := PrivilegeDelta{Added: map[string][]string{
+		"aws-sm": {"prod/x\n- aws-sm  prod/x"},
+	}}
+
+	lines := privilegeLines(d, "")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly one privilege line, got %d: %q", len(lines), lines)
+	}
+	if strings.Contains(lines[0], "\n") {
+		t.Errorf("want the newline sanitized out of the line, got %q", lines[0])
+	}
+}
+
+func TestRenderDiffTextSanitizesNewlineInPrivilegePath(t *testing.T) {
+	d := Diff{Privilege: PrivilegeDelta{Removed: map[string][]string{
+		"aws-sm": {"prod/x\n- aws-sm  prod/x"},
+	}}}
+
+	var sb strings.Builder
+	renderDiffText(&sb, d, "")
+	got := sb.String()
+
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	count := 0
+	for _, l := range lines {
+		if strings.Contains(l, "aws-sm") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly one privilege line mentioning aws-sm, got %d in %q", count, got)
+	}
+}
+
+func TestRenderDiffMarkdownSanitizesNewlineInPrivilegePath(t *testing.T) {
+	d := Diff{Privilege: PrivilegeDelta{Removed: map[string][]string{
+		"aws-sm": {"prod/x\n- aws-sm  prod/x"},
+	}}}
+
+	var sb strings.Builder
+	renderDiffMarkdown(&sb, d, "")
+	got := sb.String()
+
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	count := 0
+	for _, l := range lines {
+		if strings.Contains(l, "aws-sm") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly one privilege line mentioning aws-sm, got %d in %q", count, got)
+	}
+}
+
+func TestSanitizeControlFoldsC0AndDEL(t *testing.T) {
+	in := "a\rb\nc\td\x7fe"
+	got := sanitizeControl(in)
+	want := "a b c d e"
+	if got != want {
+		t.Errorf("sanitizeControl(%q) = %q, want %q", in, got, want)
+	}
+	if strings.ContainsAny(got, "\r\n\t\x7f") {
+		t.Errorf("want no control characters left, got %q", got)
+	}
+}
+
 func TestMdFenceLength(t *testing.T) {
 	cases := []struct {
 		name  string

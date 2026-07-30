@@ -79,6 +79,13 @@ changes:
   opaque string edit, because it means the service acquired a new backend
   dependency. Reordering is reported too, since chain order is precedence.
 
+`Sensitive` is frozen at `explain` time from whatever `--secret-schemes` was
+passed then, not recomputed by `diff`. If `base.json` and `head.json` were
+produced with different `--secret-schemes` settings, every field using the
+scheme that only one side knew about reports a spurious `Sensitive: true` to
+`false` (or the reverse). Produce both operands with the same
+`--secret-schemes` value to avoid this.
+
 ## Privilege delta
 
 The privilege section lists the backend paths gained and lost, bucketed by

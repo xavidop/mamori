@@ -221,6 +221,40 @@ func TestDiffCmdRejectsTwoStdinOperands(t *testing.T) {
 	}
 }
 
+func TestDiffCmdPolicyFormatThreadsToARenderer(t *testing.T) {
+	code, stdout, _ := runDiff(t, baseFixture, headFixture, "--policy-format=aws-iam")
+
+	if code != 0 {
+		t.Fatalf("want exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "arn:aws:secretsmanager:*:*:secret:prod/stripe") {
+		t.Errorf("want a real ARN threaded through to the renderer, got %q", stdout)
+	}
+}
+
+func TestDiffCmdPolicyFormatSpaceSeparatedMatchesEquals(t *testing.T) {
+	_, eqOut, eqErr := runDiff(t, baseFixture, headFixture, "--policy-format=aws-iam")
+	_, spaceOut, spaceErr := runDiff(t, baseFixture, headFixture, "--policy-format", "aws-iam")
+
+	if eqOut != spaceOut {
+		t.Errorf("want --policy-format aws-iam to match --policy-format=aws-iam on stdout\n=: %q\nspace: %q", eqOut, spaceOut)
+	}
+	if eqErr != spaceErr {
+		t.Errorf("want --policy-format aws-iam to match --policy-format=aws-iam on stderr\n=: %q\nspace: %q", eqErr, spaceErr)
+	}
+}
+
+func TestDiffCmdMarkdownWithExitCodeAnyRendersAndSignals(t *testing.T) {
+	code, stdout, _ := runDiff(t, baseFixture, headFixture, "--markdown", "--exit-code=any")
+
+	if code != 2 {
+		t.Errorf("want exit 2, got %d", code)
+	}
+	if !strings.Contains(stdout, "### `acme/svc.Config`") {
+		t.Errorf("want markdown still rendered even though the exit code signals findings, got %q", stdout)
+	}
+}
+
 func TestRunDispatchesDiff(t *testing.T) {
 	// `mamori diff` with no operands must reach diffCmd (exit 1), not the
 	// top-level unknown-subcommand path (exit 2).

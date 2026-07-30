@@ -197,9 +197,10 @@ func parseDiffArgs(args []string) (diffOptions, error) {
 	}
 
 	switch o.policyFormat {
-	case "", policyFormatAWSIAM, policyFormatGCP, policyFormatExternalSecret:
+	case "", formatAWSIAM, formatGCP, formatExternalSecret:
 	default:
-		return diffOptions{}, fmt.Errorf("mamori diff: unknown --policy-format %q (want aws-iam, gcp, or external-secret)", o.policyFormat)
+		return diffOptions{}, fmt.Errorf("mamori diff: unknown --policy-format %q (want %s)",
+			o.policyFormat, strings.Join(supportedPolicyFormats, ", "))
 	}
 
 	return o, nil
