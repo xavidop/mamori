@@ -49,6 +49,19 @@ jobs:
       - name: go vet
         working-directory: ${{ matrix.dir }}
         run: go vet ./...
+      # Integration tests carry a //go:build integration tag, so no default
+      # build compiles them and CI never runs them: they need live backend
+      # credentials. That also means nothing type-checks them, and they rot
+      # silently. providers/aws's had been calling an undefined function and
+      # nobody could have noticed, because the file was never built.
+      #
+      # Type-checking them is not the same as running them, but it is the part
+      # that costs nothing: no credentials, no network, one vet pass. It keeps
+      # a refactor from quietly orphaning the only tests that touch a real
+      # backend.
+      - name: go vet (integration build tag)
+        working-directory: ${{ matrix.dir }}
+        run: go vet -tags integration ./...
       # -coverpkg=./... measures how much of the whole module each test binary
       # reaches, not just the package under test, which is the honest number for
       # a library whose tests deliberately drive it from the outside.

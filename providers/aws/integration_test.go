@@ -15,6 +15,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -111,6 +112,4 @@ func mustParseLive(t *testing.T, raw string) mamori.Ref {
 	return ref
 }
 
-func isNotFound(err error) bool {
-	return err != nil && errorsIsNotFound(err)
-}
+func isNotFound(err error) bool { return errors.Is(err, mamori.ErrNotFound) }
