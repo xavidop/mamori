@@ -228,3 +228,79 @@ func TestComputeDiffChainOnlyChangeStillCountsAsModified(t *testing.T) {
 		t.Fatalf("a chain-only change must still produce a struct diff, got %+v", got.Structs)
 	}
 }
+
+func TestComputePrivilegeDeltaAddedAndRemoved(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "A", Source: "aws-sm://prod/legacy#k", Refs: []string{"aws-sm://prod/legacy#k"}})
+	head := si("acme/svc", "Config",
+		Field{Path: "A", Source: "aws-sm://prod/stripe#k", Refs: []string{"aws-sm://prod/stripe#k"}})
+
+	got := computePrivilegeDelta(base, head)
+
+	if want := []string{"prod/stripe"}; !reflect.DeepEqual(got.Added["aws-sm"], want) {
+		t.Errorf("added mismatch\n got: %+v\nwant: %+v", got.Added["aws-sm"], want)
+	}
+	if want := []string{"prod/legacy"}; !reflect.DeepEqual(got.Removed["aws-sm"], want) {
+		t.Errorf("removed mismatch\n got: %+v\nwant: %+v", got.Removed["aws-sm"], want)
+	}
+}
+
+func TestComputePrivilegeDeltaIgnoresUnchangedPaths(t *testing.T) {
+	in := si("acme/svc", "Config",
+		Field{Path: "A", Source: "aws-sm://prod/db#p", Refs: []string{"aws-sm://prod/db#p"}})
+
+	got := computePrivilegeDelta(in, in)
+
+	if len(got.Added) != 0 || len(got.Removed) != 0 {
+		t.Errorf("want empty delta, got %+v", got)
+	}
+}
+
+func TestComputePrivilegeDeltaCoversNonPolicySchemes(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}})
+	head := si("acme/svc", "Config",
+		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}},
+		Field{Path: "B", Source: "vault://kv/data/api#token", Refs: []string{"vault://kv/data/api#token"}})
+
+	got := computePrivilegeDelta(base, head)
+
+	// vault has no IAM vocabulary, but it must still appear in the neutral view.
+	if want := []string{"kv/data/api"}; !reflect.DeepEqual(got.Added["vault"], want) {
+		t.Errorf("want vault path surfaced, got %+v", got.Added)
+	}
+}
+
+func TestPrivilegeGrew(t *testing.T) {
+	grew := Diff{Privilege: PrivilegeDelta{Added: map[string][]string{"aws-sm": {"prod/new"}}}}
+	if !grew.PrivilegeGrew() {
+		t.Error("want PrivilegeGrew true when a path was added")
+	}
+
+	shrank := Diff{Privilege: PrivilegeDelta{Removed: map[string][]string{"aws-sm": {"prod/old"}}}}
+	if shrank.PrivilegeGrew() {
+		t.Error("want PrivilegeGrew false when the surface only shrank")
+	}
+
+	var none Diff
+	if none.PrivilegeGrew() {
+		t.Error("want PrivilegeGrew false for an empty diff")
+	}
+}
+
+func TestComputeDiffIncludesPrivilegeDelta(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}})
+	head := si("acme/svc", "Config",
+		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}},
+		Field{Path: "B", Source: "aws-sm://prod/stripe#k", Refs: []string{"aws-sm://prod/stripe#k"}, Sensitive: true})
+
+	got := computeDiff(base, head)
+
+	if !got.PrivilegeGrew() {
+		t.Errorf("computeDiff must populate Privilege, got %+v", got.Privilege)
+	}
+	if got.Empty() {
+		t.Error("want Empty() false")
+	}
+}

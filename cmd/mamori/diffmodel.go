@@ -142,7 +142,7 @@ func computeDiff(base, head []StructInfo) Diff {
 			})
 		}
 	}
-	return Diff{Structs: out}
+	return Diff{Structs: out, Privilege: computePrivilegeDelta(base, head)}
 }
 
 // indexStructs keys a slice of StructInfo by (Package, TypeName). A duplicate
@@ -308,4 +308,84 @@ func firstIndexOf(chain []string) map[string]int {
 		out[r] = i
 	}
 	return out
+}
+
+// computePrivilegeDelta reports which backend paths the head surface gained
+// and lost relative to base, bucketed by scheme.
+//
+// It reuses collectPolicyRefs (policy.go) unchanged, which is why this costs
+// almost nothing: that function already takes exactly the []StructInfo that
+// `explain --json` emits, already buckets every ref by scheme, and already
+// deduplicates and sorts each bucket. Every scheme it collects is compared
+// here, not only the three that policy.go knows how to render as an IAM or
+// GCP artifact, so a change to a vault:// or k8s-secret:// ref is never
+// silently dropped from the privilege view just because no IAM vocabulary
+// exists for it.
+func computePrivilegeDelta(base, head []StructInfo) PrivilegeDelta {
+	baseRefs := collectPolicyRefs(base)
+	headRefs := collectPolicyRefs(head)
+
+	out := PrivilegeDelta{}
+	for _, scheme := range unionSchemes(baseRefs, headRefs) {
+		if added := missingFrom(headRefs[scheme], baseRefs[scheme]); len(added) > 0 {
+			if out.Added == nil {
+				out.Added = map[string][]string{}
+			}
+			out.Added[scheme] = added
+		}
+		if removed := missingFrom(baseRefs[scheme], headRefs[scheme]); len(removed) > 0 {
+			if out.Removed == nil {
+				out.Removed = map[string][]string{}
+			}
+			out.Removed[scheme] = removed
+		}
+	}
+	return out
+}
+
+// unionSchemes returns every scheme present in either side, sorted.
+func unionSchemes(a, b policyRefs) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(a)+len(b))
+	for s := range a {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for s := range b {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// missingFrom returns every element of want that does not appear in have,
+// preserving want's order (collectPolicyRefs already sorted it).
+func missingFrom(want, have []string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	inHave := make(map[string]bool, len(have))
+	for _, h := range have {
+		inHave[h] = true
+	}
+	var out []string
+	for _, w := range want {
+		if !inHave[w] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// PrivilegeGrew reports whether the head surface reads any backend path the
+// base surface did not. This is the condition worth blocking a merge on:
+// a surface that only SHRANK is not a finding, because losing access is not
+// a risk to gate.
+func (d Diff) PrivilegeGrew() bool {
+	return len(d.Privilege.Added) > 0
 }
