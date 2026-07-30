@@ -52,9 +52,9 @@ func main() {
 
 One call resolves every ref, applies defaults, validates, and returns a fully typed `Config`.
 
-`${ENV}` in `DBPassword` and `DBUser` is [ref interpolation](/docs/concepts/ref-grammar/#ref-interpolation-var): it is expanded from the map passed to `mamori.WithRefVars`, never from the process environment, before the tag is parsed. An undefined variable, such as forgetting to pass `ENV`, is a hard error rather than a ref silently missing a path segment.
+`${ENV}` in `DBPassword` and `DBUser` is [ref interpolation](/docs/usage/ref-interpolation/): it is expanded from the map passed to `mamori.WithRefVars`, never from the process environment, before the tag is parsed. An undefined variable, such as forgetting to pass `ENV`, is a hard error rather than a ref silently missing a path segment.
 
-`TLSKey`'s `?decode=base64` is a ref query option, not a struct tag: it tells core the resolved value is encoded, so it is decoded (left to right, outermost wrapper first for a comma-separated list like `?decode=base64,gzip`) before the field is populated. A field's `default:` value is exempt - it is used as-is, undecoded, since it is a literal you wrote rather than an encoded payload from a backend. See [Ref grammar](/docs/concepts/ref-grammar/#value-decoding-decode) for the full coding table and failure semantics.
+`TLSKey`'s `?decode=base64` is a ref query option, not a struct tag: it tells core the resolved value is encoded, so it is decoded (left to right, outermost wrapper first for a comma-separated list like `?decode=base64,gzip`) before the field is populated. A field's `default:` value is exempt - it is used as-is, undecoded, since it is a literal you wrote rather than an encoded payload from a backend. See [Ref grammar](/docs/usage/decoding/) for the full coding table and failure semantics.
 
 ## Load config once
 

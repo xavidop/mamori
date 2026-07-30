@@ -60,7 +60,7 @@ for _, snap := range w.History() {
 
 Retained snapshots hold a full copy of `T`, including any `secret.String` / `secret.Bytes` field's value at that version, even after the live config has since rotated that field away. Enabling history extends how long old secret material stays reachable in process memory, which is why `WithHistory` defaults to `0` (off). Read [Security](/docs/security/#withhistory-retains-past-secrets-in-memory) before enabling it in a service that handles credentials, and size `n` to the operational need you actually have.
 
-`WithHistory(1)` is also what a service validating *incoming* credentials during a rotation overlap needs, accepting either the current or the just-rotated-out value for the window both are momentarily valid. See [Rotation safety](/docs/usage/rotation/#the-credential-overlap-pattern) for the pattern and its memory cost.
+`WithHistory(1)` is also what a service validating *incoming* credentials during a rotation overlap needs, accepting either the current or the just-rotated-out value for the window both are momentarily valid. See [Rotation safety](/docs/usage/rotation/#accepting-both-credentials-during-a-rotation-window) for the pattern and its memory cost.
 
 ## Pin and unpin during a rollout
 
