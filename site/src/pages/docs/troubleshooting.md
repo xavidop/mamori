@@ -29,6 +29,8 @@ for _, f := range w.Status().Fields {
 
 `w.Refresh(ctx)` forces an immediate re-resolve of every field, bypassing the poll interval, and blocks until the result has been applied or rejected. Reach for it when you need to know right now whether a rotation landed, rather than waiting out the next poll tick.
 
+See [Forcing a refresh](/docs/usage/refresh/) for `Refresh` in full, [Observability](/docs/observability/) for `Status` and `Health`, and the [Options reference](/docs/usage/options/) for `WithPollInterval` and the other tuning knobs above.
+
 ## My OnChange never fires, or fires once for several changes
 
 Causes:
@@ -38,7 +40,7 @@ Causes:
 
 Diagnostics: `WithDebounce(d)` and `WithQueueDepth(n)` tune the two knobs above; see the [Options reference](/docs/usage/options/) for both. `Meter.RecordChangeDropped()` exists precisely so a dropped event is alertable rather than invisible: wire up a `Meter` and watch that counter.
 
-This is the symptom worth taking seriously, because a dropped change is silent by default. mamori ships with a no-op meter and a logger that discards everything until you configure one, so with no `Meter` and no `WithLogger` installed, a dropped `OnChange` event produces neither a metric nor a log line, only a warning-level log entry if you did install a logger. If your handler occasionally does slow I/O, install a `Meter` before you need it, not after you notice a field looks stuck.
+This is the symptom worth taking seriously, because a dropped change is silent by default. mamori ships with a no-op meter and a logger that discards everything until you configure one, so with no `Meter` and no `WithLogger` installed, a dropped `OnChange` event produces neither a metric nor a log line. Install a `WithLogger`, and the same drop is logged at warning level instead. If your handler occasionally does slow I/O, install a `Meter` before you need it, not after you notice a field looks stuck.
 
 ## My update was rejected and Get() still returns the old config
 

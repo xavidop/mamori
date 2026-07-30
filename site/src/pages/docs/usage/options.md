@@ -72,7 +72,7 @@ Groups below are ordered by what you are trying to do, not alphabetically, becau
 
 ## Which options reach WatchRef
 
-`WatchRef` accepts the same `Option` type but reads only a handful of them: `WithClock`, `WithPollInterval`, `WithJitter`, and the `WithBackoff` window. Everything else on this page, including `WithValidator` and `PreApply`, is accepted without error and simply has no effect there, since `WatchRef` has no validation step or gate for it to attach to. See [Watching one ref](/docs/usage/watch-ref/#which-options-apply) for why.
+Only the clock, poll interval, jitter, and backoff window reach `WatchRef`. See [Watching one ref](/docs/usage/watch-ref/#which-options-apply) for which options those are and why the rest, including `WithValidator` and `PreApply`, have no effect there.
 
 ## See also
 

@@ -30,7 +30,7 @@ If any of that list is what you actually need, you want `Watch[T]` instead. See 
 
 ## Which options apply
 
-`WatchRef` takes `opts ...Option`, the same `Option` type `Load` and `Watch` take, so you never need a second, narrower vocabulary of options just for a single ref. But only a handful of them actually reach `WatchRef`: `WithClock`, `WithPollInterval`, `WithJitter`, and the `WithBackoff` window. Those are the fields the polling adapter itself reads. Everything else in the `Option` surface, including `WithValidator` and `PreApply`, is accepted without complaint and simply has no effect here, since there is no validation step or gate for it to attach to. See the [Options reference](/docs/usage/options/) for the full surface and where each option does and does not apply.
+`WatchRef` takes `opts ...Option`, the same `Option` type `Load` and `Watch` take, so you never need a second, narrower vocabulary of options just for a single ref. But only a handful of them actually reach `WatchRef`: `WithClock`, `WithPollInterval`, `WithJitter`, and the `WithBackoff` window. Those are the fields the polling adapter itself reads. Everything else in the `Option` surface, including `WithValidator` and `PreApply`, is accepted without complaint and simply has no effect here, since there is no validation step or gate for it to attach to. See the [Options reference](/docs/usage/options/) for the full option surface.
 
 ## The channel contract
 
