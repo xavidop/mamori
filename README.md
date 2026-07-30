@@ -42,27 +42,24 @@ go get github.com/xavidop/mamori/providers/k8s     # k8s-secret://  k8s-cm://
 
 ```go
 type Config struct {
-    // A secret string from AWS Secrets Manager (redacted in logs by default).
-    // ${ENV} is ref interpolation: expanded from WithRefVars below, never
-    // from the ambient environment.
+    // A secret from AWS Secrets Manager, redacted in logs by default.
+    // ${ENV} expands from WithRefVars below, never from the ambient environment.
     DBPassword secret.String `source:"aws-sm://${ENV}/db#password"`
 
-    // Plain config from the environment, with a default and validation
+    // Plain config, with a default and validation
     LogLevel   string        `source:"env:LOG_LEVEL" default:"info" validate:"oneof=debug info warn error"`
     Workers    int           `source:"env:WORKERS"   default:"4"    validate:"gte=1,lte=256"`
 
-    // A precedence chain: an environment override wins if set, otherwise a
-    // centrally managed Parameter Store value, otherwise the default.
+    // A precedence chain: env wins if set, else Parameter Store, else the default
     Port       string        `source:"env:PORT,aws-ps://svc/port" default:"8080"`
 
-    // A nested field, selected with an RFC 6901 JSON Pointer fragment
+    // A nested value, selected with an RFC 6901 JSON Pointer fragment
     DBUser     string        `source:"aws-sm://prod/db#/credentials/user"`
 
-    // A file-backed value, hot-reloaded via fsnotify
+    // A file, hot-reloaded via fsnotify
     TLSCert    []byte        `source:"file:///etc/tls/tls.crt"`
 
-    // ?decode=base64 declares the stored value is base64; core decodes it
-    // back to raw bytes before TLSKey is populated
+    // ?decode= runs a stdlib decode pipeline before the field is populated
     TLSKey     []byte        `source:"aws-sm://prod/tls#key?decode=base64"`
 
     // A nested struct decoded from one JSON secret
@@ -74,10 +71,8 @@ cfg, err := mamori.Load[Config](ctx)
 
 // Or: watch and reconcile at runtime
 w, err := mamori.Watch[Config](ctx,
-    // Expands DBPassword's ${ENV} above - see "Ref interpolation" below.
     mamori.WithRefVars(map[string]string{"ENV": "prod"}),
-    // Proves a rotated password actually opens a connection *before* it
-    // becomes what Get() serves - see "Rotation-safe" below.
+    // Prove a rotated password actually works before it becomes what Get() serves
     mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
         if !ev.Changed("DBPassword") {
             return nil
@@ -98,21 +93,16 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 
 ## What makes it different
 
-- **Typed & tag-driven** - one struct, multiple sources, generics API (`Load[T]` / `Watch[T]`).
-- **Nested selection** - `#/credentials/password` is an RFC 6901 JSON Pointer, addressing a value at any depth through objects and array elements; any other fragment (`#ca.crt`, `#tls.key`) stays a literal top-level key, exactly as before.
-- **Value decoding** - `?decode=base64,gzip` runs a stdlib-only pipeline (`base64`, `base64url`, `hex`, `gzip`, `trim`) over a resolved value before it reaches your struct field, left to right, outermost wrapper first; a bad payload is a loud `ErrInvalid`, never a silent passthrough.
-- **Ref interpolation** - `${VAR}` in a `source` tag expands from `mamori.WithRefVars` before the tag is parsed, so a variable can supply a scheme, path, fragment, or query value. Variables come only from `WithRefVars`, never the ambient environment - the same opt-in posture as `exec:` - and an undefined or malformed `${VAR}` is a hard error rather than a silently empty path segment.
-- **Precedence chains** - `source:"env:PORT,aws-ps://svc/port"` tries sources in priority order: the first to yield a value wins, not-found falls through to the next, and a real error stops the walk and applies the field's `onfail` policy instead of silently sliding to a lower-priority source. Every position is watched, so precedence is live.
-- **Reconciled at runtime** - native watch where the backend supports it (Kubernetes informers, Consul blocking queries, fsnotify), polling with jitter everywhere else, and lease-aware pre-expiry refresh for Vault.
-- **Atomic & validated** - an update that fails validation is *rejected*; `Get()` keeps returning the last good config. Config never enters a broken state mid-flight.
-- **Rotation-safe** - `PreApply` gates a candidate snapshot right before the atomic swap, so an application can prove a rotated credential actually *works* (a password opens a connection, a token is accepted by its issuer) rather than discovering it is broken in the request path. A rejection keeps serving the last good config and delivers a `*PreApplyError` to `OnError`; the same gate runs on the very first load, so a bad configured credential fails at startup instead of the first rotation.
-- **Forceable** - `w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals, and blocks until the result is applied or rejected (through the same `PreApply` gate, never bypassing it), so a SIGHUP handler or your own admin route learns whether the reload actually worked.
-- **Coalesced** - bursts of field changes within a debounce window produce a single `Change` event.
-- **Pinnable** - `WithHistory(n)` retains recent snapshots (`w.History()`); `w.PinCurrent()` / `w.Pin(version)` freeze `Get()` at one of them while you debug production, then `w.Unpin()` resumes and fires one coalesced `Change` for everything that changed in the meantime.
-- **Secret hygiene by default** - `secret.String` / `secret.Bytes` redact themselves in `String()`, `fmt`, `MarshalJSON`, and `slog`. Only the explicit, greppable `Reveal()` exposes the value. A shipped analyzer (run it as `mamori vet ./...`, or as a `go vet` tool with `go vet -vettool=$(which mamori)`) flags sensitive refs assigned to plain `string` fields.
-- **Pluggable** - providers register with the `database/sql` pattern; a `providertest` conformance kit guarantees they all behave identically.
-- **Observable** - `w.Status()` reports live per-field health, `w.Health()` backs a Kubernetes readiness probe, and `mamori.Doctor[T]` checks every ref is reachable before you ever deploy. `WithLogger(l *slog.Logger)` emits structured records for resolve failures, watch errors, applied changes, and more - silent by default, so linking mamori in never writes to your application's stderr on its own.
-- **Testable** - the [`mamoritest`](mamoritest/) package gives application code a scriptable in-memory provider (`Set`/`Del`/`Fail`) plus deterministic wait helpers (`WaitForSnapshot`, `WaitForError`), so an `OnChange` handler or error path can be tested without a real backend.
+- **Typed & tag-driven** - one struct, many sources, generics API (`Load[T]` / `Watch[T]`).
+- **Atomic & validated** - an update that fails validation is rejected; `Get()` keeps serving the last good config.
+- **[Rotation-safe](https://mamorigo.dev/docs/usage/rotation)** - `PreApply` proves a rotated credential actually works *before* it goes live, at startup and on every rotation.
+- **[Precedence chains](https://mamorigo.dev/docs/concepts/source-chains)** - `source:"env:PORT,aws-ps://svc/port"` tries sources in order, and every position stays watched.
+- **[Rich ref grammar](https://mamorigo.dev/docs/concepts/ref-grammar)** - RFC 6901 JSON Pointer selection, `?decode=` pipelines, and `${VAR}` interpolation from an explicit, non-ambient source.
+- **Reconciled at runtime** - native watch where the backend supports it, polling with jitter everywhere else, lease-aware refresh for Vault.
+- **[Secret hygiene by default](https://mamorigo.dev/docs/concepts/secret-types)** - `secret.String` / `secret.Bytes` redact in `fmt`, JSON, and `slog`; only the greppable `Reveal()` exposes a value, and `mamori vet` flags the ones you missed.
+- **[Observable](https://mamorigo.dev/docs/observability)** - live per-field health, a readiness probe, a pre-deploy `Doctor` check, structured logs, and metrics.
+- **Pluggable** - providers register with the `database/sql` pattern, and a [`providertest`](providertest/) conformance kit keeps them behaving identically.
+- **[Testable](mamoritest/)** - a scriptable in-memory provider plus deterministic wait helpers, so `OnChange` and error paths are testable without a real backend.
 
 ## Providers
 
@@ -154,13 +144,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/viper` | `viper://` ([Viper](https://github.com/spf13/viper) config library) | poll | n/a (no error surface) |
 | `providers/mamori` | `mamori://` ([config server](#config-server) client) | **native** (SSE stream) | ✅ |
 
-Every provider that passes the [`providertest`](providertest/) conformance kit earns a badge. See each module's README for auth and ref grammar.
-
-The error-classification sweep is complete: every one of the 38 providers now falls into exactly one of three honest states, and `not_found` itself is detected by every provider regardless of which one.
-
-- **✅ classifies** - the provider maps real backend errors onto `mamori.ErrorKind` values beyond `not_found` (`permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`, `invalid`, as the backend's own vocabulary supports): thirty-one providers across twenty-eight module rows, since core's single row covers four built-in providers (`env:`, `dotenv://`, `file://`, `exec:`).
-- **no (chain preserved)** - `providers/firebase-rtdb`, `providers/growthbook`, and `providers/flagsmith` have no backend-specific error vocabulary to map, so a non-not-found failure still reports `unknown`. Their `Resolve` wraps the underlying error with `%w` rather than flattening it, so `errors.Is`/`errors.As` and any mamori sentinel injected by a caller's own middleware still reach it - the chain is preserved even though nothing here narrows it to a more specific kind. Do not read this as classifying permission or availability errors these providers cannot see.
-- **n/a (no error surface)** - `providers/unleash`, `providers/configcat`, `providers/split`, and `providers/viper` wrap a client surface with no per-key error at all: the flag SDKs return only `bool`/`string` values, and Viper's own read API has no error return (`Get` returns `any`, `IsSet` returns `bool`). Their `Resolve` can only ever produce `mamori.ErrNotFound` or a client-construction error, so there is nothing to classify or preserve a chain for. Each is explicitly exempted from the `providertest` conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable declaration rather than a silent gap.
+`not_found` is detected by every provider. The last column says whether a provider also maps *other* backend failures onto a `mamori.ErrorKind`; the two non-✅ states are honest declarations, not gaps. See [Providers](https://mamorigo.dev/docs/providers) for what each state means, and each module's README for auth and ref grammar.
 
 ## Middleware
 
@@ -177,21 +161,23 @@ mamori.WithProvider(
 
 ## Observability
 
-`w.Status()` returns a lock-free, point-in-time `Report` of every field's health (ref, staleness, last error kind), safe to log or serialize since values never appear and refs have sensitive query options redacted. `w.Health()` reduces that to a single readiness check: nil when every field is fresh and none carries a terminal error kind (`not_found`, `permission_denied`, `unauthenticated`, `invalid`), a `*HealthError` otherwise - a transient kind like `unavailable` or `rate_limited` only fails health once the field is also stale.
+`w.Status()` reports every field's health, `w.Health()` backs a readiness probe, and `mamori.Doctor[Config]` checks every ref resolves before you deploy. `mamori.Handler` or `WithAdminHTTP` serves that same report as JSON behind a pluggable `Authenticator`. Metadata only: a configuration value never appears in a report, a log line, or the admin endpoint.
 
-For a pre-deploy check, `mamori.Doctor[Config](ctx, opts...)` resolves every field once without starting a watcher and reports every failure at once, not just the first - run it as a build-tagged CI test to catch a rotated-away secret or a typo'd ref before it ships. An optional HTTP endpoint - `mamori.Handler` on your own mux, or a self-hosted server via `mamori.WithAdminHTTP` - serves that same `Report` as JSON, metadata only and never a configuration value, with a pluggable `Authenticator` (`WithAuth`; basic auth, bearer token, API key, mTLS, or your own) gating access and support for live credential rotation. `mamori.WithLogger(l *slog.Logger)` gives the same never-a-value, refs-redacted treatment to a structured log trail of resolve failures, watch errors, and applied changes - silent (a discard logger) until you opt in. See [Observability](https://mamorigo.dev/docs/observability) and [Auth](https://mamorigo.dev/docs/auth) for the full picture, including the readiness-probe pattern, the `Doctor` CI test, and credential rotation.
+`WithLogger` (structured logs), `WithMeter` (metrics, with [`x/otel`](x/otel/) and [`x/prom`](x/prom/) bridges), and `WithTracer` are all silent no-ops until you opt in.
 
-`mamori.WithMeter(m Meter)` installs a metrics sink - the [`x/otel`](x/otel/) module adapts one onto OpenTelemetry, the [`x/prom`](x/prom/) module implements one directly against `prometheus/client_golang` for shops that have not adopted OpenTelemetry, or implement the six-method `Meter` interface yourself. Beyond resolve latency and refresh/watch-error counts, `Meter` reports three failure conditions so they can be alerted on rather than merely logged: `RecordStale(scheme)` when a value has not refreshed within the `WithStale` threshold, `RecordApplyRejected(reason)` when a candidate configuration is refused (`reason` is a `RejectReason`, a closed type with exactly two values, `RejectValidation` and `RejectPreApply`, so it stays safe as a metric label), and `RecordChangeDropped()` - the signal that an `OnChange` handler is too slow: the bounded dispatch queue filled up and the oldest change event was silently discarded. Implementing `Meter` now requires all six methods; the three added here are a source-breaking change for any existing implementation.
+See [Observability](https://mamorigo.dev/docs/observability), [Telemetry](https://mamorigo.dev/docs/telemetry), and [Auth](https://mamorigo.dev/docs/auth).
 
 ## Config server
 
-[`server/`](server/) is a separate module: a standalone process that fronts a fixed, operator-declared table of name-to-ref bindings (`server.Bind`/`server.BindFile` - never a client-supplied ref) and serves resolved values to authenticated, authorized callers over Unix sockets and TLS TCP, under a mandatory `Policy` and `Authenticator`. It reuses the same `Authenticator`/`Identity` as the admin endpoint above, plus a Unix-socket-only `PeerCred` scheme authenticated by kernel-verified uid/gid. It is deliberately the highest-blast-radius component in this project - it concentrates every backend credential its bindings touch into one process - so read [the docs](https://mamorigo.dev/docs/server) before deploying one, not just the quick start.
+[`server/`](server/) is a separate module: a standalone process that serves resolved values from a fixed, operator-declared table of bindings (never a client-supplied ref) over Unix sockets and TLS TCP, under a mandatory `Policy` and `Authenticator`.
+
+It is deliberately the highest-blast-radius component in this project - it concentrates every backend credential its bindings touch into one process - so read [the docs](https://mamorigo.dev/docs/server) before deploying one, not just the quick start.
 
 ## CLI
 
-[`cmd/mamori`](cmd/mamori/) is a standalone CLI with two halves that never mix: `explain`/`schema`/`policy`/`diff` never resolve anything (struct field tables, JSON Schema, least-privilege IAM/GCP/ExternalSecret artifacts, and the config-surface delta between two revisions), while `doctor`/`status` are thin clients of a running process's admin endpoint (`WithAdminHTTP` above), exiting `0`-`4` so a script can tell a broken config apart from one it merely couldn't reach.
+[`cmd/mamori`](cmd/mamori/) has two halves that never mix: `explain`/`schema`/`policy`/`diff` never resolve anything, while `doctor`/`status` are thin clients of a running process's admin endpoint, exiting `0`-`4` so a script can tell a broken config from an unreachable one.
 
-`mamori diff` is built for pull request review: given two `mamori explain --json` outputs it reports which fields and precedence chains changed, flags any field that newly reads secret material, and shows the **privilege delta**, the backend paths the service starts and stops reading, optionally rendered as concrete IAM or GCP grants. `--exit-code=privilege` turns that into a merge gate that fires only when the permission surface grows.
+`mamori diff` compares two `explain --json` outputs and reports the **privilege delta**: which backend paths a change starts and stops reading, optionally as concrete IAM or GCP grants. `--exit-code=privilege` makes it a merge gate that fires only when the permission surface grows.
 
 ```bash
 brew install xavidop/tap/mamori
@@ -214,6 +200,10 @@ See [mamorigo.dev/docs/skill](https://mamorigo.dev/docs/skill) for what it cover
 ## Documentation
 
 - 📖 **Docs site:** https://mamorigo.dev
+- 🚀 **Quick start:** [mamorigo.dev/docs/quickstart](https://mamorigo.dev/docs/quickstart)
+- ⚙️ **Options reference:** [mamorigo.dev/docs/usage/options](https://mamorigo.dev/docs/usage/options)
+- 🩺 **Troubleshooting:** [mamorigo.dev/docs/troubleshooting](https://mamorigo.dev/docs/troubleshooting)
+- 🐍 **Coming from Viper?** [mamorigo.dev/docs/migrating-from-viper](https://mamorigo.dev/docs/migrating-from-viper)
 - 📦 **API reference:** https://pkg.go.dev/github.com/xavidop/mamori
 - 🧩 **Write a provider:** [mamorigo.dev/docs/writing-a-provider](https://mamorigo.dev/docs/writing-a-provider)
 - 🏃 **Runnable example:** [examples/basic](examples/basic)
