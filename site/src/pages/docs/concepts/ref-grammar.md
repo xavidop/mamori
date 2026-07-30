@@ -74,6 +74,34 @@ type Config struct {
 | `?debounce=` | Overrides the coalescing window for this field |
 | `?optional=` | Lets this ref be absent without failing the load |
 
+## Parsing a ref in code
+
+Most of the time you never do this: you write a ref in a `source:` tag and mamori parses it for you. But the parser is exported, so a ref string can be built or read at runtime, which is what [`WatchRef`](/docs/usage/watch-ref/) needs since it takes a `Ref` rather than a tag.
+
+```go
+ref, err := mamori.ParseRef("aws-sm://prod/db#/credentials/password?decode=base64")
+if err != nil {
+	return err // malformed: empty, or no scheme
+}
+
+ref.Scheme        // "aws-sm"
+ref.Path          // "prod/db"
+ref.Key           // "/credentials/password"
+ref.Opt("decode") // "base64"
+ref.String()      // the original tag, for diagnostics
+```
+
+For a [source chain](/docs/concepts/source-chains/), use `ParseRefs`, which splits on commas that are followed by a scheme token and returns one `Ref` per position:
+
+```go
+refs, err := mamori.ParseRefs("env:PORT,aws-ps://svc/port")
+// refs[0].Scheme == "env", refs[1].Scheme == "aws-ps"
+```
+
+A single-ref tag returns a one-element slice, so `ParseRefs` is safe to use even when you do not expect a chain.
+
+Both return an error only for a tag that is empty or has no scheme. A tag that parses but points nowhere is not an error here: it resolves not-found later, which is what lets `default:` and chain fallback do their job.
+
 ## Next
 
 - [JSON Pointer selection](/docs/concepts/json-pointer/) - escapes, array indices, and which failures your `default:` absorbs.
