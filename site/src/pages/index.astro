@@ -311,12 +311,17 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
       <div class="section__head">
         <span class="eyebrow">security</span>
         <h2>Secret-safe by construction.</h2>
+        <p>
+          Config code is where every secret passes through, and it is also the code most
+          likely to end up in a log line, an error message, or a bug report. These are
+          defaults, not switches you have to remember.
+        </p>
       </div>
       <div class="sec">
-        <article class="card"><h3>Secrets stay out of your logs</h3><p>A secret prints as <code>[REDACTED]</code> anywhere it could leak - logs, error messages, JSON, a stack trace. Getting the real value takes an explicit call, so every place that touches one is easy to find in review.</p></article>
-        <article class="card"><h3>A leak fails the build</h3><p>Put a secret somewhere it does not belong and a shipped analyzer fails your build, rather than trusting a reviewer to spot it.</p></article>
-        <article class="card"><h3>One secret cannot unlock another</h3><p>Running commands is off unless you switch it on. Nothing a secret resolves to, and nothing sitting in the environment, can change where the next secret is read from.</p></article>
-        <article class="card"><h3>Honest about what it cannot do</h3><p>Wiping a secret from memory is best effort, and the docs say so rather than promising something Go's runtime cannot deliver. What is guaranteed is tested: no secret value is ever written to a log.</p></article>
+        <article class="card"><h3>Secrets stay out of your logs</h3><p>A secret is its own type, and it prints as <code>[REDACTED]</code> everywhere Go would otherwise show it: log lines, <code>fmt</code>, JSON, an error, a panic. Reading the real value takes a deliberate call, which is one word to grep for when you want every place that handles one.</p></article>
+        <article class="card"><h3>A leak fails the build</h3><p>mamori ships a <code>go vet</code> analyzer. Point it at your code and a secret assigned to an ordinary string fails in CI, before a human is asked to notice it in a diff.</p></article>
+        <article class="card"><h3>One secret cannot unlock another</h3><p>Running commands is off unless you switch it on. A value mamori has resolved can never be spliced into the next lookup, and neither can the ambient environment, so a leaked secret cannot redirect where the following one is read from.</p></article>
+        <article class="card"><h3>Honest about what it cannot do</h3><p>Wiping a secret from memory is best effort, and the docs say so rather than promising something Go's runtime cannot deliver. The guarantees that are real are the ones under test: no secret value is ever written to a log.</p></article>
       </div>
     </div>
   </section>
