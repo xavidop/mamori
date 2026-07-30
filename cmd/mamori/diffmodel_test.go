@@ -99,3 +99,132 @@ func TestDiffAttrsHasDefaultTogglesShowAsPresence(t *testing.T) {
 		t.Errorf("diffAttrs mismatch\n got: %+v\nwant: %+v", got, want)
 	}
 }
+
+func TestDiffChainAddedRemovedMoved(t *testing.T) {
+	cases := []struct {
+		name string
+		base []string
+		head []string
+		want []RefChange
+	}{
+		{
+			name: "position added at the end",
+			base: []string{"env:PORT"},
+			head: []string{"env:PORT", "aws-ps://svc/port"},
+			want: []RefChange{{Kind: ChangeAdded, Ref: "aws-ps://svc/port", BasePos: -1, HeadPos: 1}},
+		},
+		{
+			name: "position removed",
+			base: []string{"env:PORT", "aws-ps://svc/port"},
+			head: []string{"env:PORT"},
+			want: []RefChange{{Kind: ChangeRemoved, Ref: "aws-ps://svc/port", BasePos: 1, HeadPos: -1}},
+		},
+		{
+			name: "same refs reordered is a precedence change",
+			base: []string{"env:PORT", "aws-ps://svc/port"},
+			head: []string{"aws-ps://svc/port", "env:PORT"},
+			want: []RefChange{
+				{Kind: ChangeMoved, Ref: "aws-ps://svc/port", BasePos: 1, HeadPos: 0},
+				{Kind: ChangeMoved, Ref: "env:PORT", BasePos: 0, HeadPos: 1},
+			},
+		},
+		{
+			name: "identical chain reports nothing",
+			base: []string{"env:PORT"},
+			head: []string{"env:PORT"},
+			want: nil,
+		},
+		{
+			name: "added and removed at once",
+			base: []string{"env:PORT", "aws-ps://old"},
+			head: []string{"env:PORT", "aws-ps://new"},
+			want: []RefChange{
+				{Kind: ChangeAdded, Ref: "aws-ps://new", BasePos: -1, HeadPos: 1},
+				{Kind: ChangeRemoved, Ref: "aws-ps://old", BasePos: 1, HeadPos: -1},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := diffChain(tc.base, tc.head)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("diffChain mismatch\n got: %+v\nwant: %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestComputeDiffPopulatesChainChanges(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "Port", GoType: "string", Source: "env:PORT", Refs: []string{"env:PORT"}})
+	head := si("acme/svc", "Config",
+		Field{Path: "Port", GoType: "string", Source: "env:PORT,aws-ps://svc/port",
+			Refs: []string{"env:PORT", "aws-ps://svc/port"}})
+
+	got := computeDiff(base, head)
+
+	if len(got.Structs) != 1 || len(got.Structs[0].Fields) != 1 {
+		t.Fatalf("want one field diff, got %+v", got.Structs)
+	}
+	fd := got.Structs[0].Fields[0]
+	if fd.Kind != ChangeModified {
+		t.Errorf("want modified, got %q", fd.Kind)
+	}
+	want := []RefChange{{Kind: ChangeAdded, Ref: "aws-ps://svc/port", BasePos: -1, HeadPos: 1}}
+	if !reflect.DeepEqual(fd.Refs, want) {
+		t.Errorf("Refs mismatch\n got: %+v\nwant: %+v", fd.Refs, want)
+	}
+	if len(fd.Attrs) != 0 {
+		t.Errorf("want no attr changes for a pure chain edit, got %+v", fd.Attrs)
+	}
+}
+
+func TestComputeDiffFlagsBecameSensitive(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "Key", GoType: "string", Source: "env:KEY", Refs: []string{"env:KEY"}, Sensitive: false})
+	head := si("acme/svc", "Config",
+		Field{Path: "Key", GoType: "secret.String", Source: "aws-sm://prod/stripe#key",
+			Refs: []string{"aws-sm://prod/stripe#key"}, Sensitive: true})
+
+	fd := computeDiff(base, head).Structs[0].Fields[0]
+
+	if !fd.BecameSensitive {
+		t.Error("want BecameSensitive true when Sensitive goes false to true")
+	}
+}
+
+func TestComputeDiffDoesNotFlagSensitiveGoingAway(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "Key", GoType: "secret.String", Source: "aws-sm://prod/k", Refs: []string{"aws-sm://prod/k"}, Sensitive: true})
+	head := si("acme/svc", "Config",
+		Field{Path: "Key", GoType: "string", Source: "env:KEY", Refs: []string{"env:KEY"}, Sensitive: false})
+
+	fd := computeDiff(base, head).Structs[0].Fields[0]
+
+	if fd.BecameSensitive {
+		t.Error("want BecameSensitive false when Sensitive goes true to false")
+	}
+	// It is still reported as an ordinary attribute change.
+	found := false
+	for _, a := range fd.Attrs {
+		if a.Name == "Sensitive" && a.Base == "true" && a.Head == "false" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want a Sensitive true->false attr change, got %+v", fd.Attrs)
+	}
+}
+
+func TestComputeDiffChainOnlyChangeStillCountsAsModified(t *testing.T) {
+	base := si("acme/svc", "Config",
+		Field{Path: "P", Source: "env:A", Refs: []string{"env:A"}})
+	head := si("acme/svc", "Config",
+		Field{Path: "P", Source: "env:B", Refs: []string{"env:B"}})
+
+	got := computeDiff(base, head)
+
+	if len(got.Structs) != 1 {
+		t.Fatalf("a chain-only change must still produce a struct diff, got %+v", got.Structs)
+	}
+}

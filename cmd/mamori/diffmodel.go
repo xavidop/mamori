@@ -193,8 +193,14 @@ func diffFields(base, head []Field) []FieldDiff {
 			snapshot := h
 			out = append(out, FieldDiff{Path: p, Kind: ChangeAdded, Field: &snapshot})
 		default:
-			fd := FieldDiff{Path: p, Kind: ChangeModified, Attrs: diffAttrs(b, h)}
-			if len(fd.Attrs) == 0 {
+			fd := FieldDiff{
+				Path:            p,
+				Kind:            ChangeModified,
+				Attrs:           diffAttrs(b, h),
+				Refs:            diffChain(b.Refs, h.Refs),
+				BecameSensitive: !b.Sensitive && h.Sensitive,
+			}
+			if len(fd.Attrs) == 0 && len(fd.Refs) == 0 {
 				continue
 			}
 			out = append(out, fd)
@@ -243,4 +249,63 @@ func defaultAttr(f Field) string {
 		return attrAbsent
 	}
 	return f.Default
+}
+
+// diffChain compares two precedence chains at ref granularity. A chain is an
+// ordered list, and its order IS precedence, so this reports three things: a
+// ref only in head (added), a ref only in base (removed), and a ref in both
+// but at a different index (moved). Reporting a chain edit as one opaque
+// Source string change would hide that a service acquired a new backend
+// dependency, which is the whole point of the command.
+//
+// Output is sorted by ref so a chain edit renders identically on every run.
+// A duplicated ref within one chain is compared at its first index; refs are
+// not meaningfully repeatable in a chain (a second occurrence can never win),
+// so no attempt is made to pair up duplicates positionally.
+func diffChain(base, head []string) []RefChange {
+	basePos := firstIndexOf(base)
+	headPos := firstIndexOf(head)
+
+	refs := make([]string, 0, len(basePos)+len(headPos))
+	seen := map[string]bool{}
+	for r := range basePos {
+		if !seen[r] {
+			seen[r] = true
+			refs = append(refs, r)
+		}
+	}
+	for r := range headPos {
+		if !seen[r] {
+			seen[r] = true
+			refs = append(refs, r)
+		}
+	}
+	sort.Strings(refs)
+
+	var out []RefChange
+	for _, r := range refs {
+		b, inBase := basePos[r]
+		h, inHead := headPos[r]
+		switch {
+		case inBase && !inHead:
+			out = append(out, RefChange{Kind: ChangeRemoved, Ref: r, BasePos: b, HeadPos: -1})
+		case !inBase && inHead:
+			out = append(out, RefChange{Kind: ChangeAdded, Ref: r, BasePos: -1, HeadPos: h})
+		case b != h:
+			out = append(out, RefChange{Kind: ChangeMoved, Ref: r, BasePos: b, HeadPos: h})
+		}
+	}
+	return out
+}
+
+// firstIndexOf maps each ref to its first index in the chain.
+func firstIndexOf(chain []string) map[string]int {
+	out := make(map[string]int, len(chain))
+	for i, r := range chain {
+		if _, dup := out[r]; dup {
+			continue
+		}
+		out[r] = i
+	}
+	return out
 }
