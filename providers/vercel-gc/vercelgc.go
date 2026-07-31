@@ -44,11 +44,7 @@ import (
 	"sync"
 	"time"
 
-	// Registration (mamori.Register) is deferred to the task that adds Resolve,
-	// since *Provider does not satisfy mamori.Provider until then. The import is
-	// kept, blank, so go.mod's require stays direct rather than being pruned by
-	// `go mod tidy` and re-added later.
-	_ "github.com/xavidop/mamori"
+	"github.com/xavidop/mamori"
 )
 
 // scheme is the URL scheme this provider handles.
@@ -133,9 +129,7 @@ func New(opts ...Option) *Provider {
 	return p
 }
 
-// Registration via mamori.Register(New()) is deferred to the task that adds
-// Resolve: *Provider does not satisfy mamori.Provider until then, and an
-// init() call here would fail to compile in the meantime.
+func init() { mamori.Register(New()) }
 
 // Scheme returns "vercel-gc".
 func (p *Provider) Scheme() string { return scheme }
