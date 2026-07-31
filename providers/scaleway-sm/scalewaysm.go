@@ -156,11 +156,7 @@ func New(opts ...Option) *Provider {
 	return p
 }
 
-// Registration is deferred to Task 2: mamori.Register takes a
-// mamori.Provider, an interface requiring Resolve, which this provider does
-// not implement yet.
-//
-// func init() { mamori.Register(New()) }
+func init() { mamori.Register(New()) }
 
 // Scheme returns "scaleway-sm".
 func (p *Provider) Scheme() string { return scheme }
