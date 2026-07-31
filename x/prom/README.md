@@ -84,7 +84,7 @@ panic.
 | Watch errors | `mamori_watch_errors_total` | Counter | - | `scheme` |
 | Stale count | `mamori_stale_total` | Counter | - | `scheme` |
 | Change dropped count | `mamori_change_dropped_total` | Counter | - | none |
-| Apply rejected count | `mamori_apply_rejected_total` | Counter | - | `reason` (`validation` \| `preapply`) |
+| Apply rejected count | `mamori_apply_rejected_total` | Counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws-sm`,
   `vault`).
@@ -103,8 +103,8 @@ panic.
   rate means an `OnChange` handler is not keeping up with the rate of applied
   changes, and callers are missing changes as a result.
 - `reason` on the apply-rejected counter is `mamori.RejectReason`, a closed set
-  of two values (`validation`, `preapply`) so it stays a safe, bounded metric
-  label.
+  of three values (`validation`, `preapply`, `derive`) so it stays a safe,
+  bounded metric label.
 
 **Seconds, not milliseconds.** `mamori_resolve_duration_seconds` records in
 seconds, following Prometheus convention for a duration histogram

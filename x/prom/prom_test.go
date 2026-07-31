@@ -31,8 +31,9 @@ func TestRecordsResolveWithStatusAndKind(t *testing.T) {
 }
 
 // TestRejectReasonIsABoundedLabel is the cardinality guard. A metrics backend
-// dies from unbounded label values, so the only two reasons that can ever
-// appear are the two mamori defines.
+// dies from unbounded label values, so only the reasons mamori.RejectReason
+// actually defines - validation, preapply, and (since WithDerive) derive -
+// can ever appear.
 func TestRejectReasonIsABoundedLabel(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m, err := New(reg)
@@ -41,6 +42,7 @@ func TestRejectReasonIsABoundedLabel(t *testing.T) {
 	}
 	m.RecordApplyRejected(mamori.RejectValidation)
 	m.RecordApplyRejected(mamori.RejectPreApply)
+	m.RecordApplyRejected(mamori.RejectDerive)
 
 	// CollectAndFormat only includes the metric families named by
 	// metricNames (see filterMetrics in the testutil package: an empty list
@@ -51,7 +53,7 @@ func TestRejectReasonIsABoundedLabel(t *testing.T) {
 		t.Fatalf("CollectAndFormat: %v", err)
 	}
 	s := string(out)
-	for _, want := range []string{`reason="validation"`, `reason="preapply"`} {
+	for _, want := range []string{`reason="validation"`, `reason="preapply"`, `reason="derive"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in:\n%s", want, s)
 		}

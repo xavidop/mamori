@@ -79,7 +79,7 @@ records measurements against `context.Background()`.
 | Watch errors | `mamori.watch.errors` | Int64 counter | - | `scheme` |
 | Stale count | `mamori.stale.count` | Int64 counter | - | `scheme` |
 | Change dropped count | `mamori.change.dropped.count` | Int64 counter | - | none |
-| Apply rejected count | `mamori.apply.rejected.count` | Int64 counter | - | `reason` (`validation` \| `preapply`) |
+| Apply rejected count | `mamori.apply.rejected.count` | Int64 counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws`,
   `vault`).
@@ -94,8 +94,8 @@ records measurements against `context.Background()`.
   means an `OnChange` handler is not keeping up with the rate of applied
   changes, and callers are missing changes as a result.
 - `reason` on the apply-rejected counter is `mamori.RejectReason`, a closed set
-  of two values (`validation`, `preapply`) so it stays a safe, bounded metric
-  label.
+  of three values (`validation`, `preapply`, `derive`) so it stays a safe,
+  bounded metric label.
 
 The instrument names and metric attribute keys are also exported as constants
 (`MetricResolveDuration`, `MetricRefreshCount`, `MetricWatchErrors`,

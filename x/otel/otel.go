@@ -61,7 +61,7 @@ const (
 	MetricChangeDroppedCount = "mamori.change.dropped.count"
 	// MetricApplyRejectedCount is a counter of candidate configurations
 	// refused before being applied, with attribute "reason" (see
-	// mamori.RejectReason: "validation" or "preapply").
+	// mamori.RejectReason: "validation", "preapply", or "derive").
 	MetricApplyRejectedCount = "mamori.apply.rejected.count"
 )
 
@@ -70,8 +70,11 @@ const (
 	attrScheme = "scheme"
 	attrStatus = "status"
 	// attrReason carries the mamori.RejectReason of a rejected apply
-	// ("validation" or "preapply"), a closed two-value set so it stays a safe
-	// metric label.
+	// ("validation", "preapply", or "derive"), a closed, bounded set - now
+	// three values, not two, since WithDerive added RejectDerive - so it stays
+	// a safe metric label regardless of exactly how many reasons mamori
+	// defines: the safety comes from the set being closed and small, not from
+	// its size being fixed at two.
 	attrReason = "reason"
 
 	statusOK    = "ok"
@@ -227,7 +230,7 @@ func (m *meter) RecordChangeDropped() {
 }
 
 // RecordApplyRejected increments the rejected-apply counter, tagged with
-// reason ("validation" or "preapply").
+// reason ("validation", "preapply", or "derive").
 func (m *meter) RecordApplyRejected(reason mamori.RejectReason) {
 	m.applyRejected.Add(m.ctx, 1, metric.WithAttributes(attribute.String(attrReason, string(reason))))
 }

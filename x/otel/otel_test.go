@@ -200,13 +200,14 @@ func TestMeter_RecordChangeDropped(t *testing.T) {
 }
 
 // TestMeter_RecordApplyRejected confirms the rejected-apply counter is tagged
-// with reason, and that mamori.RejectValidation and mamori.RejectPreApply
-// produce distinct data points.
+// with reason, and that mamori.RejectValidation, mamori.RejectPreApply, and
+// mamori.RejectDerive each produce their own distinct data point.
 func TestMeter_RecordApplyRejected(t *testing.T) {
 	rm := collect(t, func(m mamori.Meter) {
 		m.RecordApplyRejected(mamori.RejectValidation)
 		m.RecordApplyRejected(mamori.RejectPreApply)
 		m.RecordApplyRejected(mamori.RejectPreApply)
+		m.RecordApplyRejected(mamori.RejectDerive)
 	})
 
 	rejected := findMetric(t, rm, mamoriotel.MetricApplyRejectedCount)
@@ -214,8 +215,8 @@ func TestMeter_RecordApplyRejected(t *testing.T) {
 	if !ok {
 		t.Fatalf("apply rejected data has type %T, want Sum[int64]", rejected.Data)
 	}
-	if len(rejectedSum.DataPoints) != 2 {
-		t.Fatalf("apply rejected data points = %d, want 2", len(rejectedSum.DataPoints))
+	if len(rejectedSum.DataPoints) != 3 {
+		t.Fatalf("apply rejected data points = %d, want 3", len(rejectedSum.DataPoints))
 	}
 
 	got := map[string]int64{}
@@ -227,6 +228,9 @@ func TestMeter_RecordApplyRejected(t *testing.T) {
 	}
 	if got["preapply"] != 2 {
 		t.Errorf("apply rejected[preapply] = %d, want 2", got["preapply"])
+	}
+	if got["derive"] != 1 {
+		t.Errorf("apply rejected[derive] = %d, want 1", got["derive"])
 	}
 }
 

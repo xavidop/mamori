@@ -55,7 +55,7 @@ const (
 	MetricChangeDroppedTotal = "mamori_change_dropped_total"
 	// MetricApplyRejectedTotal is a counter of candidate configurations
 	// refused before being applied, labeled "reason" (see mamori.RejectReason:
-	// "validation" or "preapply").
+	// "validation", "preapply", or "derive").
 	MetricApplyRejectedTotal = "mamori_apply_rejected_total"
 )
 
@@ -207,7 +207,7 @@ func (m *meter) RecordChangeDropped() {
 }
 
 // RecordApplyRejected increments the rejected-apply counter, labeled with
-// reason ("validation" or "preapply").
+// reason ("validation", "preapply", or "derive").
 func (m *meter) RecordApplyRejected(reason mamori.RejectReason) {
 	m.applyRejectedTotal.WithLabelValues(string(reason)).Inc()
 }
