@@ -35,7 +35,6 @@
 package vercelgc
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -230,7 +229,3 @@ func parsePath(path, defaultStore string) (store, key string, err error) {
 	}
 	return store, key, nil
 }
-
-// jsonRaw is a stored Global Config value, kept as raw JSON so no numeric
-// precision is lost on the way through.
-type jsonRaw = json.RawMessage
