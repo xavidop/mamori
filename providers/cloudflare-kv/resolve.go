@@ -1,7 +1,9 @@
 package cloudflarekv
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,13 @@ import (
 
 	"github.com/xavidop/mamori"
 )
+
+// bulkMaxKeys is the maximum number of keys Cloudflare's bulk/get endpoint
+// accepts in a single request. ResolveBatch chunks any namespace with more
+// keys than this into multiple requests and merges the results: silently
+// truncating at this ceiling would drop every key past the 100th with no
+// error at all.
+const bulkMaxKeys = 100
 
 // Resolve fetches the value for ref from Workers KV.
 //
@@ -33,6 +42,171 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, err
 	}
 	return valueFor(b, ref, s.namespace)
+}
+
+// bulkGetRequestBody is the body POSTed to the bulk/get endpoint. Type is
+// always "text": without it Cloudflare may attempt to JSON-parse a stored
+// value and return an object rather than the string bytes this provider
+// treats as opaque.
+type bulkGetRequestBody struct {
+	Keys []string `json:"keys"`
+	Type string   `json:"type"`
+}
+
+// bulkGetResponseBody is the JSON envelope every bulk/get response wraps its
+// values in - unlike the single-key GET endpoint's raw bytes (see get's doc
+// comment). A key absent from the namespace is simply absent from Values,
+// with no per-key error, which is what lets ResolveBatch treat an absent key
+// as a plain map miss.
+type bulkGetResponseBody struct {
+	Success bool `json:"success"`
+	Result  struct {
+		Values map[string]string `json:"values"`
+	} `json:"result"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// ResolveBatch resolves every ref in one bulk request per namespace, each
+// chunked to at most bulkMaxKeys keys since that is the largest the bulk/get
+// endpoint accepts. mamori calls it automatically on the Load path so a Load
+// with many refs costs a handful of requests rather than one GET per field.
+//
+// A key absent from a namespace's bulk response is omitted from the result
+// map rather than failing the batch, per the BatchProvider contract, so
+// mamori applies that field's default. The same holds for a ref whose #field
+// selection is absent from an otherwise-present JSON value: valueFor reports
+// that case as an error satisfying mamori.ErrNotFound, and it is treated
+// exactly like an absent key here, matching Resolve. This split is
+// deliberate: providers/vercel-gc originally returned that error verbatim
+// from its ResolveBatch, which failed the entire batch over one missing
+// optional field and took every sibling ref down with it. An ErrInvalid from
+// selection (for example selecting a #field of a value that is not a JSON
+// object) is a different class of problem - a malformed request against the
+// payload, not an absence - and still fails the batch, as does a namespace
+// that cannot be read at all.
+func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[string]mamori.Value, error) {
+	if len(refs) == 0 {
+		return map[string]mamori.Value{}, nil
+	}
+
+	// Group refs by namespace, deduplicating keys within a namespace so two
+	// refs selecting different #fields of the same key (e.g. api-config#a and
+	// api-config#b) cost one bulk-request slot rather than two.
+	type namespaceGroup struct {
+		settings settings
+		keys     []string // deduplicated, first-seen order
+		byKey    map[string][]mamori.Ref
+	}
+	groups := map[string]*namespaceGroup{}
+
+	for _, r := range refs {
+		s, err := p.settingsFor(r)
+		if err != nil {
+			return nil, err
+		}
+		key, err := keyOf(r)
+		if err != nil {
+			return nil, err
+		}
+		g, ok := groups[s.namespace]
+		if !ok {
+			g = &namespaceGroup{settings: s, byKey: map[string][]mamori.Ref{}}
+			groups[s.namespace] = g
+		}
+		if _, seen := g.byKey[key]; !seen {
+			g.keys = append(g.keys, key)
+		}
+		g.byKey[key] = append(g.byKey[key], r)
+	}
+
+	out := make(map[string]mamori.Value, len(refs))
+	for ns, g := range groups {
+		for start := 0; start < len(g.keys); start += bulkMaxKeys {
+			end := min(start+bulkMaxKeys, len(g.keys))
+			chunkKeys := g.keys[start:end]
+
+			values, err := p.bulkGet(ctx, g.settings, chunkKeys)
+			if err != nil {
+				return nil, err
+			}
+			for _, key := range chunkKeys {
+				b, ok := values[key]
+				if !ok {
+					continue // absent key; mamori applies the default
+				}
+				for _, r := range g.byKey[key] {
+					v, err := valueFor(b, r, ns)
+					if err != nil {
+						if errors.Is(err, mamori.ErrNotFound) {
+							continue // an absent selected field is still not-found; mamori applies the default
+						}
+						return nil, err
+					}
+					out[r.Raw] = v
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// bulkGet issues one authenticated POST against the bulk/get endpoint for
+// keys (at most bulkMaxKeys of them) and returns the values that came back,
+// keyed by the requested key. A key absent from the namespace is simply
+// absent from the returned map; the caller (ResolveBatch) treats that as an
+// omission, not an error.
+func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[string][]byte, error) {
+	u := p.baseURL + "/accounts/" + url.PathEscape(s.account) +
+		"/storage/kv/namespaces/" + url.PathEscape(s.namespace) + "/bulk/get"
+
+	reqBody, err := json.Marshal(bulkGetRequestBody{Keys: keys, Type: "text"})
+	if err != nil {
+		return nil, fmt.Errorf("mamori/cloudflare-kv: encoding bulk request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, sanitizeTransportError(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, sanitizeTransportError(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		// Read a bounded amount of the error body for diagnostics. Never log it.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d from bulk get of %d key(s): %s",
+			resp.StatusCode, len(keys), strings.TrimSpace(string(msg)))
+		return nil, classifyStatus(resp.StatusCode, statusErr)
+	}
+
+	var body bulkGetResponseBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("mamori/cloudflare-kv: decoding bulk response: %w: %w", mamori.ErrInvalid, err)
+	}
+	if !body.Success {
+		// A 200 status carrying "success":false is Cloudflare's own reported
+		// failure, distinct from an HTTP-level status code, and is a malformed
+		// request against the API rather than an absence.
+		msg := "bulk get reported failure"
+		if len(body.Errors) > 0 {
+			msg = body.Errors[0].Message
+		}
+		return nil, fmt.Errorf("mamori/cloudflare-kv: %s: %w", msg, mamori.ErrInvalid)
+	}
+
+	values := make(map[string][]byte, len(body.Result.Values))
+	for k, v := range body.Result.Values {
+		values[k] = []byte(v)
+	}
+	return values, nil
 }
 
 // get issues one authenticated GET against the single-key value endpoint and

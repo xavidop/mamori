@@ -50,6 +50,20 @@ type fakeKV struct {
 	// key containing slashes travelled as one url.PathEscape'd segment
 	// rather than as extra path segments.
 	lastPath string
+
+	// bulkSizes records len(keys) for every bulk request served, in request
+	// order. Task 3's chunk-boundary tests read this to assert not just how
+	// many bulk requests were made but exactly how many keys each one carried
+	// - the off-by-one case at exactly 100/101 keys needs that precision.
+	bulkSizes []int
+	// lastBulkType records the "type" field of the most recent bulk request
+	// body. Cloudflare's real bulk/get endpoint may JSON-parse values and
+	// return objects, rather than the opaque strings this provider expects,
+	// when "type" is omitted; this fake does not model that divergence (it
+	// always returns strings), so lastBulkType exists to let a test pin that
+	// ResolveBatch sends "type":"text" on the wire even though a fake that
+	// ignored the field entirely would still "pass" on values alone.
+	lastBulkType string
 }
 
 func newFake() *fakeKV {
@@ -161,9 +175,12 @@ func (f *fakeKV) handleGet(w http.ResponseWriter, namespace, key string) {
 	_, _ = w.Write(val)
 }
 
-// bulkGetRequest is the body Task 3's ResolveBatch POSTs.
+// bulkGetRequest is the body Task 3's ResolveBatch POSTs. Type is captured
+// (not just Keys) so a test can pin that ResolveBatch sends "type":"text";
+// see lastBulkType.
 type bulkGetRequest struct {
 	Keys []string `json:"keys"`
+	Type string   `json:"type"`
 }
 
 // bulkGetResponse is the envelope the bulk endpoint wraps every value in,
@@ -207,6 +224,8 @@ func (f *fakeKV) handleBulk(w http.ResponseWriter, r *http.Request, namespace st
 	}
 
 	f.mu.Lock()
+	f.bulkSizes = append(f.bulkSizes, len(body.Keys))
+	f.lastBulkType = body.Type
 	values := map[string]string{}
 	for _, k := range body.Keys {
 		if v, ok := f.values[namespace][k]; ok {
