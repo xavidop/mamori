@@ -88,14 +88,16 @@ func (p *Provider) access(ctx context.Context, s settings, path, name, revision 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// Either the secret name or the requested revision is absent; see
-		// classifyStatus's doc comment for why the response does not
-		// reliably distinguish them. Drain and discard a bounded amount of
-		// the body before returning: this provider caches nothing (see
-		// Resolve's doc comment), so an absent secret is read again on
-		// every poll tick, and leaving the body unread here would prevent
-		// the connection being reused, paying a fresh TCP and TLS
-		// handshake on every one of those ticks.
+		// The secret name is absent, the requested revision does not exist,
+		// or the requested revision is DISABLED (Scaleway makes a disabled
+		// version inaccessible, not merely non-default - see the package doc
+		// comment on the ?revision default); see classifyStatus's doc comment
+		// for why the response does not reliably distinguish any of these.
+		// Drain and discard a bounded amount of the body before returning:
+		// this provider caches nothing (see Resolve's doc comment), so an
+		// absent secret is read again on every poll tick, and leaving the
+		// body unread here would prevent the connection being reused, paying
+		// a fresh TCP and TLS handshake on every one of those ticks.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: secret %q not found: %w", name, mamori.ErrNotFound)
 	}
@@ -122,12 +124,21 @@ func (p *Provider) access(ctx context.Context, s settings, path, name, revision 
 // transport-level failure - a refused connection, a timeout, a cancelled
 // context - in a *url.Error whose Error() renders the full request URL.
 // Without this, an ordinary network hiccup, not even a bug in this
-// provider, would put the project id into a returned error's text. This is
-// the same class of leak providers/cloudflare-kv and providers/vercel-gc
-// each shipped and had to fix, reached here through the client's transport
-// (and, for a malformed WithBaseURL, through url.Parse inside
-// http.NewRequestWithContext itself) instead of a hand-rolled url.Parse
-// call.
+// provider, would put the project id into a returned error's text, reached
+// here through the client's transport (and, for a malformed WithBaseURL,
+// through url.Parse inside http.NewRequestWithContext itself) instead of a
+// hand-rolled url.Parse call.
+//
+// providers/cloudflare-kv never actually shipped this leak: its own
+// sanitizeTransportError is present in the very commit that introduced its
+// resolve.go. What THAT module shipped, and had to fix in review, was a test
+// gap - only 1 of its 4 sanitize call sites was pinned by a test, not a
+// missing sanitizer. providers/vercel-gc did ship a real leak of this
+// shape, but in a different place: parseConnectionString ran the connection
+// string, token included, through url.Parse, and the fix moved the token out
+// of the URL entirely and into the Authorization header. Its transport path
+// has no sanitizer to this day, correctly, because its URL carries no
+// credential to leak.
 //
 // Wrapping urlErr.Err with %w, rather than discarding it, keeps
 // errors.Is(_, context.Canceled) (and similar checks) working: *url.Error
@@ -154,27 +165,53 @@ func sanitizeTransportError(err error) error {
 // when present, and reports the secret's revision as both Version and
 // Metadata["revision"].
 //
-// Version is ALWAYS resp.Revision rendered as a decimal string, never a
-// content hash and never affected by a #field selection that narrows the
-// returned bytes. This is deliberate, and it is the entire reason this
-// module exists in this trio: every sibling provider that reads a
-// general-purpose config store falls back to mamori.VersionHash because its
-// backend exposes no revision, which makes two byte-identical values at two
-// different points in time indistinguishable to it. A real secret manager
-// does not have that excuse - the revision already identifies exactly which
-// write produced these bytes - so reporting anything else here would throw
-// away information mamori.Value.Version was designed to carry. A #field
-// selection changes which bytes are returned, not which secret version they
-// came from, so Version stays the revision of the underlying secret even
-// when the resolved payload is only part of it; it changes only when the
-// secret itself is rewritten, i.e. when the revision advances.
+// Version is resp.Revision rendered as a decimal string whenever the server
+// reports one, never a content hash and never affected by a #field
+// selection that narrows the returned bytes. Reporting a real backend
+// version rather than a content hash is not unique to this module across the
+// whole repo - providers/aws, providers/gcp, providers/azure,
+// providers/vault, providers/k8s, and providers/onepassword all do the same
+// for a secret-bearing backend, as do providers/etcd and providers/consul,
+// general-purpose stores that happen to expose a native revision anyway -
+// but within THIS trio of recent additions it is new: providers/vercel-gc
+// and providers/cloudflare-kv both fall back to mamori.VersionHash because
+// their backends expose no revision at all, which makes two byte-identical
+// values at two different points in time indistinguishable to them. A real
+// secret manager does not have that excuse - the revision already
+// identifies exactly which write produced these bytes - so reporting
+// anything else here would throw away information mamori.Value.Version was
+// designed to carry. A #field selection changes which bytes are returned,
+// not which secret version they came from, so Version stays the revision of
+// the underlying secret even when the resolved payload is only part of it;
+// it changes only when the secret itself is rewritten, i.e. when the
+// revision advances.
+//
+// Scaleway numbers real revisions from 1 (see the package doc comment on
+// the ?revision default), so resp.Revision == 0 means the field was absent
+// from the response, not a legitimate "revision zero" - unlikely against the
+// real API, but not a case this provider may silently mishandle: mamori's
+// poller detects a rotation by comparing Version, and an unguarded Version
+// of a constant "0" would make every subsequent write invisible to it
+// forever. Every comparable provider in this repo falls back to
+// mamori.VersionHash in exactly this situation (providers/aws/sm.go,
+// providers/gcp/gcp.go, providers/azure/azure.go, providers/vault/vault.go),
+// and this module does the same, hashing resp.Data - the full payload,
+// before any #field selection - so the fallback still honors the same
+// "Version does not depend on #field" guarantee the real-revision path gives
+// above.
 func valueFor(resp accessResponse, ref mamori.Ref, region string) (mamori.Value, error) {
 	if resp.DataCrc32 != nil {
-		if got := crc32.ChecksumIEEE(resp.Data); got != *resp.DataCrc32 {
-			return mamori.Value{}, fmt.Errorf(
-				"mamori/scaleway-sm: data_crc32 mismatch (got %d, want %d): %w",
-				got, *resp.DataCrc32, mamori.ErrInvalid)
+		// Neither the computed sum nor the server's own data_crc32 is
+		// rendered into the error: nothing derived from the secret may reach
+		// an error message, and saying the CRC did not match is enough.
+		if crc32.ChecksumIEEE(resp.Data) != *resp.DataCrc32 {
+			return mamori.Value{}, fmt.Errorf("mamori/scaleway-sm: data_crc32 mismatch: %w", mamori.ErrInvalid)
 		}
+	}
+
+	version := strconv.FormatUint(uint64(resp.Revision), 10)
+	if resp.Revision == 0 {
+		version = mamori.VersionHash(resp.Data)
 	}
 
 	b := resp.Data
@@ -186,10 +223,9 @@ func valueFor(resp accessResponse, ref mamori.Ref, region string) (mamori.Value,
 		b = sel
 	}
 
-	revision := strconv.FormatUint(uint64(resp.Revision), 10)
 	return mamori.Value{
 		Bytes:     b,
-		Version:   revision,
+		Version:   version,
 		Sensitive: true,
 		// Metadata carries the region and the revision, and NOTHING else:
 		// not the secret id, not the project id, not the path, and never
@@ -199,7 +235,7 @@ func valueFor(resp accessResponse, ref mamori.Ref, region string) (mamori.Value,
 		// surfaces than "whoever holds the resolved value".
 		Metadata: map[string]string{
 			"region":   region,
-			"revision": revision,
+			"revision": version,
 		},
 	}, nil
 }
@@ -215,12 +251,15 @@ func valueFor(resp accessResponse, ref mamori.Ref, region string) (mamori.Value,
 // One caveat is worth being explicit about, because it is exactly the kind
 // of thing a misconfiguration hides behind rather than announces: a 404
 // from this API does not distinguish an unknown secret from a KNOWN secret
-// whose requested revision does not exist. A ref asking for ?revision=99
-// against a secret that has only ever reached revision 12 gets the same 404
-// an entirely absent secret name would, and therefore degrades silently to
-// the field's default: or optional handling, exactly as if the secret had
-// never existed at all. Scaleway has not published a stable enough
-// error-code vocabulary in the response body to key this mapping on
+// whose requested revision does not exist OR whose requested revision has
+// been disabled - disabling a version makes it inaccessible on Scaleway, not
+// merely non-default, so a caller who pinned ?revision=latest before a
+// revocation gets the identical 404 an entirely absent secret would. Either
+// way it degrades silently to the field's default or optional handling,
+// exactly as if the secret had never existed at all - see the package doc
+// comment for why ?revision defaults to "latest_enabled" rather than
+// "latest" for precisely this reason. Scaleway has not published a stable
+// enough error-code vocabulary in the response body to key this mapping on
 // anything but the status, so codes not listed here report unknown rather
 // than being guessed at.
 func classifyStatus(code int, statusErr error) error {

@@ -155,13 +155,21 @@ func (f *fakeSM) counts() int {
 
 // resolveRevisionSelector resolves a {revision} path-segment selector
 // ("latest", "latest_enabled", or a decimal revision number) against revs,
-// mirroring the real access route's own documented {revision} semantics: a
-// number selects that exact revision, "latest" selects the highest revision
-// number regardless of enabled state, and "latest_enabled" selects the
-// highest revision number among only the enabled ones. It reports false when
-// no revision satisfies the selector, which the caller turns into a 404 -
-// the same response an unknown secret produces, which is exactly the
-// ambiguity classifyStatus's doc comment warns about.
+// mirroring the real access route's own documented {revision} semantics.
+// Disabling a revision on Scaleway makes it INACCESSIBLE, not merely "not
+// preferred": scaleway-sdk-go's SecretVersion.Status doc comment says a
+// disabled version "is not accessible but can be enabled", and the Scaleway
+// CLI names the operations that flip it accordingly (`scw secret version
+// disable` = "Make a specific version inaccessible", `enable` = "Make a
+// specific version accessible"). So a disabled revision fails to resolve
+// however it is addressed: "latest" selects the highest revision number but
+// fails if THAT revision is disabled (it does not fall back to the newest
+// enabled one - that is what "latest_enabled" is for), a decimal number fails
+// if the revision it names is disabled, and only "latest_enabled" ever skips
+// a disabled revision in favor of another. It reports false when no revision
+// satisfies the selector, which the caller turns into a 404 - the same
+// response an unknown secret produces, which is exactly the ambiguity
+// classifyStatus's doc comment warns about.
 func resolveRevisionSelector(revs map[uint32]secretRevision, selector string) (uint32, bool) {
 	switch selector {
 	case "latest":
@@ -172,7 +180,10 @@ func resolveRevisionSelector(revs map[uint32]secretRevision, selector string) (u
 				max, found = rev, true
 			}
 		}
-		return max, found
+		if !found || !revs[max].enabled {
+			return 0, false
+		}
+		return max, true
 	case "latest_enabled":
 		var max uint32
 		found := false
@@ -188,8 +199,11 @@ func resolveRevisionSelector(revs map[uint32]secretRevision, selector string) (u
 			return 0, false
 		}
 		rev := uint32(n)
-		_, ok := revs[rev]
-		return rev, ok
+		sr, ok := revs[rev]
+		if !ok || !sr.enabled {
+			return 0, false
+		}
+		return rev, true
 	}
 }
 

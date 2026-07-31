@@ -155,8 +155,15 @@ func TestSettingsMissingErrorsNameTheOption(t *testing.T) {
 
 // A credential must never reach an error message, even when it is the value
 // sitting in the environment at the moment an unrelated setting's error is
-// produced. This pins the regression class that providers/vercel-gc and
-// providers/cloudflare-kv each shipped and had to fix.
+// produced. This pins the regression class providers/vercel-gc actually
+// shipped and had to fix: parseConnectionString ran the connection string,
+// token included, through url.Parse, which renders the whole input into a
+// *url.Error's message, and the fix moved the token out of the URL entirely
+// and into the Authorization header. providers/cloudflare-kv did not ship
+// this: its sanitizeTransportError guard was present from the commit that
+// introduced its resolve.go; what it shipped and fixed in review was a
+// narrower test gap, only 1 of its 4 sanitize call sites was pinned by a
+// test.
 func TestSettingsErrorsNeverCarrySecretKey(t *testing.T) {
 	t.Setenv("SCW_SECRET_KEY", "SUPER_SECRET_KEY")
 	t.Setenv("SCW_DEFAULT_PROJECT_ID", "")

@@ -40,7 +40,7 @@ scaleway-sm://<name>[#field-or-pointer]
 | --- | --- | --- |
 | `<name>` | yes | The **last** path segment, always. |
 | `<path>` | no | Everything before the last segment - a real slash-delimited directory Scaleway secrets are organized under, not part of the secret's own name. |
-| `?revision=<n\|latest>` | no | Defaults to `latest_enabled`; `latest` returns the newest revision regardless of its enabled state (see below). |
+| `?revision=<n\|latest>` | no | Defaults to `latest_enabled`; `latest` requests the newest revision but fails if that revision has been disabled (see below). |
 | `#field` / `#/json/pointer` | no | Select a field from a JSON-valued secret via `mamori.SelectKey` - a literal top-level key, or an RFC 6901 JSON Pointer for a nested field. |
 
 **Examples**
@@ -63,20 +63,25 @@ Access by secret ID (Scaleway's UUID) is not supported - a UUID in a struct tag 
 
 ## Revisions and the disabled state
 
-Disabling a revision is how a Scaleway operator revokes a leaked credential without deleting its history, which is why `?revision` defaults to `latest_enabled` rather than `latest`: `latest` ignores the enabled/disabled state entirely, so defaulting to it would mean mamori kept serving a secret an operator had just explicitly revoked.
+Disabling a revision is how a Scaleway operator revokes a leaked credential without deleting its history. On Scaleway, disabling is an access revocation, not a preference hint: `scaleway-sdk-go` documents a disabled `SecretVersion` as "not accessible but can be enabled," and the Scaleway CLI names the operation to match (`scw secret version disable`/`enable` = make a version inaccessible/accessible). **A request for a disabled revision fails** - it does not return that revision's bytes, whether the revision is named by number or reached via `?revision=latest`. There is no escape hatch that returns the newest revision regardless of its enabled state; Scaleway does not offer one.
+
+That is why `?revision` defaults to `latest_enabled` rather than `latest`: `latest_enabled` is the selector that keeps working across a revocation, automatically falling back to the newest revision that is still enabled, while `latest` breaks the moment the newest revision is disabled. Defaulting to `latest` would not "keep serving a revoked secret" - it would serve nothing at all the instant an operator revoked one.
 
 Given a secret with revision 3 enabled and a newer revision 4 disabled:
 
 | Ref | Resolves to |
 | --- | --- |
 | `scaleway-sm://cred` | Revision 3 - the newest **enabled** revision |
-| `scaleway-sm://cred?revision=latest` | Revision 4 - the newest revision, disabled or not |
+| `scaleway-sm://cred?revision=latest` | **Fails** - revision 4 is the newest, but it is disabled and therefore inaccessible |
+| `scaleway-sm://cred?revision=4` | **Fails** for the same reason: pinning the exact number of a disabled revision does not help |
+
+This interacts with [the 404 caveat](#error-classification) below: a 404 from this API does not distinguish an unknown secret from a disabled or nonexistent revision, so a ref that pins `?revision=latest` and is later hit by a revocation degrades silently to the field's default (or optional handling) instead of failing loudly - the same silent-degradation hazard the 404 caveat describes for a deleted revision. `latest_enabled` avoids the failure in the first place, which is the strongest reason to leave it as the default rather than pinning `latest`.
 
 ## Value mapping
 
 `Value.Sensitive` is always `true` - unlike [Vercel Global Config](/docs/providers/vercel-gc/) and [Cloudflare Workers KV](/docs/providers/cloudflare-kv/), which read general-purpose config/KV stores, this provider reads a real secret manager.
 
-`Value.Version` is the backend revision itself (`resp.Revision` as a decimal string), not a content hash - the first provider in this trio of recent additions that can report a real revision rather than falling back to `mamori.VersionHash`. That means change detection here does not depend on comparing bytes: a rewrite that happens to produce the same bytes as before still advances `Version`, so mamori's poller correctly treats it as a change. A `#field` selection narrows `Value.Bytes` but never changes `Version`, since it tracks which write produced the secret, not which slice of its JSON was returned.
+`Value.Version` is the backend revision itself (`resp.Revision` as a decimal string), not a content hash - the first provider in this trio of recent additions (with [Vercel Global Config](/docs/providers/vercel-gc/) and [Cloudflare Workers KV](/docs/providers/cloudflare-kv/)) that can report a real revision rather than falling back to `mamori.VersionHash`; the other two read a general-purpose store with no revision to report. That means change detection here does not depend on comparing bytes: a rewrite that happens to produce the same bytes as before still advances `Version`, so mamori's poller correctly treats it as a change. A `#field` selection narrows `Value.Bytes` but never changes `Version`, since it tracks which write produced the secret, not which slice of its JSON was returned.
 
 `Value.Metadata` carries only `region` and `revision` - never the secret id, project id, path, or value. A secret's location is itself information, and `Metadata` reaches the admin HTTP endpoint and the status report.
 
@@ -99,7 +104,7 @@ A 404 is detected before status classification runs and reports `not_found` dire
 | 5xx | `unavailable` |
 | anything else | `unknown` |
 
-An unknown secret and a known secret whose pinned revision does not exist return the identical 404, with no error code in the body to tell them apart. A ref asking for `?revision=99` against a secret that has only reached revision 12 degrades silently to the field's default, exactly as if the secret had never existed at all.
+An unknown secret, a known secret whose pinned revision does not exist, and a known secret whose pinned revision is **disabled** all return the identical 404, with no error code in the body to tell them apart. A ref asking for `?revision=99` against a secret that has only reached revision 12 degrades silently to the field's default, exactly as if the secret had never existed at all - and so does a ref pinning `?revision=latest` after an operator disables the newest revision.
 
 ## Watch
 

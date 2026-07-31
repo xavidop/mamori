@@ -43,7 +43,7 @@ func TestResolveDecodesSecretAndSendsQueryParams(t *testing.T) {
 	}
 
 	f.mu.Lock()
-	q := f.lastQuery
+	path, q := f.lastPath, f.lastQuery
 	f.mu.Unlock()
 	if got := q.Get("secret_path"); got != "/prod" {
 		t.Fatalf("got secret_path %q, want %q", got, "/prod")
@@ -53,6 +53,14 @@ func TestResolveDecodesSecretAndSendsQueryParams(t *testing.T) {
 	}
 	if got := q.Get("project_id"); got != testProjectID {
 		t.Fatalf("got project_id %q, want %q", got, testProjectID)
+	}
+	// The configured region must reach the request path (it is the segment
+	// right after /regions/, per access's doc comment), not just settingsFor's
+	// return value: testRegion is distinctive enough that this substring
+	// match cannot pass by coincidence, so a hardcoded region string standing
+	// in for s.region in access would be caught here.
+	if wantSubstr := "/regions/" + testRegion + "/"; !strings.Contains(path, wantSubstr) {
+		t.Fatalf("request path %q does not contain %q; the configured region must reach the request URL", path, wantSubstr)
 	}
 }
 
@@ -156,6 +164,44 @@ func TestResolveVersionStaysRevisionEvenWithFieldSelection(t *testing.T) {
 	}
 	if v.Version != "7" {
 		t.Fatalf("got Version %q, want the secret's revision %q even though #timeout narrowed the bytes", v.Version, "7")
+	}
+}
+
+// TestValueForVersionFallsBackToContentHashWhenRevisionAbsent pins the
+// defensive fallback in valueFor: Scaleway numbers real revisions from 1
+// (see the package doc comment on the ?revision default), so a response
+// whose "revision" field is absent unmarshals resp.Revision as the Go zero
+// value, uint32(0) - not a legitimate revision. Without a fallback, Version
+// would silently and permanently report the literal string "0", and
+// mamori's poller - which detects a rotation by comparing Version - would
+// never notice ANY subsequent write that also came back with no revision.
+// This mirrors the fallback every comparable secret-bearing provider in this
+// repo already has: providers/aws/sm.go, providers/gcp/gcp.go,
+// providers/azure/azure.go, providers/vault/vault.go.
+//
+// This calls valueFor directly rather than routing a Revision of 0 through
+// the fake and Resolve: the fake's revision numbers double as its lookup
+// keys, so "revision 0" there would mean "a secret whose only revision is
+// numbered 0", not "a response that omitted the field" - the two are
+// indistinguishable once decoded into resp.Revision, which is exactly the
+// case this test targets directly.
+func TestValueForVersionFallsBackToContentHashWhenRevisionAbsent(t *testing.T) {
+	resp := accessResponse{Revision: 0, Data: []byte("payload-with-no-server-revision")}
+
+	v, err := valueFor(resp, ref(t, "scaleway-sm://k"), testRegion)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := mamori.VersionHash(resp.Data)
+	if v.Version != want {
+		t.Fatalf("got Version %q, want the content-hash fallback %q", v.Version, want)
+	}
+	if v.Version == "0" {
+		t.Fatal("Version must never silently be the literal string \"0\": a later rewrite that also " +
+			"reports no revision would then report an unchanged Version and mamori's poller would miss it")
+	}
+	if v.Metadata["revision"] != want {
+		t.Fatalf("got Metadata[revision] %q, want it to match the fallback Version %q", v.Metadata["revision"], want)
 	}
 }
 
@@ -278,11 +324,15 @@ func TestResolveCRCAbsentIsNotAnError(t *testing.T) {
 // TestResolveLatestEnabledSkipsDisabledRevision is the honest test of this
 // module's most important design decision: with revision 4 disabled and
 // revision 3 enabled, a ref naming no revision (defaulting to
-// "latest_enabled") must resolve revision 3, while ?revision=latest must
-// still reach revision 4 regardless of its disabled state. Both the
-// resolved Version and the revision selector that reached the request URL
-// are asserted, so this catches either a wrong default or a Resolve that
-// never actually threads the selector through to the wire.
+// "latest_enabled") must resolve revision 3, the newest still-ENABLED
+// revision. Both the resolved Version and the revision selector that reached
+// the request URL are asserted, so this catches either a wrong default or a
+// Resolve that never actually threads the selector through to the wire.
+//
+// This does NOT also assert that ?revision=latest reaches revision 4:
+// Scaleway does not permit reading a disabled revision at all, by any
+// selector, so that case is covered separately by
+// TestResolveDisabledRevisionFails.
 func TestResolveLatestEnabledSkipsDisabledRevision(t *testing.T) {
 	f := newFakeSM()
 	f.setRevision("/", "cred", 3, []byte("v3"), nil, true)
@@ -303,19 +353,39 @@ func TestResolveLatestEnabledSkipsDisabledRevision(t *testing.T) {
 	if !strings.Contains(path, "/versions/latest_enabled/") {
 		t.Fatalf("request path %q must carry the latest_enabled selector when the ref names no revision", path)
 	}
+}
 
-	v, err = p.Resolve(context.Background(), ref(t, "scaleway-sm://cred?revision=latest"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestResolveDisabledRevisionFails pins that disabling a revision on
+// Scaleway makes it INACCESSIBLE, not merely "no longer the one latest_enabled
+// picks": scaleway-sdk-go's SecretVersion.Status documents `disabled` as "the
+// version is not accessible but can be enabled", and the Scaleway CLI names
+// `scw secret version disable`/`enable` as making a version
+// inaccessible/accessible respectively - re-enabling is required before it
+// can be read again. A request for a disabled revision therefore FAILS; it
+// does not return that revision's bytes, whether it is addressed by its
+// exact number or reached via ?revision=latest when it happens to be the
+// newest. (This module's docs used to claim ?revision=latest was an escape
+// hatch that ignored the disabled state; it is not, and this test is why.)
+func TestResolveDisabledRevisionFails(t *testing.T) {
+	f := newFakeSM()
+	f.setRevision("/", "cred", 3, []byte("v3"), nil, true)
+	f.setRevision("/", "cred", 4, []byte("v4"), nil, true)
+	f.disable("/", "cred", 4)
+	p := f.provider()
+
+	// ?revision=latest reaches for the highest-numbered revision (4), but 4
+	// is disabled: the request must fail exactly as the real API would,
+	// never falling back to revision 3 and never returning revision 4's
+	// bytes.
+	if _, err := p.Resolve(context.Background(), ref(t, "scaleway-sm://cred?revision=latest")); !errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("?revision=latest against a disabled newest revision: got %v, want an error satisfying mamori.ErrNotFound", err)
 	}
-	if string(v.Bytes) != "v4" || v.Version != "4" {
-		t.Fatalf("?revision=latest must resolve the newest revision REGARDLESS of enabled state (4), got bytes %q version %q", v.Bytes, v.Version)
-	}
-	f.mu.Lock()
-	path = f.lastPath
-	f.mu.Unlock()
-	if !strings.Contains(path, "/versions/latest/") {
-		t.Fatalf("request path %q must carry the latest selector", path)
+
+	// Addressing the disabled revision directly, by its exact number, fails
+	// the same way: disabling is an access revocation, not a quirk of the
+	// "latest" selector specifically.
+	if _, err := p.Resolve(context.Background(), ref(t, "scaleway-sm://cred?revision=4")); !errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("?revision=4 against a disabled revision: got %v, want an error satisfying mamori.ErrNotFound", err)
 	}
 }
 

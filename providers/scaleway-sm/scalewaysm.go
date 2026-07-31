@@ -13,7 +13,7 @@
 //	scaleway-sm://<name>                  secret at the root path, latest enabled revision
 //	scaleway-sm://<path>/<name>            secret at an explicit path
 //	scaleway-sm://<name>?revision=<n>      an explicit revision number
-//	scaleway-sm://<name>?revision=latest   the newest revision, even if disabled
+//	scaleway-sm://<name>?revision=latest   the newest revision (fails if it is disabled)
 //
 // The LAST path segment is always the secret name; everything before it is
 // the path, a real slash-delimited directory Scaleway secrets are organized
@@ -28,13 +28,28 @@
 //
 // The ?revision option defaults to "latest_enabled" rather than "latest".
 // Disabling a revision is how a Scaleway operator revokes a leaked
-// credential without deleting its history, and "latest" ignores that state
-// entirely: it returns the newest revision even when it has just been
-// disabled. Defaulting to "latest" would mean mamori keeps serving a secret
-// an operator explicitly revoked, which is the opposite of what disabling a
-// revision is for. A caller who genuinely wants the newest revision
-// regardless of its enabled state can still ask for it with
-// ?revision=latest.
+// credential without deleting its history, and on Scaleway a disabled
+// revision is INACCESSIBLE, not merely deprioritized: scaleway-sdk-go
+// documents a disabled SecretVersion as "not accessible but can be enabled",
+// and the Scaleway CLI names the operation to match (scw secret version
+// disable/enable = make a version inaccessible/accessible). So "latest" does
+// not survive a revocation - a request for it FAILS the instant the newest
+// revision is disabled, it does not fall back and does not return that
+// revision's bytes - while "latest_enabled" is the selector that keeps
+// working across a revocation, automatically resolving the newest revision
+// that is still enabled. That is the actual reason for the default: not that
+// "latest" would keep serving a secret an operator revoked (it would not
+// serve anything at all), but that only "latest_enabled" degrades
+// gracefully instead of breaking.
+//
+// There is no escape hatch that returns the newest revision regardless of
+// its enabled state; Scaleway does not offer one. A caller who pins
+// ?revision=latest and later has that revision disabled will see the
+// request fail, and because a 404 from this API does not distinguish "no
+// such revision" from "that revision is disabled" (see classifyStatus's doc
+// comment in resolve.go), that failure surfaces as mamori.ErrNotFound - which
+// means an optional or defaulted field goes quiet and silently falls back to
+// its default instead of announcing the revocation.
 //
 // # Authentication
 //

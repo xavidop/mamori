@@ -59,7 +59,7 @@ than inferred from prose documentation.
 scaleway-sm://<name>                      secret at the root path
 scaleway-sm://<path>/<name>               secret at /<path>
 scaleway-sm://<name>?revision=7           pin an exact revision
-scaleway-sm://<name>?revision=latest      newest revision, enabled or not
+scaleway-sm://<name>?revision=latest      newest revision (fails if it is disabled)
 scaleway-sm://<name>#user                 select a field of a JSON secret
 scaleway-sm://<name>#/db/password         RFC 6901 pointer selection
 ```
@@ -94,11 +94,16 @@ reads as a decision rather than a gap.
 `?revision=` accepts what the API accepts: a number, `latest`, or
 `latest_enabled`. **The default is `latest_enabled`**, not `latest`.
 
-That default is the load-bearing choice in this design. `latest` returns the
-newest revision even if an operator has disabled it, and disabling a revision
-is exactly how an operator revokes a leaked credential. Defaulting to `latest`
-would mean mamori keeps serving a secret that has been explicitly disabled,
-which is the opposite of what a disable is for.
+That default is the load-bearing choice in this design. Disabling a revision
+is exactly how an operator revokes a leaked credential, and on Scaleway that
+makes the revision INACCESSIBLE, not merely non-default: a request for a
+disabled revision fails outright, whether it is addressed by its exact number
+or reached via `latest`. So `latest` does not survive a revocation - it
+breaks the instant the newest revision is disabled - while `latest_enabled`
+is the selector that keeps working, automatically resolving the newest
+revision that is still enabled. Defaulting to `latest` would not "keep
+serving a secret that has been explicitly disabled" - it would keep serving
+nothing at all - which is why `latest_enabled`, not `latest`, is the default.
 
 ## Authentication and configuration
 

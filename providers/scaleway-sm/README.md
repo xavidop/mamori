@@ -24,8 +24,8 @@ credentials exist at process start.
 ```
 scaleway-sm://<name>                  secret at the root path, latest enabled revision
 scaleway-sm://<path>/<name>           secret at an explicit path
-scaleway-sm://<name>?revision=<n>     an explicit revision number
-scaleway-sm://<name>?revision=latest  the newest revision, even if disabled
+scaleway-sm://<name>?revision=<n>     an explicit revision number (fails if disabled)
+scaleway-sm://<name>?revision=latest  the newest revision (fails if it is disabled)
 ```
 
 - `<name>` - the **last** path segment, always. Everything before it is `<path>`, a
@@ -60,8 +60,8 @@ only have a secret ID, look up its path in the Scaleway console or with `scw` fi
 | `scaleway-sm://db-password` | Latest enabled revision of `db-password` at the root path |
 | `scaleway-sm://prod/db-password` | Latest enabled revision of `db-password` under path `/prod` |
 | `scaleway-sm://a/b/c/secret` | Latest enabled revision of `secret` under path `/a/b/c` |
-| `scaleway-sm://db-password?revision=7` | Revision `7` exactly, whether or not it is enabled |
-| `scaleway-sm://db-password?revision=latest` | The newest revision, even if it has been disabled |
+| `scaleway-sm://db-password?revision=7` | Revision `7` exactly - fails if revision `7` is disabled |
+| `scaleway-sm://db-password?revision=latest` | The newest revision - fails if that revision is disabled |
 | `scaleway-sm://api-config#timeout` | Field `timeout` of the JSON-valued secret `api-config` |
 
 ```go
@@ -75,11 +75,20 @@ type Config struct {
 ## Revisions and the disabled state
 
 Disabling a revision is how a Scaleway operator revokes a leaked credential
-without deleting its history, and that is exactly why `?revision` defaults to
-`latest_enabled` rather than `latest`: `latest` ignores the enabled/disabled state
-entirely and returns the newest revision regardless, which would mean mamori kept
-serving a secret an operator had just explicitly revoked - the opposite of what
-disabling a revision is for.
+without deleting its history. On Scaleway, disabling is an access revocation,
+not a preference hint: `scaleway-sdk-go` documents a disabled `SecretVersion`
+as "not accessible but can be enabled," and the Scaleway CLI names the
+operation to match (`scw secret version disable`/`enable` = make a version
+inaccessible/accessible). **A request for a disabled revision fails.** It does
+not return that revision's bytes, whether the revision is named by number or
+reached via `?revision=latest`.
+
+That is why `?revision` defaults to `latest_enabled` rather than `latest`:
+`latest_enabled` is the selector that keeps working across a revocation,
+automatically falling back to the newest revision that is still enabled,
+while `latest` breaks the moment the newest revision is disabled. Defaulting
+to `latest` would not "keep serving a revoked secret" - it would serve
+nothing at all the instant an operator revoked one.
 
 Given a secret with revision 3 enabled and a newer revision 4 that has been
 disabled:
@@ -87,10 +96,18 @@ disabled:
 | Ref | Resolves to |
 | --- | --- |
 | `scaleway-sm://cred` (no `?revision`) | Revision 3 - the newest **enabled** one |
-| `scaleway-sm://cred?revision=latest` | Revision 4 - the newest revision, disabled state notwithstanding |
+| `scaleway-sm://cred?revision=latest` | **Fails** - revision 4 is the newest, but it is disabled and therefore inaccessible |
+| `scaleway-sm://cred?revision=4` | **Fails** for the same reason: pinning the disabled revision's exact number does not help |
 
-A caller who genuinely wants the newest revision regardless of its enabled state
-can still ask for it explicitly with `?revision=latest`.
+There is no escape hatch that returns the newest revision regardless of its
+enabled state; Scaleway does not offer one. This interacts with [the 404
+caveat](#error-classification) below: this API's 404 does not distinguish an
+unknown secret from a disabled or nonexistent revision, so a ref that pins
+`?revision=latest` and is later hit by a revocation degrades silently to the
+field's default (or optional handling) instead of failing loudly - the same
+silent-degradation hazard the 404 caveat already describes for a deleted
+revision. `latest_enabled` avoids the failure in the first place, which is
+the strongest reason to leave it as the default rather than pinning `latest`.
 
 ## Value mapping
 
@@ -102,17 +119,23 @@ can still ask for it explicitly with `?revision=latest`.
 - **`Value.Version` is the backend revision, not a content hash.** It is always
   `resp.Revision` rendered as a decimal string - never `mamori.VersionHash`, and
   never affected by a `#field` selection that narrows the returned bytes. This is
-  the first provider in this trio that can do this: every sibling that reads a
-  general-purpose config store falls back to a content hash because its backend
-  exposes no revision, which makes two byte-identical values at two different
-  points in time indistinguishable to it. A real secret manager does not have
-  that excuse - the revision already identifies exactly which write produced
-  these bytes - so change detection here does not depend on comparing bytes at
-  all: a rewrite that happens to produce the same bytes as before still advances
-  `Version`, and mamori's poller will correctly treat it as a change. A `#field`
-  selection changes which bytes are returned, not which secret version they came
-  from, so `Version` stays the revision of the underlying secret even when the
-  resolved payload is only part of it.
+  the first provider in this trio of recent additions (alongside `providers/vercel-gc`
+  and `providers/cloudflare-kv`) that can do this: the other two read a
+  general-purpose config or KV store and fall back to a content hash because their
+  backend exposes no revision, which makes two byte-identical values at two
+  different points in time indistinguishable to them. (Reporting a real backend
+  version is not unique to this trio across the wider repo - `providers/aws`,
+  `providers/gcp`, `providers/azure`, `providers/vault`, `providers/k8s`, and
+  `providers/onepassword` all do it too, as do `providers/etcd` and
+  `providers/consul`, which are general-purpose stores that happen to expose one
+  anyway - but within this trio it is new.) A real secret manager does not have
+  the general-purpose store's excuse - the revision already identifies exactly
+  which write produced these bytes - so change detection here does not depend on
+  comparing bytes at all: a rewrite that happens to produce the same bytes as
+  before still advances `Version`, and mamori's poller will correctly treat it as
+  a change. A `#field` selection changes which bytes are returned, not which
+  secret version they came from, so `Version` stays the revision of the
+  underlying secret even when the resolved payload is only part of it.
 - **`Value.Metadata` carries `region` and `revision`, and nothing else** - not the
   secret id, not the project id, not the path, and never the value. This is
   deliberate: a secret's location is itself information, and `Metadata` reaches
@@ -154,10 +177,14 @@ status:
 | anything else | `unknown` |
 
 **The 404 caveat.** Scaleway's by-path access route returns the same 404, with no
-distinguishing error code in the body, whether the secret name is unknown or the
-secret is known but the requested revision does not exist. A ref asking for
-`?revision=99` against a secret that has only ever reached revision 12 gets the
-same 404 an entirely absent secret would, and therefore degrades silently to the
+distinguishing error code in the body, whether the secret name is unknown, the
+secret is known but the requested revision does not exist, or the requested
+revision is known but **disabled** (see [Revisions and the disabled
+state](#revisions-and-the-disabled-state) above - disabling makes a revision
+inaccessible, not merely non-default). A ref asking for `?revision=99` against a
+secret that has only ever reached revision 12 gets the same 404 an entirely
+absent secret would, and so does a ref pinning `?revision=latest` after an
+operator disables the newest revision. Either way it degrades silently to the
 field's default or optional handling, exactly as if the secret had never existed
 at all. Scaleway has not published a stable enough error-code vocabulary in the
 response body to key this mapping on anything but the status, so codes not
@@ -224,7 +251,7 @@ revision, see above) to detect a change between ticks.
 | `Value.Sensitive` is `true`, and wrapping the resolved bytes in `secret.String` redacts under `fmt` | **Verified** (`TestResolveValueSensitiveAndRedactsViaSecretString`) |
 | `Value.Metadata` carries exactly `region` and `revision` - never the secret id, project id, path, or value | **Verified** (`TestResolveMetadataOnlyRegionAndRevision`) |
 | CRC verification: a matching `data_crc32` resolves, a mismatch fails with `mamori.ErrInvalid`, and an absent `data_crc32` is not an error | **Verified** (unit tests) |
-| The disabled-revision decision: `?revision` defaulting to `latest_enabled` skips a disabled revision, while `?revision=latest` still reaches it | **Verified** (`TestResolveLatestEnabledSkipsDisabledRevision`) |
+| The disabled-revision decision: `?revision` defaulting to `latest_enabled` skips a disabled revision and resolves the newest enabled one; a disabled revision fails to resolve regardless of whether it is addressed via `latest` or by its exact number | **Verified** (`TestResolveLatestEnabledSkipsDisabledRevision`, `TestResolveDisabledRevisionFails`) |
 | `#field` and `#/json/pointer` selection, including a nested pointer | **Verified** (unit tests) |
 | Not-found (unknown secret) | **Verified** (`TestResolveUnknownSecretIsNotFound`) |
 | Error classification (401/403/429/400/5xx), exercised through `Resolve` and by table tests against `classifyStatus` directly | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
