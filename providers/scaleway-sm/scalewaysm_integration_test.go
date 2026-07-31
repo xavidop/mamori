@@ -15,6 +15,19 @@
 // Secret Manager falls back to "fr-par" the same way the non-integration
 // path does.
 //
+// SCALEWAY_SM_TEST_SECRET should be provisioned with AT LEAST TWO revisions.
+// TestIntegrationRevisionIsBackendRevision exists to verify the one property
+// a fake can never check: that a pinned ?revision=<n> actually reaches the
+// API and is honored, rather than being silently ignored in favor of the
+// default latest_enabled selector. On a single-revision secret that check is
+// a tautology - pinning revision=1 and resolving latest_enabled both name
+// the same underlying revision, so a provider that ignored the parsed
+// revision entirely and always sent latest_enabled would still "pass" by
+// coincidence. The test detects that degenerate case and calls t.Skip naming
+// exactly what it could not verify, rather than reporting a false PASS; give
+// it a secret with two or more revisions so the meaningful half actually
+// runs.
+//
 // Nothing here ever logs a resolved value, the API secret key, or the
 // project id - only the secret name (an environment variable the operator
 // chose, not a secret in itself) and a byte count.
@@ -66,6 +79,8 @@ func TestIntegrationResolve(t *testing.T) {
 	}
 	if v.Version == "" {
 		t.Errorf("Resolve(%q) returned an empty Version", testSecret)
+	} else if _, perr := strconv.ParseUint(v.Version, 10, 32); perr != nil {
+		t.Errorf("Resolve(%q) returned Version %q that does not parse as a decimal revision number: %v", testSecret, v.Version, perr)
 	}
 	if !v.Sensitive {
 		t.Errorf("Resolve(%q) returned Sensitive=false; this provider must always report Sensitive=true", testSecret)
@@ -80,17 +95,26 @@ func TestIntegrationResolve(t *testing.T) {
 // "revision" field that means what valueFor assumes it means. This test
 // resolves the test secret once at its default selector (latest_enabled) to
 // learn its current revision number, then resolves it again with that exact
-// revision pinned via ?revision=<n>, and asserts the two agree - proving
-// Version really does track the pinned revision rather than something
-// incidental to the request (a static value, a hash, an unrelated counter).
+// revision pinned via ?revision=<n>, and asserts the two agree.
 //
-// When the live secret has more than one revision, it additionally pins
-// revision 1 (which the module doc comment and fake_test.go agree always
-// exists once a secret has been written at all) and asserts THAT resolves to
-// Version "1", distinct from the newer revision latest_enabled reported -
-// the "returned versions differ appropriately" half of this check. A secret
-// with only one revision cannot exercise that half, so it is skipped rather
-// than faked.
+// That round-trip alone is NOT sufficient, and must not be mistaken for
+// proof that ?revision=<n> is honored: on a secret with only one revision,
+// pinning revision=1 and resolving latest_enabled both name the same
+// underlying revision, so a provider that silently ignored the parsed
+// revision and always sent latest_enabled regardless of what the ref asked
+// for would still make pinned.Version equal latest.Version, purely by
+// coincidence. It is a necessary check, not a sufficient one.
+//
+// The property that actually rules out that bug requires a SECOND, DIFFERENT
+// revision to compare against: when the live secret has more than one
+// revision, this test additionally pins revision 1 (which the module doc
+// comment and fake_test.go agree always exists once a secret has been
+// written at all) and asserts THAT resolves to Version "1", distinct from
+// the newer revision latest_enabled reported. Only this second comparison
+// can catch a provider that never threads the parsed revision through to the
+// request at all. A secret with only one revision cannot exercise that half,
+// so the test calls t.Skip naming exactly what went unverified, rather than
+// reporting a false PASS on the tautological check alone.
 func TestIntegrationRevisionIsBackendRevision(t *testing.T) {
 	secretKey, projectID, testSecret := liveCreds(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -135,8 +159,13 @@ func TestIntegrationRevisionIsBackendRevision(t *testing.T) {
 	t.Logf("Resolve(%q, revision=%d): %d byte(s), matches revision=latest_enabled", testSecret, latestRevision, len(pinned.Bytes))
 
 	if latestRevision <= 1 {
-		t.Logf("%q has only one revision; skipping the distinct-older-revision check", testSecret)
-		return
+		t.Skipf("%q has only one revision (revision %d). The pinned round-trip check above cannot "+
+			"distinguish a provider that honors ?revision=<n> from one that silently ignores it and "+
+			"always resolves latest_enabled instead, because both requests would reach the same "+
+			"revision on a single-revision secret; that property is UNVERIFIED by this run, not "+
+			"confirmed. Provision SCALEWAY_SM_TEST_SECRET with at least two revisions so the "+
+			"distinct-older-revision check can run and actually rule that bug out.",
+			testSecret, latestRevision)
 	}
 
 	firstRef, err := mamori.ParseRef("scaleway-sm://" + testSecret + "?revision=1")
