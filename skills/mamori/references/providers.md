@@ -31,6 +31,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `k8s` | `k8s-secret://` `k8s-cm://` | `k8s-secret://ns/name#key` |
 | `consul` | `consul://` | `consul://app/config` |
 | `etcd` | `etcd://` | `etcd://app/config` |
+| `vercel-gc` | `vercel-gc://` | `vercel-gc://my-flag`, `vercel-gc://ecfg_abc/my-flag` |
 | `postgres` | `postgres://` | connection-string backed |
 | `mysql` | `mysql://` | connection-string backed |
 | `sqlite` | `sqlite://` | file-backed |
