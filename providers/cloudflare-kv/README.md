@@ -78,7 +78,7 @@ the single-key value endpoint. That endpoint's response body is the value's
 the bytes this provider returns, verbatim (after `#field`/`#/json/pointer`
 selection, when the ref asks for it).
 
-`mamori.Load` instead calls `ResolveBatch` once for every ref in the struct, and
+`mamori.Load` instead calls `ResolveBatch` once, for all the refs in the struct, and
 this is where the API's shape flips: the bulk endpoint wraps every value inside
 a JSON envelope (`{"result":{"values":{...}}}`), unlike the single-key GET's raw
 bytes. This asymmetry is real, not a provider quirk, and it is easy to get
@@ -117,12 +117,30 @@ because each is a decision a reader would otherwise assume went the other way:
 
 `Value.Metadata["namespace"]` records which namespace actually served the
 value, which is worth checking when a ref's `?namespace=` override is in play.
+This is a deliberate choice, not an oversight sitting next to the credential
+hygiene described below: a namespace id is an identifier, not a credential -
+it names a bucket, it does not authenticate anything - so the spec blesses
+publishing it in `Metadata`. The error-path stripping in the next section is
+about not rendering a whole request URL into an error string, not about the
+namespace id itself being secret; the two do not contradict each other.
 
 ## Error classification
 
-A 404 from either endpoint reports `mamori.ErrNotFound` directly, detected
-before status classification runs. Beyond that, every other non-2xx response is
-classified by HTTP status:
+A 404 is detected before status classification runs, on both the single-key
+GET path and the bulk POST path, rather than falling into the generic
+HTTP-status mapping below - but the two paths do different things with it,
+deliberately. `Resolve` returns the detected 404 directly as an error
+satisfying `mamori.ErrNotFound`. `ResolveBatch` does not return an error for
+it at all: the bulk endpoint has no per-key 404 (a missing key is simply
+omitted from a successful response's `values`, as described above), so a 404
+there can only mean the namespace itself does not exist, and `ResolveBatch`
+treats that exactly like a namespace full of absent keys - it omits every
+requested key from the result map, so mamori applies each affected ref's
+default, rather than failing the whole call and losing every sibling ref over
+one bad namespace.
+
+Beyond 404, every other non-2xx response is classified by HTTP status,
+identically on both paths:
 
 | HTTP status | mamori kind |
 | --- | --- |
@@ -137,9 +155,10 @@ classified by HTTP status:
 in Cloudflare's response: both return a plain 404 with no error code this
 provider can key on. That means a namespace id that is simply wrong presents
 exactly like a namespace full of genuinely absent keys - every field in your
-config silently falls back to its default, with no error surfaced anywhere. If
-every field unexpectedly defaults at once, check `Status()` before assuming the
-keys themselves are missing; a misconfigured namespace is the more likely cause.
+config silently falls back to its default, with no error surfaced anywhere, on
+either the single-key or the batch path. If every field unexpectedly defaults
+at once, check `Status()` before assuming the keys themselves are missing; a
+misconfigured namespace is the more likely cause.
 
 **Credentials never reach an error.** The API token always travels in the
 `Authorization: Bearer` header, never a URL or query parameter, so a resolved
@@ -229,11 +248,14 @@ either.
 | `ResolveBatch` chunking at the 100-key ceiling, including the exact 100/101 boundary and a 250-key request split into 100+100+50 | **Verified** (`TestResolveBatchChunksAt250`, `TestResolveBatchChunkBoundary`) |
 | `ResolveBatch` grouped by namespace; a key deduplicated across refs that select different `#field`s fans out to every ref | **Verified** (`TestResolveBatchGroupsByNamespace`, `TestResolveBatchDedupedKeyFansOutToAllRefs`) |
 | An absent key omitted from a batch response leaves its siblings intact, per the `BatchProvider` contract; an invalid selection still fails the batch | **Verified** (unit tests) |
+| A 404 namespace on the bulk path omits that namespace's keys instead of failing the batch, and a sibling namespace's ref still resolves | **Verified** (`TestResolveBatchNotFoundNamespaceOmitsKeys`, `TestResolveBatchSurvivesSiblingNamespaceNotFound`) |
 | Error classification (401/403/429/400/5xx), exercised from both the single-key path and the bulk path | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
-| Credentials never reach an error: the token never appears in an error string, and a transport failure's error never carries the request URL (account id) | **Verified** (`TestSettingsErrorsNeverCarryCredentials`, `TestResolveSendsBearerTokenNeverInURL`, `TestResolveTransportErrorNeverLeaksCredentials`) |
+| A namespace containing `/` (ref-controlled via `?namespace=`) travels percent-encoded in the request path, on both the single-key and the bulk path | **Verified** (`TestResolveNamespaceWithSlashIsEscaped`, `TestResolveBatchNamespaceWithSlashIsEscaped`) |
+| Credentials never reach an error: the token, account id, and namespace id never appear in an error string, on any of the four `sanitizeTransportError` call sites (`NewRequestWithContext` and `httpClient.Do`, in each of `get` and `bulkGet`) | **Verified** (`TestSettingsErrorsNeverCarryCredentials`, `TestResolveSendsBearerTokenNeverInURL`, `TestResolveTransportErrorNeverLeaksCredentials`, `TestResolveBatchTransportErrorNeverLeaksCredentials`, `TestResolveMalformedBaseURLNeverLeaksCredentials`, `TestResolveBatchMalformedBaseURLNeverLeaksCredentials`) |
 | No cache: every `Resolve` reaches the fake transport, never a held value | **Verified** (`TestResolveNeverCaches`) |
 | Context cancellation | **Verified** (unit tests) |
 | `BatchProvider` is implemented; `WatchableProvider` is deliberately not | **Verified** (`TestProviderImplementsBatchProvider`, `TestProviderIsNotWatchable`) |
+| `Resolve` and `ResolveBatch` agree on `Version`, `Sensitive`, and `Metadata` for the same ref, not just `Bytes` | **Verified** (`TestResolveBatchOmitsAbsentKeySiblingsSurvive`) |
 | End-to-end against a real Workers KV namespace, including that `Resolve` and `ResolveBatch` agree on the same key despite the raw-bytes-vs-envelope asymmetry | **Needs a live backend** - see the integration test |
 
 The unit and conformance tests use an in-memory fake that emulates both Workers

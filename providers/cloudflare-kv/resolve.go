@@ -85,7 +85,16 @@ type bulkGetResponseBody struct {
 // selection (for example selecting a #field of a value that is not a JSON
 // object) is a different class of problem - a malformed request against the
 // payload, not an absence - and still fails the batch, as does a namespace
-// that cannot be read at all.
+// that fails for any reason other than a plain 404.
+//
+// A 404 on a namespace's bulk request is that same not-an-absence-failure
+// split applied one level up: bulkGet reports it as mamori.ErrNotFound, and
+// the chunk loop below skips that chunk's keys - leaving their refs absent
+// from the result map, exactly like an absent key - instead of returning the
+// error and failing every sibling ref in the batch, in this namespace or any
+// other. A single misconfigured namespace among many refs must not be able to
+// take the whole batch down with it, any more than a missing optional field
+// can.
 func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[string]mamori.Value, error) {
 	if len(refs) == 0 {
 		return map[string]mamori.Value{}, nil
@@ -129,6 +138,18 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 
 			values, err := p.bulkGet(ctx, g.settings, chunkKeys)
 			if err != nil {
+				if errors.Is(err, mamori.ErrNotFound) {
+					// The namespace itself does not exist (see bulkGet's 404
+					// branch); skip this chunk's keys so their refs fall back
+					// to defaults, exactly as a namespace-not-found Resolve
+					// lets its own caller's onfail/default handling take
+					// over. This is a namespace-level decision, distinct from
+					// the per-ref #field-not-found swallow around valueFor
+					// below: one bad namespace must not fail every sibling
+					// ref sharing this batch, in any other namespace or in
+					// this one.
+					continue
+				}
 				return nil, err
 			}
 			for _, key := range chunkKeys {
@@ -179,6 +200,20 @@ func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusNotFound {
+		// Unlike get, an absent key never reaches this branch: the bulk
+		// endpoint has no per-key 404 - a missing key is simply omitted from
+		// a successful response's Values map (see bulkGetResponseBody's doc
+		// comment). A 404 here can therefore only mean the namespace itself
+		// does not exist, so it is classified as mamori.ErrNotFound before
+		// classifyStatus ever sees it, exactly as get's namespace-not-found
+		// case is. ResolveBatch's call site treats this the same way it
+		// treats an absent key: this chunk's keys are skipped so their refs
+		// fall back to their defaults, rather than one bad namespace failing
+		// every sibling ref in the batch.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("mamori/cloudflare-kv: namespace not found for bulk get of %d key(s): %w", len(keys), mamori.ErrNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		// Read a bounded amount of the error body for diagnostics. Never log it.
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -243,6 +278,12 @@ func (p *Provider) get(ctx context.Context, s settings, key string) ([]byte, err
 	if resp.StatusCode == http.StatusNotFound {
 		// Either the key or the namespace is absent; see classifyStatus's doc
 		// comment for why the response does not reliably distinguish them.
+		// Drain and discard a bounded amount of the body before returning:
+		// this provider caches nothing, so an absent key is read again on
+		// every poll tick, and leaving the body unread here would prevent
+		// the connection being reused, paying a fresh TCP and TLS handshake
+		// on every one of those ticks.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("mamori/cloudflare-kv: key %q not found: %w", key, mamori.ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -271,6 +312,11 @@ func (p *Provider) get(ctx context.Context, s settings, key string) ([]byte, err
 // errors.Is(_, context.Canceled) (and similar checks) working: *url.Error
 // already unwraps to the same underlying error via its own Unwrap method, so
 // this changes only the rendered message, never the errors.Is chain.
+//
+// The final `return err` is deliberate, not a missed case: by construction
+// only a *url.Error carries a rendered request URL, so any other error type
+// already has nothing to strip, and wrapping it here would add noise without
+// removing anything sensitive.
 func sanitizeTransportError(err error) error {
 	if err == nil {
 		return nil
@@ -310,7 +356,7 @@ func valueFor(b []byte, ref mamori.Ref, namespace string) (mamori.Value, error) 
 // classifyStatus maps a Workers KV REST API status onto a mamori
 // classification sentinel, wrapping statusErr so both the sentinel and the
 // diagnostic context survive in the errors.Is chain. 404 is handled by its own
-// branch in get and never reaches this function.
+// branch in both get and bulkGet and never reaches this function.
 //
 // The mapping follows ordinary HTTP semantics: 401 for a missing or invalid
 // API token, 403 for a token that authenticates but lacks permission to read

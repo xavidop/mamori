@@ -66,7 +66,9 @@ A single ref resolves through the single-key value endpoint, whose response body
 
 ## Error classification
 
-A 404 from either endpoint reports `not_found` directly. Beyond that, failures are classified by HTTP status:
+A 404 is detected before status classification runs, on both the single-key GET path and the bulk POST path - but the two do different things with it. `Resolve` returns it directly as an error satisfying `mamori.ErrNotFound`. `ResolveBatch` does not return an error for it at all: the bulk endpoint has no per-key 404 (a missing key is simply omitted from a successful response's `values`), so a 404 there can only mean the namespace itself does not exist, and `ResolveBatch` treats that exactly like a namespace full of absent keys - omitting every requested key from the result so mamori applies each ref's default, rather than failing the whole call and losing every sibling ref over one bad namespace.
+
+Beyond 404, every other failure is classified by HTTP status, identically on both paths:
 
 | HTTP status | mamori kind |
 | --- | --- |
@@ -77,9 +79,9 @@ A 404 from either endpoint reports `not_found` directly. Beyond that, failures a
 | 5xx | `unavailable` |
 | anything else | `unknown` |
 
-An absent key and an absent namespace both return a plain 404 and are indistinguishable in the response. A namespace id that is simply wrong therefore presents exactly like a namespace full of genuinely absent keys: every field in your config silently falls back to its default. If everything unexpectedly defaults at once, check `Status()` before assuming the keys themselves are missing.
+An absent key and an absent namespace both return a plain 404 and are indistinguishable in the response. A namespace id that is simply wrong therefore presents exactly like a namespace full of genuinely absent keys: every field in your config silently falls back to its default, on either the single-key or the batch path. If everything unexpectedly defaults at once, check `Status()` before assuming the keys themselves are missing.
 
-The API token always travels as an `Authorization: Bearer` header, never a query parameter. The account id and namespace id are part of every request URL, and `http.Client.Do` wraps transport failures in a `*url.Error` whose message renders that URL - this provider strips it before returning the error, so an ordinary network hiccup never puts either id into an error message.
+The API token always travels as an `Authorization: Bearer` header, never a query parameter. The account id and namespace id are part of every request URL, and `http.Client.Do` wraps transport failures in a `*url.Error` whose message renders that URL - this provider strips it before returning the error, so an ordinary network hiccup never puts either id into an error message. The namespace id showing up here, in an error path, does not conflict with `Value.Metadata["namespace"]` publishing it deliberately above: a namespace id is an identifier, not a credential, and stripping it from errors is about not rendering whole request URLs, not about the id being secret.
 
 ## Watch
 

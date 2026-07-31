@@ -124,6 +124,40 @@ func TestResolveNamespaceOptionOverridesDefault(t *testing.T) {
 	}
 }
 
+// TestResolveNamespaceWithSlashIsEscaped pins that s.namespace, like the key,
+// travels through url.PathEscape before it is built into the request path.
+// The namespace is ref-controlled through ?namespace=, so without the escape
+// a namespace value containing "/" - or a full path-traversal payload such as
+// "..%2F..%2F..%2Fzones%2Fevil%2Fpurge" - would produce a request path that
+// escapes the intended /storage/kv/namespaces/<id>/... endpoint entirely.
+// TestResolveNamespaceOptionOverridesDefault uses a plain namespace needing no
+// escaping and cannot catch a missing escape; only asserting the literal
+// escaped bytes on the wire (as TestResolveKeyWithSlashesIsEscapedNotSplit
+// already does for the key) catches it, because a fake server decodes an
+// unescaped slash right back to the same path components.
+func TestResolveNamespaceWithSlashIsEscaped(t *testing.T) {
+	f := newFake()
+	const evilNamespace = "abc/def"
+	f.set(evilNamespace, "k", []byte("v"))
+	p := f.provider()
+
+	v, err := p.Resolve(context.Background(), ref(t, "cloudflare-kv://k?namespace="+evilNamespace))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(v.Bytes) != "v" {
+		t.Fatalf("got %q, want %q", v.Bytes, "v")
+	}
+
+	f.mu.Lock()
+	path := f.lastPath
+	f.mu.Unlock()
+	wantSubstr := "/storage/kv/namespaces/abc%2Fdef/values/k"
+	if !strings.Contains(path, wantSubstr) {
+		t.Fatalf("request path %q does not contain the escaped namespace %q; the namespace must be url.PathEscape'd before it reaches the request URL", path, wantSubstr)
+	}
+}
+
 func TestResolveAbsentKeyIsNotFound(t *testing.T) {
 	f := newFake()
 	p := f.provider()
@@ -312,22 +346,53 @@ func (erroringTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
 	return nil, errors.New("connection refused")
 }
 
+// secretToken, secretAccount, and secretNamespace are shared by every
+// credential-leak test below so a mismatched constant in one of them can
+// never silently narrow what a test actually checks for.
+const (
+	secretToken     = "super-secret-token"
+	secretAccount   = "super-secret-account-id"
+	secretNamespace = "super-secret-namespace-id"
+)
+
+// assertNoCredentialLeak fails t if err's text contains the token, the
+// account id, or the namespace id configured via secretToken, secretAccount,
+// and secretNamespace. None of the three is a URL-safe fixture value, so a
+// substring match cannot pass by accident.
+func assertNoCredentialLeak(t *testing.T, err error) {
+	t.Helper()
+	if strings.Contains(err.Error(), secretToken) {
+		t.Fatalf("error leaked the API token: %v", err)
+	}
+	if strings.Contains(err.Error(), secretAccount) {
+		t.Fatalf("error leaked the account id: %v", err)
+	}
+	if strings.Contains(err.Error(), secretNamespace) {
+		t.Fatalf("error leaked the namespace id: %v", err)
+	}
+}
+
 // TestResolveTransportErrorNeverLeaksCredentials pins the regression
-// providers/vercel-gc shipped: a live token or account id must never reach an
-// error message. vercel-gc's leak went through url.Parse on a connection
-// string; this provider has no connection string, but its request URL embeds
-// the account id and namespace id, and http.Client.Do wraps every
+// providers/vercel-gc shipped: a live token, account id, or namespace id must
+// never reach an error message. vercel-gc's leak went through url.Parse on a
+// connection string; this provider has no connection string, but its request
+// URL embeds the account id and namespace id, and http.Client.Do wraps every
 // transport-level failure in a *url.Error whose Error() renders the full
 // request URL. Without sanitizing that, an ordinary network hiccup - not
-// even a bug in this provider - would put the account id into a returned
-// error's text.
+// even a bug in this provider - would put the account id and namespace id
+// into a returned error's text.
+//
+// This is one of four sanitizeTransportError call sites (the
+// NewRequestWithContext branch and the httpClient.Do branch, in each of get
+// and bulkGet); the other three are pinned by
+// TestResolveBatchTransportErrorNeverLeaksCredentials,
+// TestResolveMalformedBaseURLNeverLeaksCredentials, and
+// TestResolveBatchMalformedBaseURLNeverLeaksCredentials below.
 func TestResolveTransportErrorNeverLeaksCredentials(t *testing.T) {
-	const secretToken = "super-secret-token"
-	const secretAccount = "super-secret-account-id"
 	p := New(
 		WithAPIToken(secretToken),
 		WithAccountID(secretAccount),
-		WithNamespaceID("ns"),
+		WithNamespaceID(secretNamespace),
 		WithHTTPClient(&http.Client{Transport: erroringTransport{}}),
 	)
 
@@ -335,10 +400,65 @@ func TestResolveTransportErrorNeverLeaksCredentials(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error from a failing transport")
 	}
-	if strings.Contains(err.Error(), secretToken) {
-		t.Fatalf("error leaked the API token: %v", err)
+	assertNoCredentialLeak(t, err)
+}
+
+// TestResolveBatchTransportErrorNeverLeaksCredentials is
+// TestResolveTransportErrorNeverLeaksCredentials's counterpart for
+// bulkGet's httpClient.Do branch: ResolveBatch, not Resolve, is the only
+// caller that reaches it, and nothing before this covered it directly - the
+// existing leak test only ever drove Resolve.
+func TestResolveBatchTransportErrorNeverLeaksCredentials(t *testing.T) {
+	p := New(
+		WithAPIToken(secretToken),
+		WithAccountID(secretAccount),
+		WithNamespaceID(secretNamespace),
+		WithHTTPClient(&http.Client{Transport: erroringTransport{}}),
+	)
+
+	_, err := p.ResolveBatch(context.Background(), []mamori.Ref{ref(t, "cloudflare-kv://k")})
+	if err == nil {
+		t.Fatal("want an error from a failing transport")
 	}
-	if strings.Contains(err.Error(), secretAccount) {
-		t.Fatalf("error leaked the account id: %v", err)
+	assertNoCredentialLeak(t, err)
+}
+
+// TestResolveMalformedBaseURLNeverLeaksCredentials pins the
+// NewRequestWithContext branch in get, the one sanitizeTransportError call
+// site nothing previously exercised: a malformed WithBaseURL makes
+// url.Parse fail inside http.NewRequestWithContext itself, before any
+// network call, and that failure is also a *url.Error whose Error() renders
+// the full (unreachable) request URL - unsanitized, it would read
+// `parse "http://example.com/%zz/accounts/<account>/storage/kv/namespaces/<namespace>/values/k": ...`.
+func TestResolveMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
+	p := New(
+		WithAPIToken(secretToken),
+		WithAccountID(secretAccount),
+		WithNamespaceID(secretNamespace),
+		WithBaseURL("http://example.com/%zz"),
+	)
+
+	_, err := p.Resolve(context.Background(), ref(t, "cloudflare-kv://k"))
+	if err == nil {
+		t.Fatal("want an error from a malformed base URL")
 	}
+	assertNoCredentialLeak(t, err)
+}
+
+// TestResolveBatchMalformedBaseURLNeverLeaksCredentials is
+// TestResolveMalformedBaseURLNeverLeaksCredentials's counterpart for
+// bulkGet's NewRequestWithContext branch.
+func TestResolveBatchMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
+	p := New(
+		WithAPIToken(secretToken),
+		WithAccountID(secretAccount),
+		WithNamespaceID(secretNamespace),
+		WithBaseURL("http://example.com/%zz"),
+	)
+
+	_, err := p.ResolveBatch(context.Background(), []mamori.Ref{ref(t, "cloudflare-kv://k")})
+	if err == nil {
+		t.Fatal("want an error from a malformed base URL")
+	}
+	assertNoCredentialLeak(t, err)
 }

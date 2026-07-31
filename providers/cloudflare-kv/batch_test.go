@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -202,6 +204,13 @@ func TestResolveBatchDedupedKeyFansOutToAllRefs(t *testing.T) {
 // at its most basic: an absent key must be omitted from the result map, not
 // fail the whole call, and a sibling ref in the same batch must still
 // resolve.
+//
+// It also carries the spec's "Resolve and ResolveBatch agree" testing-table
+// promise for the full mamori.Value, not just Bytes: every other assertion in
+// this file compares .Bytes only, and the sole full-observable comparison
+// otherwise lives in the integration test, which skips without live
+// credentials. Version, Sensitive, and Metadata are asserted equal between
+// the two paths for the same ref here so that parity is pinned offline too.
 func TestResolveBatchOmitsAbsentKeySiblingsSurvive(t *testing.T) {
 	f := newFake()
 	f.set(testNamespace, "present", []byte("yes"))
@@ -222,6 +231,21 @@ func TestResolveBatchOmitsAbsentKeySiblingsSurvive(t *testing.T) {
 	}
 	if string(got["cloudflare-kv://present"].Bytes) != "yes" {
 		t.Errorf("sibling: got %q, want %q", got["cloudflare-kv://present"].Bytes, "yes")
+	}
+
+	single, err := p.Resolve(context.Background(), ref(t, "cloudflare-kv://present"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	batched := got["cloudflare-kv://present"]
+	if single.Version != batched.Version {
+		t.Errorf("Version mismatch: Resolve=%q ResolveBatch=%q", single.Version, batched.Version)
+	}
+	if single.Sensitive != batched.Sensitive {
+		t.Errorf("Sensitive mismatch: Resolve=%v ResolveBatch=%v", single.Sensitive, batched.Sensitive)
+	}
+	if !maps.Equal(single.Metadata, batched.Metadata) {
+		t.Errorf("Metadata mismatch: Resolve=%v ResolveBatch=%v", single.Metadata, batched.Metadata)
 	}
 }
 
@@ -304,6 +328,13 @@ func TestResolveBatchSuccessFalseIsInvalid(t *testing.T) {
 // as the single-key GET path (see TestResolveClassifiesFailureStatus in
 // resolve_test.go), rather than the bulk path having quietly grown its own,
 // unclassified error handling.
+//
+// 404 is deliberately not in this table: unlike every status here, it never
+// reaches classifyStatus at all (bulkGet has its own branch for it, mirroring
+// get's), and it does not fail the batch the way these do - see
+// TestResolveBatchNotFoundNamespaceOmitsKeys and
+// TestResolveBatchSurvivesSiblingNamespaceNotFound below for its actual,
+// divergent behavior.
 func TestResolveBatchClassifiesFailureStatus(t *testing.T) {
 	tests := []struct {
 		code int
@@ -327,6 +358,89 @@ func TestResolveBatchClassifiesFailureStatus(t *testing.T) {
 				t.Fatalf("status %d: got %v, want an error satisfying %v", tc.code, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveBatchNotFoundNamespaceOmitsKeys pins the one status that
+// diverges from TestResolveBatchClassifiesFailureStatus's table: a 404 on the
+// bulk endpoint must not fail the batch at all. It means the namespace itself
+// does not exist (see bulkGet's 404 branch), so ResolveBatch treats every key
+// requested against it exactly like an absent key - omitted from the result
+// map so mamori applies each ref's default - rather than returning an
+// unclassified error and failing every sibling ref in the batch, which is
+// what the shipped code did (a plain 404 fell into classifyStatus's default
+// case).
+func TestResolveBatchNotFoundNamespaceOmitsKeys(t *testing.T) {
+	f := newFake()
+	f.failStatus(testNamespace, http.StatusNotFound)
+	p := f.provider()
+
+	got, err := p.ResolveBatch(context.Background(), []mamori.Ref{ref(t, "cloudflare-kv://k")})
+	if err != nil {
+		t.Fatalf("a 404 namespace must not fail the batch, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d values, want 0 (the 404 namespace's keys must be omitted)", len(got))
+	}
+}
+
+// TestResolveBatchSurvivesSiblingNamespaceNotFound is Finding 1's headline
+// regression: a batch spanning a good namespace and a namespace that 404s
+// must still return the good namespace's values, matching the invariant
+// doctor.go's probeField doc comment states for BatchProvider in general -
+// ResolveBatch exists to cut round trips, not to change what a single ref
+// resolves to. Before this fix, the 404 fell through classifyStatus's default
+// case as an unclassified error and failed the whole call, losing the good
+// namespace's ref along with the bad one's.
+func TestResolveBatchSurvivesSiblingNamespaceNotFound(t *testing.T) {
+	f := newFake()
+	f.set(testNamespace, "good", []byte("still-here"))
+	f.failStatus("missing-namespace", http.StatusNotFound)
+	p := f.provider()
+
+	got, err := p.ResolveBatch(context.Background(), []mamori.Ref{
+		ref(t, "cloudflare-kv://good"),
+		ref(t, "cloudflare-kv://k?namespace=missing-namespace"),
+	})
+	if err != nil {
+		t.Fatalf("a sibling namespace's 404 must not fail the batch, got %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d values, want 1 (the good namespace's ref must survive)", len(got))
+	}
+	if string(got["cloudflare-kv://good"].Bytes) != "still-here" {
+		t.Errorf("good namespace: got %q, want %q", got["cloudflare-kv://good"].Bytes, "still-here")
+	}
+	if _, ok := got["cloudflare-kv://k?namespace=missing-namespace"]; ok {
+		t.Error("the 404 namespace's ref must be omitted, not resolved")
+	}
+}
+
+// TestResolveBatchNamespaceWithSlashIsEscaped is
+// TestResolveNamespaceWithSlashIsEscaped's counterpart for bulkGet
+// (resolve_test.go's covers get): url.PathEscape(s.namespace) is a separate
+// call in bulkGet, and a batch's namespace is exactly as ref-controlled
+// (via ?namespace=) as a single Resolve's is.
+func TestResolveBatchNamespaceWithSlashIsEscaped(t *testing.T) {
+	f := newFake()
+	const evilNamespace = "abc/def"
+	f.set(evilNamespace, "k", []byte("v"))
+	p := f.provider()
+
+	got, err := p.ResolveBatch(context.Background(), []mamori.Ref{ref(t, "cloudflare-kv://k?namespace="+evilNamespace)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got["cloudflare-kv://k?namespace="+evilNamespace].Bytes) != "v" {
+		t.Fatalf("got %q, want %q", got["cloudflare-kv://k?namespace="+evilNamespace].Bytes, "v")
+	}
+
+	f.mu.Lock()
+	path := f.lastPath
+	f.mu.Unlock()
+	wantSubstr := "/storage/kv/namespaces/abc%2Fdef/bulk/get"
+	if !strings.Contains(path, wantSubstr) {
+		t.Fatalf("request path %q does not contain the escaped namespace %q; the namespace must be url.PathEscape'd before it reaches the request URL", path, wantSubstr)
 	}
 }
 
