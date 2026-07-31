@@ -40,7 +40,11 @@ func TestResolveBatchIsOneRequestPerStore(t *testing.T) {
 		}
 	}
 
-	if _, items := f.counts(); items != 2 {
+	digests, items := f.counts()
+	if digests != 2 {
+		t.Errorf("got %d digest requests, want 2 (one per store, not one per ref: grouping must happen before any network call)", digests)
+	}
+	if items != 2 {
 		t.Errorf("got %d items requests, want 2 (one per store)", items)
 	}
 }
