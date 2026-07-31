@@ -266,6 +266,34 @@ func TestResolveErrorClassification(t *testing.T) {
 	}
 }
 
+// A failed resolve must not poison the held snapshot: once the backend
+// recovers, the next Resolve must return the real value rather than getting
+// stuck on whatever the failed attempt half-observed.
+func TestResolveRecoversAfterFailureCleared(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "k", `"v"`)
+	p := f.provider()
+	ctx := context.Background()
+
+	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://k")); err != nil {
+		t.Fatalf("priming resolve failed: %v", err)
+	}
+
+	f.failStatus(testStore, http.StatusInternalServerError)
+	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://k")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("got %v, want an error satisfying mamori.ErrUnavailable", err)
+	}
+
+	f.clearFail(testStore)
+	v, err := p.Resolve(ctx, ref(t, "vercel-gc://k"))
+	if err != nil {
+		t.Fatalf("resolve after clearing the failure: %v", err)
+	}
+	if string(v.Bytes) != "v" {
+		t.Fatalf("got %q, want %q", v.Bytes, "v")
+	}
+}
+
 func TestResolveUnknownStoreIsNotFound(t *testing.T) {
 	f := newFake()
 	p := f.provider()

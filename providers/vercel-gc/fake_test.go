@@ -49,14 +49,6 @@ func (f *fakeGC) set(store, key, rawJSON string) {
 	f.rev[store]++
 }
 
-// del removes a key and bumps the store digest.
-func (f *fakeGC) del(store, key string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.stores[store], key)
-	f.rev[store]++
-}
-
 // failStatus makes every request for store return code until clearFail.
 func (f *fakeGC) failStatus(store string, code int) {
 	f.mu.Lock()
@@ -129,14 +121,13 @@ func (f *fakeGC) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// server starts a real httptest.Server. Unit tests use this; the conformance
-// suite must not, because goleak cannot tolerate its accept goroutine.
-func (f *fakeGC) server() *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(f.handle))
-}
-
 // roundTripper drives the same handler in-process, with no listener and no
-// background goroutine.
+// background goroutine. This is deliberate rather than a real httptest.Server:
+// providertest's NoGoroutineLeak case runs goleak.VerifyNone with no ignore
+// options, which a live server's accept goroutine can never satisfy, so the
+// conformance suite (Task 5) needs a transport with no background goroutine at
+// all. Using the same transport here too keeps one fake for every test rather
+// than two.
 type roundTripper struct{ f *fakeGC }
 
 func (rt roundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
