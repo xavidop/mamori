@@ -1,6 +1,7 @@
 package mamori
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -77,5 +78,94 @@ func TestDeriveErrorUnwraps(t *testing.T) {
 	}
 	if !strings.Contains(de.Error(), "boom") {
 		t.Errorf("DeriveError message must carry the cause, got %q", de.Error())
+	}
+}
+
+type dsnCfg struct {
+	User string `source:"env:DERIVE_USER"`
+	Pass string `source:"env:DERIVE_PASS"`
+	DSN  string
+}
+
+func TestDeriveRunsOnLoad(t *testing.T) {
+	t.Setenv("DERIVE_USER", "alice")
+	t.Setenv("DERIVE_PASS", "s3cret")
+
+	cfg, err := Load[dsnCfg](context.Background(),
+		WithDerive(func(c *dsnCfg) error {
+			c.DSN = c.User + ":" + c.Pass
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DSN != "alice:s3cret" {
+		t.Fatalf("got %q, want %q", cfg.DSN, "alice:s3cret")
+	}
+}
+
+// The load-bearing ordering test: a derived field carrying a validate tag must
+// be validated on its DERIVED value, not on the zero value it held a moment
+// earlier. If derive ran after validation this would fail.
+type validatedDeriveCfg struct {
+	User string `source:"env:DERIVE_USER"`
+	DSN  string `validate:"required"`
+}
+
+func TestDeriveRunsBeforeValidation(t *testing.T) {
+	t.Setenv("DERIVE_USER", "alice")
+
+	if _, err := Load[validatedDeriveCfg](context.Background(),
+		WithDerive(func(c *validatedDeriveCfg) error { c.DSN = "postgres://" + c.User; return nil }),
+	); err != nil {
+		t.Fatalf("a derive that fills a required field must satisfy validation, got %v", err)
+	}
+
+	_, err := Load[validatedDeriveCfg](context.Background(),
+		WithDerive(func(c *validatedDeriveCfg) error { return nil }),
+	)
+	if err == nil {
+		t.Fatal("a derive that leaves a required field empty must fail validation")
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("got %T, want *ValidationError", err)
+	}
+}
+
+func TestDeriveErrorFailsLoad(t *testing.T) {
+	t.Setenv("DERIVE_USER", "alice")
+	t.Setenv("DERIVE_PASS", "s3cret")
+	boom := errors.New("boom")
+
+	_, err := Load[dsnCfg](context.Background(),
+		WithDerive(func(c *dsnCfg) error { return boom }),
+	)
+	if err == nil {
+		t.Fatal("a derive returning an error must fail the Load")
+	}
+	var de *DeriveError
+	if !errors.As(err, &de) {
+		t.Fatalf("got %T, want *DeriveError", err)
+	}
+	if !errors.Is(err, boom) {
+		t.Error("the cause must survive in the chain")
+	}
+}
+
+func TestDeriveTypeMismatchFailsLoad(t *testing.T) {
+	t.Setenv("DERIVE_USER", "alice")
+	t.Setenv("DERIVE_PASS", "s3cret")
+	type otherCfg struct{ Z string }
+
+	_, err := Load[dsnCfg](context.Background(),
+		WithDerive(func(c *otherCfg) error { return nil }),
+	)
+	if err == nil {
+		t.Fatal("a mismatched derive type must fail Load, not be silently skipped")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("got %v, want an error satisfying ErrInvalid", err)
 	}
 }

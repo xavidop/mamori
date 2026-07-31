@@ -323,6 +323,18 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	if err := buildInto(reflect.ValueOf(&cfg).Elem(), res, o.decodeHooks); err != nil {
 		return cfg, nil, err
 	}
+	// Derives run here, after decode and before validation, so a derived field
+	// is validated on its derived value rather than the zero value it held a
+	// moment ago. See WithDerive for why this position and not after.
+	derives, err := typedDerives[T](o)
+	if err != nil {
+		return cfg, nil, err
+	}
+	for _, d := range derives {
+		if err := d(&cfg); err != nil {
+			return cfg, nil, &DeriveError{Err: err}
+		}
+	}
 	if err := o.validator.Validate(cfg); err != nil {
 		return cfg, nil, &ValidationError{Err: err}
 	}
