@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/mamoritest"
@@ -49,35 +50,37 @@ func buildRotDSN(c *rotCfg) error {
 // rotation, which is the entire point of wiring derives into the reconciler
 // path.
 //
-// The design doc for this feature (docs/superpowers/specs/2026-07-31-derived-
-// fields-design.md, "Change detection comes free") claims ev.Changed("DSN")
-// is true here "with no special handling... a consequence of where derive
-// sits". That does not hold against this engine: buildCandidate's diff loop
-// (reconciler.go) walks e.specs, which fieldSpecs (decode.go) populates only
-// for fields carrying a `source` tag - the same set the design doc's own
-// "What mamori cannot know" section says is invisible to Status, explain,
-// schema, and diff, for the identical reason (no tag, so no spec). DSN has no
-// source tag, so it is never in e.specs, is never in e.observed/e.applied,
-// and buildCandidate's diff (and diffApplied's, at Unpin) can never emit a
-// FieldChange for it - regardless of where in buildCandidate the derive loop
-// runs. This is verified empirically below, not assumed: ev.Changed("Pass")
-// is asserted true (the real underlying source field the rotation touched),
-// and no code inspected anywhere in this package computes Fields by any
-// mechanism other than that same spec-keyed loop. Flagged in the Task 3
-// report as a design/implementation mismatch worth a follow-up decision
-// (fix the doc, or teach buildCandidate to diff derived fields too); this
-// test asserts what the shipped engine actually does.
+// ev.Changed("DSN") is NOT asserted here, and that is decided, not an open
+// question: a derived field can never appear in Change.Fields, because both
+// diff sites (buildCandidate's loop and diffApplied, reconciler.go) walk
+// e.specs, which fieldSpecs (decode.go) populates only for fields carrying a
+// `source` tag and compares per-ref Version strings - DSN has neither. Where
+// the derive runs does not change this; it is not an ordering bug. The human
+// ruled to accept this limitation and document it (see the corrected
+// docs/superpowers/specs/2026-07-31-derived-fields-design.md, "Change
+// detection does NOT come free") rather than teach buildCandidate to diff
+// untagged fields, which would be a much larger change to Changed()'s
+// semantics for every field, not just derived ones. The usage docs Task 4
+// adds at site/src/pages/docs/usage/derived-fields.md carry the caller-facing
+// guidance: trigger on an input field (ev.Changed("Pass") below), then read
+// the derived value, which is always correct even though it is never itself
+// "changed".
 //
-// The Change event is captured on a buffered channel rather than a bare
-// shared bool: OnChange is dispatched asynchronously on its own goroutine
-// (engine.enqueue only queues the event; it does not wait for the dispatch
-// goroutine to run the callback), so a plain `changed = ev.Changed(...)`
-// followed by an unsynchronized read after WaitForSnapshot returns would be a
-// data race under -race, and could observe the value before the callback
-// runs even if it weren't. flush's enqueue call happens on the reconciler
-// goroutine strictly before the report.Store WaitForSnapshot polls for, and
-// the channel is buffered, so by the time WaitForSnapshot returns the event
-// is already sitting in the channel, ready to receive with no further wait.
+// The Change event is received with a bounded timeout, not a non-blocking
+// default: case: OnChange is dispatched asynchronously, on a goroutine
+// separate from the reconciler (engine.enqueue only queues the event onto
+// e.dispatch; a different goroutine later dequeues it and invokes the
+// callback that sends into this test's own events channel). WaitForSnapshot
+// only proves flush's synchronous work finished (report.Store, which
+// happens after enqueue) - it has no happens-before relationship with the
+// dispatch goroutine actually having run the callback yet, so immediately
+// after WaitForSnapshot returns, the event may still be sitting unconsumed
+// on e.dispatch rather than in this test's events channel. A non-blocking
+// receive races that gap and is flaky (reproduced: GOMAXPROCS=1 go test
+// -run TestDeriveRebuildsOnRotation -count=120 failed several times with
+// "OnChange did not fire for the rotation"); a bounded blocking receive
+// waits out the gap instead, matching this repo's own convention elsewhere
+// (pin_test.go, watch_chain_test.go, watch_test.go).
 func TestDeriveRebuildsOnRotation(t *testing.T) {
 	p := mamoritest.NewProvider("fake")
 	p.Set("user", "alice")
@@ -107,14 +110,20 @@ func TestDeriveRebuildsOnRotation(t *testing.T) {
 
 	select {
 	case ev := <-events:
+		// Changed("Pass"), NOT Changed("DSN"). A derived field can never
+		// appear in the diff: both diff sites walk e.specs, which only
+		// carries source-tagged fields, and compare per-ref versions. A
+		// derived field has neither. The DSN itself is rebuilt correctly,
+		// which the assertion above proves; only the trigger has to name an
+		// input.
 		if !ev.Changed("Pass") {
 			t.Error(`ev.Changed("Pass") must be true after a rotation that changed the password`)
 		}
 		if got := ev.New.DSN.Reveal(); got != "postgres://alice:new@db" {
 			t.Errorf("Change.New.DSN = %q, want the rebuilt DSN", got)
 		}
-	default:
-		t.Error("OnChange did not fire for the rotation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnChange did not fire for the rotation")
 	}
 }
 

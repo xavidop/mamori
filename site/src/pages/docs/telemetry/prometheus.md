@@ -80,13 +80,13 @@ The six instruments and their labels:
 | Watch errors | `mamori_watch_errors_total` | Counter | - | `scheme` |
 | Stale count | `mamori_stale_total` | Counter | - | `scheme` |
 | Change dropped count | `mamori_change_dropped_total` | Counter | - | none |
-| Apply rejected count | `mamori_apply_rejected_total` | Counter | - | `reason` (`validation` \| `preapply`) |
+| Apply rejected count | `mamori_apply_rejected_total` | Counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws-sm`, `vault`).
 - `status` is `error` when the resolve returned a non-nil error, otherwise `ok`.
 - `error_kind` carries the same classification as `mamori.ErrorKind(err)`. Unlike `x/otel`, which omits its equivalent attribute entirely on success, `error_kind` here is the **empty string** on a successful resolve rather than absent - a Prometheus `HistogramVec` requires every series to share the same label set, so there is no "attribute not present" to fall back on. Filter on `status="error"` to select failures.
 - `mamori_change_dropped_total` carries no labels at all: the bounded `OnChange` dispatch queue it reports on is a process-wide property, not a per-scheme one. **This is the counter to alert on**: a non-zero rate means an `OnChange` handler is not keeping up with the rate of applied changes, and the oldest change events are being silently discarded as a result.
-- `reason` on the apply-rejected counter carries `mamori.RejectReason`, a closed set of exactly two values (`validation`, `preapply`) so it stays a safe, bounded metric label rather than an unbounded free-form string.
+- `reason` on the apply-rejected counter carries `mamori.RejectReason`, a closed set of exactly three values (`validation`, `preapply`, `derive`) so it stays a safe, bounded metric label rather than an unbounded free-form string.
 
 The instrument names are also exported as constants (`MetricResolveDuration`, `MetricRefreshTotal`, `MetricWatchErrorsTotal`, `MetricStaleTotal`, `MetricChangeDroppedTotal`, `MetricApplyRejectedTotal`).
 

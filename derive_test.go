@@ -3,8 +3,10 @@ package mamori
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 type deriveCfg struct {
@@ -167,5 +169,92 @@ func TestDeriveTypeMismatchFailsLoad(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInvalid) {
 		t.Errorf("got %v, want an error satisfying ErrInvalid", err)
+	}
+}
+
+// TestMeterCountsDeriveRejection covers buildCandidate's derive-hook rejection
+// branch, mirrored from TestMeterCountsValidationRejection and
+// TestMeterCountsPreApplyRejection in observ_test.go: RejectDerive is this
+// task's named deliverable, and until this test existed nothing exercised it
+// - deleting the RecordApplyRejected(RejectDerive) call in reconciler.go left
+// `go test .` fully green.
+func TestMeterCountsDeriveRejection(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("mderive")
+	wp.set("a", "first", "v1")
+	m := &recordingMeter{}
+	reject := errors.New("derive boom")
+
+	type Config struct {
+		A string `source:"mderive://a"`
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk), WithMeter(m),
+		WithDerive(func(c *Config) error {
+			if c.A == "second" {
+				return reject
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	waitUntil(t, 2*time.Second, "one RejectDerive recorded", func() bool {
+		return len(m.rejections()) == 1
+	})
+
+	got := m.rejections()
+	if len(got) != 1 || got[0] != RejectDerive {
+		t.Errorf("rejections = %v, want [%v]", got, RejectDerive)
+	}
+}
+
+// TestLogsDeriveRejected covers buildCandidate's derive-hook rejection log
+// line, mirrored from TestLogsValidationRejected and TestLogsPreApplyRejected
+// in logging_test.go. Like the meter counter above, nothing exercised this
+// log call before this test: deleting it also left `go test .` green.
+func TestLogsDeriveRejected(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("lderive")
+	wp.set("a", "first", "v1")
+	h, logger := newRecorder()
+	reject := errors.New("derive boom")
+
+	type Config struct {
+		A string `source:"lderive://a"`
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk), WithLogger(logger),
+		WithDerive(func(c *Config) error {
+			if c.A == "second" {
+				return reject
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	waitUntil(t, 2*time.Second, "derive-rejected record", func() bool {
+		_, ok := h.find("candidate rejected by a derive hook; continuing to serve the previous config")
+		return ok
+	})
+
+	r, _ := h.find("candidate rejected by a derive hook; continuing to serve the previous config")
+	if r.Level != slog.LevelError {
+		t.Errorf("level = %v, want Error", r.Level)
 	}
 }

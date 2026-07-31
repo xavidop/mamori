@@ -67,7 +67,7 @@ mamori.OnError(func(err error) {
 })
 ```
 
-`Meter.RecordApplyRejected(reason)` reports which one happened as a `RejectReason`, a closed type with exactly two values, `RejectValidation` and `RejectPreApply`, so it is safe to use directly as a metric label. See [Rotation safety](/docs/usage/rotation/) for why `PreApply` exists and what a rejection does to `Get()` and `OnChange`.
+`Meter.RecordApplyRejected(reason)` reports which one happened as a `RejectReason`, a closed type with exactly three values, `RejectValidation`, `RejectPreApply`, and `RejectDerive` (a `WithDerive` hook returned an error), so it is safe to use directly as a metric label. See [Rotation safety](/docs/usage/rotation/) for why `PreApply` exists and what a rejection does to `Get()` and `OnChange`.
 
 ## My process will not start
 
