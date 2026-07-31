@@ -491,12 +491,35 @@ Plus the install line under `## Install`, and a row in `skills/mamori/references
 
 If the site matrix carries a prose count of providers or modules, update it and verify the new number by counting.
 
+- [ ] **Step 3b: Add the module to Dependabot coverage**
+
+CI runs `.github/scripts/check_dependabot_coverage.py` and **fails the build** if any Go module lacks a `gomod` entry in `.github/dependabot.yml`. This is not optional and it is easy to miss: the sibling `providers/vercel-gc` shipped without it and turned the PR red.
+
+Add an entry alongside the other providers, matching their exact shape:
+
+```yaml
+  - package-ecosystem: gomod
+    directory: "/providers/cloudflare-kv"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:cloudflare-kv]
+```
+
+Verify locally before committing, using the same script CI runs:
+
+```bash
+MODS=$(find . -name go.mod -not -path './site/*' -not -path '*/testdata/*' -exec dirname {} \; | sort \
+  | python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin]))")
+python3 .github/scripts/check_dependabot_coverage.py "$MODS"
+```
+
+Expected: `All N Go modules are covered by dependabot.`
+
 - [ ] **Step 4: Verify and commit**
 
 Run `make site-linkcheck` from the repo root (the site build needs Node 22; use `nvm use 22` if the default is older), then `make build && make test && make vet`.
 
 ```bash
-git add providers/cloudflare-kv/README.md site/src/pages/docs/providers/cloudflare-kv.md site/src/layouts/DocsLayout.astro site/src/pages/docs/providers/index.md README.md skills/mamori/references/providers.md
+git add providers/cloudflare-kv/README.md site/src/pages/docs/providers/cloudflare-kv.md site/src/layouts/DocsLayout.astro site/src/pages/docs/providers/index.md README.md skills/mamori/references/providers.md .github/dependabot.yml
 git commit -m "docs(cloudflare-kv): module README, site page, provider matrix and skill reference
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
