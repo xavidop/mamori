@@ -168,6 +168,63 @@ func (p *Provider) get(ctx context.Context, c connection, store, endpoint string
 	return io.ReadAll(resp.Body)
 }
 
+// ResolveBatch resolves every ref, grouping by store so each store costs one
+// digest request and one items request instead of one pair per ref. mamori
+// calls it automatically on the Load path.
+//
+// A ref whose key is absent is omitted from the result map rather than failing
+// the batch, per the BatchProvider contract, so mamori applies that field's
+// default. A ref that cannot be parsed, or a store that cannot be read, does
+// fail the batch: those are configuration and connectivity faults rather than
+// an absent value.
+func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[string]mamori.Value, error) {
+	if len(refs) == 0 {
+		return map[string]mamori.Value{}, nil
+	}
+	conn, err := p.connection()
+	if err != nil {
+		return nil, err
+	}
+
+	// Group by store, preserving each ref so its Raw can key the result.
+	type target struct {
+		ref mamori.Ref
+		key string
+	}
+	byStore := map[string][]target{}
+	for _, r := range refs {
+		store, key, err := parsePath(r.Path, conn.storeID)
+		if err != nil {
+			return nil, err
+		}
+		byStore[store] = append(byStore[store], target{ref: r, key: key})
+	}
+
+	out := make(map[string]mamori.Value, len(refs))
+	for store, targets := range byStore {
+		digest, err := p.fetchDigest(ctx, conn, store)
+		if err != nil {
+			return nil, err
+		}
+		snap, err := p.snapshotFor(ctx, conn, store, digest)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range targets {
+			raw, ok := snap.items[t.key]
+			if !ok {
+				continue // omit not-found refs; mamori applies the default
+			}
+			v, err := valueFor(raw, t.ref, store, snap.digest)
+			if err != nil {
+				return nil, err
+			}
+			out[t.ref.Raw] = v
+		}
+	}
+	return out, nil
+}
+
 // classifyStatus maps a Global Config read API status onto a mamori
 // classification sentinel, wrapping statusErr so both the sentinel and the
 // diagnostic context survive in the errors.Is chain. 404 is handled by its own
