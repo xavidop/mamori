@@ -139,6 +139,13 @@ updates:
     directory: "/providers/viper"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:viper]
+  # Standard library only, so this entry will rarely fire. It stays because the
+  # coverage check requires every module to be listed, and a module that is
+  # exempt today is the one nobody notices taking a dependency tomorrow.
+  - package-ecosystem: gomod
+    directory: "/providers/vercel-gc"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:vercel-gc]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.
