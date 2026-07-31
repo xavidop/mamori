@@ -207,7 +207,7 @@ func WithMeter(m Meter) Option { return func(o *options) { o.meter = m } }
 func WithTracer(t Tracer) Option { return func(o *options) { o.tracer = t } }
 
 // OnError installs a callback for runtime resolve/validation/stale errors, and
-// for a candidate a PreApply gate rejected.
+// for a candidate a PreApply gate or a WithDerive hook rejected.
 //
 // Unlike OnChange, it runs INLINE on the reconciler goroutine rather than on the
 // dispatch queue: errors are delivered, never dropped, which the drop-oldest
@@ -259,6 +259,10 @@ func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn }
 // Multiple calls run in registration order. Returning an error rejects the
 // whole candidate configuration exactly as a validation failure does: Get keeps
 // serving the last valid config and the error reaches OnError as a *DeriveError.
+//
+// A nil fn installs nothing and is silently dropped rather than reported: a
+// deliberate clamp on bad input, the same posture WithHistory and
+// WithPreApplyTimeout already take, not an oversight.
 func WithDerive[T any](fn func(*T) error) Option {
 	return func(o *options) {
 		if fn == nil {
@@ -310,6 +314,17 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	if err != nil {
 		return cfg, nil, err
 	}
+	// Checked here too, for the identical reason: a mismatched WithDerive hook
+	// is the same kind of caller bug as a mismatched PreApply one, and must
+	// fail before resolveAll spends a round trip, not after. Asserting the
+	// type back here, ahead of decode, is what the derives loop below needs -
+	// it used to run this same check after resolveAll and buildInto, which let
+	// a failing resolve mask the mismatch entirely and cost a full round of
+	// provider round trips first. See typedDerives's doc comment.
+	derives, err := typedDerives[T](o)
+	if err != nil {
+		return cfg, nil, err
+	}
 
 	t := reflect.TypeOf(cfg)
 	specs, err := fieldSpecs(t, o.refVars)
@@ -325,11 +340,9 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	}
 	// Derives run here, after decode and before validation, so a derived field
 	// is validated on its derived value rather than the zero value it held a
-	// moment ago. See WithDerive for why this position and not after.
-	derives, err := typedDerives[T](o)
-	if err != nil {
-		return cfg, nil, err
-	}
+	// moment ago. See WithDerive for why this position and not after. The type
+	// assertion itself already happened above, before resolveAll; this loop
+	// only invokes the hooks.
 	for _, d := range derives {
 		if err := d(&cfg); err != nil {
 			return cfg, nil, &DeriveError{Err: err}

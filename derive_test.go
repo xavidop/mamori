@@ -48,6 +48,28 @@ func TestTypedDerivesNoneIsNil(t *testing.T) {
 	}
 }
 
+// TestWithDeriveNilHookIsNoop guards WithDerive's `if fn == nil { return }`
+// check, protective behavior neither PreApply nor OnChange has, so no sibling
+// test holds it in place. Without the guard this test does not merely fail:
+// nil stored into o.derives as `any` still satisfies typedDerives's type
+// assertion (the dynamic type matches; only the value is nil), so the derives
+// loop in loadValue goes on to call a nil func value and panics with a nil
+// pointer dereference - on the Watch path that panic runs inside the
+// reconciler goroutine, a process crash rather than a returned error. See
+// WithDerive's own doc comment for why silently dropping a nil hook is a
+// deliberate clamp, not an oversight.
+func TestWithDeriveNilHookIsNoop(t *testing.T) {
+	o := &options{}
+	WithDerive[deriveCfg](nil)(o)
+	if len(o.derives) != 0 {
+		t.Fatalf("got %d derives installed for a nil hook, want 0", len(o.derives))
+	}
+
+	if _, err := Load[deriveCfg](context.Background(), WithDerive[deriveCfg](nil)); err != nil {
+		t.Fatalf("Load with only a nil WithDerive hook must succeed exactly as it would with no WithDerive at all, got %v", err)
+	}
+}
+
 // A mismatched type parameter must be a loud error, not a silent no-op. This is
 // the property that distinguishes WithDerive from OnChange, which discards the
 // failed assertion and then never fires. See the DeriveError doc comment.
@@ -104,6 +126,47 @@ func TestDeriveRunsOnLoad(t *testing.T) {
 	}
 	if cfg.DSN != "alice:s3cret" {
 		t.Fatalf("got %q, want %q", cfg.DSN, "alice:s3cret")
+	}
+}
+
+type multiDeriveCfg struct {
+	First    string `source:"env:DERIVE_FIRST"`
+	Last     string `source:"env:DERIVE_LAST"`
+	FullName string
+	Greeting string
+}
+
+// TestDeriveMultipleHooksComposeThroughLoad is the pipeline-level counterpart
+// to TestWithDeriveRegistersInOrder: that test calls typedDerives directly and
+// invokes the returned funcs by hand, below the pipeline, so nothing before
+// this test ever registered two WithDerive hooks through the actual Load or
+// Watch entry point and let loadValue run them in order. This does, matching
+// the "field derived from another derived field" example on
+// site/src/pages/docs/usage/derived-fields.md: the second hook must see the
+// first hook's output, because it runs after it, through the full Load path
+// (decode -> derive loop -> validate), not a hand-rolled substitute for it.
+func TestDeriveMultipleHooksComposeThroughLoad(t *testing.T) {
+	t.Setenv("DERIVE_FIRST", "Ada")
+	t.Setenv("DERIVE_LAST", "Lovelace")
+
+	cfg, err := Load[multiDeriveCfg](context.Background(),
+		WithDerive(func(c *multiDeriveCfg) error {
+			c.FullName = c.First + " " + c.Last
+			return nil
+		}),
+		WithDerive(func(c *multiDeriveCfg) error {
+			c.Greeting = "Hello, " + c.FullName
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FullName != "Ada Lovelace" {
+		t.Fatalf("FullName = %q, want %q", cfg.FullName, "Ada Lovelace")
+	}
+	if cfg.Greeting != "Hello, Ada Lovelace" {
+		t.Fatalf("Greeting = %q, want the second hook to see the first hook's output through the full Load pipeline", cfg.Greeting)
 	}
 }
 
@@ -169,6 +232,44 @@ func TestDeriveTypeMismatchFailsLoad(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInvalid) {
 		t.Errorf("got %v, want an error satisfying ErrInvalid", err)
+	}
+}
+
+// mismatchedDeriveResolveCfg has a field with no registered provider, so
+// resolveAll always fails for it - the "failing resolve" half of the scenario
+// below. It carries no validate tag and no default, so the resolve failure is
+// the only way this type can fail to load.
+type mismatchedDeriveResolveCfg struct {
+	X string `source:"nosuchscheme-derive-mismatch://x"`
+}
+
+// TestDeriveTypeMismatchOnLoadReportsHookErrorNotResolveError is the
+// regression test for the ordering bug the whole-branch review found:
+// typedPreApply is checked at the very top of loadValue, before any provider
+// round trip, for exactly the reason its own comment gives - a caller bug
+// must fail loudly and immediately, not after fields have already been
+// resolved. typedDerives used to run only after resolveAll and buildInto, so
+// a mismatched WithDerive hook combined with a field that fails to resolve
+// reported the RESOLVE error, masking the caller's own type mistake and
+// paying for a full round of (real, in production) provider round trips
+// first. This asserts loadValue now catches the mismatch before resolveAll
+// ever runs, matching typedPreApply's own documented position and the claim
+// site/src/pages/docs/usage/derived-fields.md makes about a mismatched
+// derive failing "the same way a mismatched PreApply does".
+func TestDeriveTypeMismatchOnLoadReportsHookErrorNotResolveError(t *testing.T) {
+	type otherCfg struct{ Z string }
+
+	_, err := Load[mismatchedDeriveResolveCfg](context.Background(),
+		WithDerive(func(c *otherCfg) error { return nil }),
+	)
+	if err == nil {
+		t.Fatal("want an error: the field has no registered provider and the derive is mismatched")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("got %v, want an error satisfying ErrInvalid (the derive hook type mismatch), not the resolve failure", err)
+	}
+	if strings.Contains(err.Error(), "no provider registered") {
+		t.Fatalf("got the resolve error %q; want the derive hook type mismatch caught before any provider round trip is spent", err)
 	}
 }
 

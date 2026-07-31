@@ -227,9 +227,10 @@ func (e *ValidationError) Error() string {
 
 func (e *ValidationError) Unwrap() error { return e.Err }
 
-// DeriveError is delivered to OnError when a WithDerive hook returns an error.
-// The update is rejected atomically, exactly as a validation failure is, and
-// Get continues to return the last valid config.
+// DeriveError is delivered to OnError when a WithDerive hook returns an error,
+// and returned by Watch and Load when the failure happens on the initial
+// resolve. The update is rejected atomically, exactly as a validation failure
+// is, and Get continues to return the last valid config.
 //
 // Rejecting rather than continuing is deliberate: a configuration whose derived
 // fields were not built is not one anyone should serve, and half-applying it
