@@ -166,11 +166,20 @@ mapping keys on HTTP status, matching `classifyStatus` in vercel-gc and
 | --- | --- |
 | 401 | `ErrUnauthenticated` |
 | 403 | `ErrPermissionDenied` |
-| 404 | `ErrNotFound` (absent key on the single GET, or an unknown namespace) |
+| 404 | `ErrNotFound` (absent key on the single GET, or an unknown namespace on either) |
 | 429 | `ErrRateLimited` |
 | 400 | `ErrInvalid` |
 | 5xx | `ErrUnavailable` |
 | anything else | unclassified |
+
+Both paths must handle 404 before classification reaches them. This is easy to
+get wrong, because `Resolve` and `ResolveBatch` are separate code paths against
+differently shaped endpoints: a 404 branch on only one of them makes the two
+disagree about the identical condition, which breaks the core's stated
+invariant that `ResolveBatch` cuts round trips without changing what a ref
+resolves to. On the bulk path the whole namespace is skipped, so its refs take
+their defaults rather than failing the batch and taking refs in other
+namespaces down with them.
 
 One honest caveat belongs in the code and the README: a 404 from this API means
 either an absent key or an absent namespace, and the response envelope does not
