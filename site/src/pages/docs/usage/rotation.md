@@ -44,6 +44,30 @@ w, err := mamori.Watch[Config](ctx,
 Keep the `ev.Changed` guard. Without it the hook re-pings the database every
 time an unrelated field changes, such as a log level.
 
+## Proving a value assembled from several fields
+
+`PreApply` proves whatever `ev.New` holds at the moment it runs. If a field on `ev.New` is a plain local you assemble yourself after `Get()` - a DSN built from a host, a user, and a password - it was built once, at wiring time, and `PreApply` never sees it rebuilt; see [Derived fields](/docs/usage/derived-fields/) for that failure in full.
+
+[`WithDerive`](/docs/usage/derived-fields/) installs a hook that rebuilds such a field on every applied update, before `PreApply` runs:
+
+```go
+w, err := mamori.Watch[Config](ctx,
+	mamori.WithDerive(func(c *Config) error {
+		c.DSN = secret.NewString(fmt.Sprintf(
+			"postgres://%s:%s@%s/app", c.User, c.Pass.Reveal(), c.Host))
+		return nil
+	}),
+	mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
+		if !ev.Changed("Pass") {
+			return nil
+		}
+		return pool.Ping(ctx, ev.New.DSN.Reveal())
+	}),
+)
+```
+
+`WithDerive` and `PreApply` together are what make a rotated credential both **rebuilt** and **proven**: the derive reassembles the DSN from the new password, and because it runs first, `PreApply` proves the rebuilt DSN rather than the one it replaced. Without the derive, `PreApply` would still be gated correctly, just against a DSN nobody ever rebuilt.
+
 ## What a rejection does
 
 - `Get()` keeps returning the last valid config.
@@ -143,6 +167,7 @@ here: it is the smallest window covering the overlap.
 
 ## See also
 
+- [Derived fields](/docs/usage/derived-fields/) - `WithDerive`, so a value assembled from several fields survives a rotation too.
 - [Forcing a refresh](/docs/usage/refresh/) - `Refresh`, which `PreApply` gates too.
 - [Watch for changes](/docs/usage/watching/) - `Watch`, `Get`, `OnChange`, `OnError`.
 - [Snapshots and pinning](/docs/usage/snapshots/) - `WithHistory` and pinning.

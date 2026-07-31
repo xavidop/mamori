@@ -66,6 +66,14 @@
 // same gate runs on the initial load too, so a bad configured credential fails
 // at startup rather than at the first rotation.
 //
+// [WithDerive] installs a hook that computes a field from others already
+// resolved - a DSN assembled from a host, a user, and a password, for example -
+// and reruns it on every [Load] and every reconciled update, before validation
+// and before [PreApply], so the assembled value is rebuilt rather than going
+// stale the moment just one of its inputs rotates. A derived field carries no
+// `source` tag, so it never appears in [Change.Changed]; react to the inputs
+// that feed it instead and read the derived field back off [Watcher.Get].
+//
 // [Watcher.Refresh] forces an immediate re-resolve of every field, bypassing
 // poll intervals, and blocks until the resulting snapshot has been applied or
 // rejected - through the same [PreApply] gate, never around it - so a SIGHUP

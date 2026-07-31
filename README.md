@@ -99,6 +99,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 - **Typed & tag-driven** - one struct, many sources, generics API (`Load[T]` / `Watch[T]`).
 - **Atomic & validated** - an update that fails validation is rejected; `Get()` keeps serving the last good config.
 - **[Rotation-safe](https://mamorigo.dev/docs/usage/rotation)** - `PreApply` proves a rotated credential actually works *before* it goes live, at startup and on every rotation.
+- **[Derived fields](https://mamorigo.dev/docs/usage/derived-fields)** - `WithDerive` rebuilds a value assembled from several fields, like a DSN from a host, a user, and a password, on every applied update, so it never goes stale after just one input rotates.
 - **[Precedence chains](https://mamorigo.dev/docs/concepts/source-chains)** - `source:"env:PORT,aws-ps://svc/port"` tries sources in order, and every position stays watched.
 - **[Rich ref grammar](https://mamorigo.dev/docs/concepts/ref-grammar)** - RFC 6901 JSON Pointer selection, `?decode=` pipelines, and `${VAR}` interpolation from an explicit, non-ambient source.
 - **Reconciled at runtime** - native watch where the backend supports it, polling with jitter everywhere else, lease-aware refresh for Vault.
