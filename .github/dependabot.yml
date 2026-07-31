@@ -146,6 +146,12 @@ updates:
     directory: "/providers/vercel-gc"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:vercel-gc]
+  # Standard library only, so this entry will rarely fire, for the same reason
+  # as vercel-gc above: the coverage check requires every module to be listed.
+  - package-ecosystem: gomod
+    directory: "/providers/cloudflare-kv"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:cloudflare-kv]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.

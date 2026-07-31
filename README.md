@@ -36,6 +36,7 @@ go get github.com/xavidop/mamori/providers/aws     # aws-sm://  aws-ps://  aws-a
 go get github.com/xavidop/mamori/providers/vault   # vault://
 go get github.com/xavidop/mamori/providers/k8s     # k8s-secret://  k8s-cm://
 go get github.com/xavidop/mamori/providers/vercel-gc  # vercel-gc://
+go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
 # ... gcp, azure, consul, doppler, onepassword, sops
 ```
 
@@ -127,6 +128,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/redis` | `redis://` | **native** (keyspace notifications) | ✅ |
 | `providers/etcd` | `etcd://` | **native** (watch API) | ✅ |
 | `providers/vercel-gc` | `vercel-gc://` | poll (digest) | ✅ |
+| `providers/cloudflare-kv` | `cloudflare-kv://` | poll | ✅ |
 | `providers/firestore` | `firestore://` | **native** (snapshot listeners) | ✅ |
 | `providers/firebase-rc` | `firebase-rc://` | poll | ✅ |
 | `providers/firebase-rtdb` | `firebase-rtdb://` | **native** (streaming) | no (chain preserved) |

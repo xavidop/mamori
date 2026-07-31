@@ -32,6 +32,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `consul` | `consul://` | `consul://app/config` |
 | `etcd` | `etcd://` | `etcd://app/config` |
 | `vercel-gc` | `vercel-gc://` | `vercel-gc://my-flag`, `vercel-gc://ecfg_abc/my-flag` |
+| `cloudflare-kv` | `cloudflare-kv://` | `cloudflare-kv://log-level`, `cloudflare-kv://log-level?namespace=abcd1234` |
 | `postgres` | `postgres://` | connection-string backed |
 | `mysql` | `mysql://` | connection-string backed |
 | `sqlite` | `sqlite://` | file-backed |
