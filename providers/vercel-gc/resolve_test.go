@@ -99,6 +99,25 @@ func TestResolveDigestGatesItemFetches(t *testing.T) {
 	if _, items = f.counts(); items != 2 {
 		t.Errorf("got %d items requests after one edit, want 2", items)
 	}
+
+	// The fresh snapshot fetched above must actually be installed, not just
+	// fetched and handed to this one caller: an implementation that refetched
+	// on a digest change but never wrote the result back into p.snapshots would
+	// pass every assertion so far, then silently refetch /items on every
+	// following Resolve forever. Two more resolves of the same unchanged key
+	// must therefore hold at 2 items requests, not climb to 3 or 4.
+	for range 2 {
+		v, err = p.Resolve(ctx, ref(t, "vercel-gc://a"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(v.Bytes) != "changed" {
+			t.Fatalf("got %q, want %q", v.Bytes, "changed")
+		}
+	}
+	if _, items = f.counts(); items != 2 {
+		t.Errorf("got %d items requests after two further unchanged resolves, want still 2 (the fresh snapshot was not installed)", items)
+	}
 }
 
 func TestResolveNotFound(t *testing.T) {
@@ -266,9 +285,17 @@ func TestResolveErrorClassification(t *testing.T) {
 	}
 }
 
-// A failed resolve must not poison the held snapshot: once the backend
-// recovers, the next Resolve must return the real value rather than getting
+// A failed items fetch must not poison the held snapshot: once the backend
+// recovers, the next Resolve must return the fresh value rather than getting
 // stuck on whatever the failed attempt half-observed.
+//
+// The digest is left succeeding throughout (via failEndpoint, not
+// failStatus): failing the whole store would fail the digest fetch that
+// precedes snapshotFor, so snapshotFor's fetch-and-install path - the only
+// code that could actually install a bad snapshot - would never run. Bumping
+// the store between priming and the injected failure is what forces
+// snapshotFor to see a moved digest and attempt the doomed fetch, rather than
+// short-circuiting on a still-matching one.
 func TestResolveRecoversAfterFailureCleared(t *testing.T) {
 	f := newFake()
 	f.set(testStore, "k", `"v"`)
@@ -279,7 +306,8 @@ func TestResolveRecoversAfterFailureCleared(t *testing.T) {
 		t.Fatalf("priming resolve failed: %v", err)
 	}
 
-	f.failStatus(testStore, http.StatusInternalServerError)
+	f.set(testStore, "k", `"changed"`)
+	f.failEndpoint(testStore, "items", http.StatusInternalServerError)
 	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://k")); !errors.Is(err, mamori.ErrUnavailable) {
 		t.Fatalf("got %v, want an error satisfying mamori.ErrUnavailable", err)
 	}
@@ -289,8 +317,34 @@ func TestResolveRecoversAfterFailureCleared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve after clearing the failure: %v", err)
 	}
-	if string(v.Bytes) != "v" {
-		t.Fatalf("got %q, want %q", v.Bytes, "v")
+	if string(v.Bytes) != "changed" {
+		t.Fatalf("got %q, want %q", v.Bytes, "changed")
+	}
+}
+
+// TestResolveErrorClassification (above) fails the whole store, so every case
+// there is actually observed through the digest fetch: fetchDigest runs first,
+// and a whole-store failure lands on it before an items fetch ever happens.
+// This exercises the other half of classifyStatus's callers - a failure on the
+// items fetch itself - which otherwise has zero coverage. As above, the store
+// is bumped after priming so the digest fetch succeeds and snapshotFor
+// actually attempts (and fails) fetchItems.
+func TestResolveItemsFetchErrorIsClassified(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "k", `"v"`)
+	p := f.provider()
+	ctx := context.Background()
+
+	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://k")); err != nil {
+		t.Fatalf("priming resolve failed: %v", err)
+	}
+
+	f.set(testStore, "k", `"changed"`)
+	f.failEndpoint(testStore, "items", http.StatusForbidden)
+
+	_, err := p.Resolve(ctx, ref(t, "vercel-gc://k"))
+	if !errors.Is(err, mamori.ErrPermissionDenied) {
+		t.Fatalf("got %v, want an error satisfying mamori.ErrPermissionDenied", err)
 	}
 }
 

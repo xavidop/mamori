@@ -20,10 +20,14 @@ const (
 // GET /<store>/digest and GET /<store>/items, and counts both so tests can
 // assert exactly how many item bodies were fetched.
 type fakeGC struct {
-	mu        sync.Mutex
-	stores    map[string]map[string]jsonRaw // store id -> key -> raw JSON
-	rev       map[string]int                // store id -> bumped on every edit, rendered as the digest
-	failCode  map[string]int                // store id -> status to return until cleared
+	mu     sync.Mutex
+	stores map[string]map[string]jsonRaw // store id -> key -> raw JSON
+	rev    map[string]int                // store id -> bumped on every edit, rendered as the digest
+	// failCode is store id -> endpoint -> status to return until cleared. The
+	// empty endpoint key ("") means every endpoint, which is what failStatus
+	// uses; failEndpoint sets one endpoint only, letting a test fail /items
+	// while /digest keeps succeeding (or vice versa).
+	failCode  map[string]map[string]int
 	digestReq int
 	itemsReq  int
 	lastAuth  string
@@ -33,7 +37,7 @@ func newFake() *fakeGC {
 	return &fakeGC{
 		stores:   map[string]map[string]jsonRaw{},
 		rev:      map[string]int{},
-		failCode: map[string]int{},
+		failCode: map[string]map[string]int{},
 	}
 }
 
@@ -51,15 +55,55 @@ func (f *fakeGC) set(store, key, rawJSON string) {
 
 // failStatus makes every request for store return code until clearFail.
 func (f *fakeGC) failStatus(store string, code int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.failCode[store] = code
+	f.setFail(store, "", code)
 }
 
+// failEndpoint makes only requests to store's endpoint ("digest" or "items")
+// return code until clearFail, leaving the other endpoint to succeed.
+//
+// This is what lets a test put the injected failure strictly after the digest
+// fetch: failStatus fails the digest fetch too, so Resolve never reaches
+// snapshotFor's fetch-and-install path at all. failEndpoint(store, "items",
+// ...) instead lets the digest succeed, so snapshotFor is entered, sees a
+// moved digest, and its call to fetchItems is what fails - the only path that
+// can genuinely test that a failed fetch does not install a snapshot, and the
+// only path that exercises classifyStatus from the items fetch rather than the
+// digest fetch.
+func (f *fakeGC) failEndpoint(store, endpoint string, code int) {
+	f.setFail(store, endpoint, code)
+}
+
+func (f *fakeGC) setFail(store, endpoint string, code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failCode[store] == nil {
+		f.failCode[store] = map[string]int{}
+	}
+	f.failCode[store][endpoint] = code
+}
+
+// clearFail removes every injected failure for store, whole-store and
+// per-endpoint alike.
 func (f *fakeGC) clearFail(store string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.failCode, store)
+}
+
+// failCodeFor returns the injected status for (store, endpoint), preferring an
+// endpoint-specific failure over a whole-store one. Callers must hold f.mu.
+func (f *fakeGC) failCodeFor(store, endpoint string) (code int, fail bool) {
+	byEndpoint, ok := f.failCode[store]
+	if !ok {
+		return 0, false
+	}
+	if code, ok := byEndpoint[endpoint]; ok {
+		return code, true
+	}
+	if code, ok := byEndpoint[""]; ok {
+		return code, true
+	}
+	return 0, false
 }
 
 // counts returns how many digest and items requests have been served.
@@ -79,7 +123,7 @@ func (f *fakeGC) handle(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.lastAuth = r.Header.Get("Authorization")
-	if code, ok := f.failCode[store]; ok {
+	if code, ok := f.failCodeFor(store, endpoint); ok {
 		f.mu.Unlock()
 		w.WriteHeader(code)
 		_, _ = io.WriteString(w, `{"error":{"code":"injected","message":"injected failure"}}`)

@@ -55,6 +55,20 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 // the snapshot it built, so nobody ever reads a body another goroutine was
 // mid-install of; a losing writer's older snapshot simply causes one extra
 // fetch on the next Resolve.
+//
+// One assumption is worth naming rather than leaving implicit: this only
+// converges on the true value if an /items response fetched after observing
+// digest D always reflects content at least as new as D. Global Config is a
+// globally replicated store, and Vercel documents no read-your-writes or
+// monotonic-read guarantee tying the two endpoints together. If the digest and
+// items requests can land on replicas at different points in the replication
+// stream, this could install {digest: D, items: <content older than D>}, and
+// because the digest then matches on every following call, that stale body
+// would be served indefinitely - until the next edit moves the digest again,
+// not until the replicas catch up. There is nothing to fix here from this
+// side of the API; the risk is named rather than closed because closing it
+// would need Vercel to document the guarantee, or some other signal this
+// provider does not have.
 func (p *Provider) snapshotFor(ctx context.Context, c connection, store, digest string) (*snapshot, error) {
 	p.mu.Lock()
 	held := p.snapshots[store]
