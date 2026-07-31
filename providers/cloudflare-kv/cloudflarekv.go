@@ -118,11 +118,7 @@ func New(opts ...Option) *Provider {
 	return p
 }
 
-// Registration is deferred to the task that adds Resolve: mamori.Register
-// takes a mamori.Provider, an interface requiring a Resolve method this
-// Provider does not implement yet.
-//
-// func init() { mamori.Register(New()) }
+func init() { mamori.Register(New()) }
 
 // Scheme returns "cloudflare-kv".
 func (p *Provider) Scheme() string { return scheme }
