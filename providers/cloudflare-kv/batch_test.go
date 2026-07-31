@@ -148,6 +148,56 @@ func TestResolveBatchGroupsByNamespace(t *testing.T) {
 	}
 }
 
+// TestResolveBatchDedupedKeyFansOutToAllRefs pins the dedup path
+// ResolveBatch's grouping introduces: two refs selecting different #fields
+// of the same key must share one bulk-request slot (the key travels on the
+// wire exactly once) but each must still resolve to its own distinct
+// selected value, keyed by its own Ref.Raw.
+//
+// No other test in this file puts two refs against the same key in one
+// ResolveBatch call, so this is the only test exercising the fan-out side of
+// byKey's dedup. A regression that keeps only the last ref sharing a key
+// (e.g. byKey[key] = []mamori.Ref{r} instead of appending) would still
+// dedupe the request correctly - bulk request count and key-on-the-wire
+// count would both still read as 1 - while silently dropping every sibling
+// selector but the last; only the third assertion below, that both refs
+// come back with their own distinct values, catches that.
+func TestResolveBatchDedupedKeyFansOutToAllRefs(t *testing.T) {
+	f := newFake()
+	f.set(testNamespace, "api-config", []byte(`{"timeout":"5s","retries":"3"}`))
+	p := f.provider()
+
+	got, err := p.ResolveBatch(context.Background(), []mamori.Ref{
+		ref(t, "cloudflare-kv://api-config#timeout"),
+		ref(t, "cloudflare-kv://api-config#retries"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, bulk := f.counts()
+	if bulk != 1 {
+		t.Fatalf("got %d bulk requests, want 1 (both refs share one key)", bulk)
+	}
+
+	f.mu.Lock()
+	sizes := append([]int(nil), f.bulkSizes...)
+	f.mu.Unlock()
+	if len(sizes) != 1 || sizes[0] != 1 {
+		t.Fatalf("got bulk request sizes %v, want [1]: the shared key must appear once on the wire, not twice", sizes)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("got %d values, want 2 (both refs sharing the deduped key must resolve, not just the last one)", len(got))
+	}
+	if string(got["cloudflare-kv://api-config#timeout"].Bytes) != "5s" {
+		t.Errorf("timeout selector: got %q, want %q", got["cloudflare-kv://api-config#timeout"].Bytes, "5s")
+	}
+	if string(got["cloudflare-kv://api-config#retries"].Bytes) != "3" {
+		t.Errorf("retries selector: got %q, want %q", got["cloudflare-kv://api-config#retries"].Bytes, "3")
+	}
+}
+
 // TestResolveBatchOmitsAbsentKeySiblingsSurvive is the BatchProvider contract
 // at its most basic: an absent key must be omitted from the result map, not
 // fail the whole call, and a sibling ref in the same batch must still
