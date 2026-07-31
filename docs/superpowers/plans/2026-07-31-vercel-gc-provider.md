@@ -718,11 +718,48 @@ The core of the provider: the HTTP calls, the per-store snapshot, and the status
 **Interfaces:**
 - Consumes: `connection`, `parsePath`, `Provider`, `snapshot`, `jsonRaw` (Task 1), `valueFor` (Task 2).
 - Produces:
+  - `func init() { mamori.Register(New()) }` restored in `vercelgc.go` (see Step 0)
   - `func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error)`
   - `func (p *Provider) fetchDigest(ctx context.Context, c connection, store string) (string, error)`
   - `func (p *Provider) fetchItems(ctx context.Context, c connection, store string) (map[string]jsonRaw, error)`
   - `func classifyStatus(code int, statusErr error) error`
   - test helper `newFake() *fakeGC` with methods `set`, `del`, `failStatus`, `clearFail`, `counts`, `handle`, and `provider(opts ...Option) *Provider`
+
+- [ ] **Step 0: Restore provider registration**
+
+Task 1 deliberately deferred registration: `mamori.Register` takes a
+`mamori.Provider`, which requires `Resolve`, so the call could not compile
+until this task. `vercelgc.go` therefore carries a blank import of the core
+package and a comment marking the deferral.
+
+This task adds `Resolve`, so now restore it. In `providers/vercel-gc/vercelgc.go`:
+
+1. Change the blank import `_ "github.com/xavidop/mamori"` to a normal import `"github.com/xavidop/mamori"`.
+2. Delete the two comments marking registration as deferred.
+3. Add, directly after the `New` function:
+
+```go
+func init() { mamori.Register(New()) }
+```
+
+Registration is what makes `import _ "github.com/xavidop/mamori/providers/vercel-gc"` wire the scheme up, so without this the provider is unreachable through the global registry and the documented import line in Task 6 is a lie.
+
+Verify with a test in `providers/vercel-gc/resolve_test.go`:
+
+```go
+func TestSchemeIsRegistered(t *testing.T) {
+	found := false
+	for _, s := range mamori.RegisteredSchemes() {
+		if s == scheme {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("scheme %q is not registered; got %v", scheme, mamori.RegisteredSchemes())
+	}
+}
+```
 
 - [ ] **Step 1: Write the fake backend**
 
