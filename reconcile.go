@@ -47,6 +47,18 @@ type options struct {
 	preApply        any
 	preApplyTimeout time.Duration
 
+	// derives holds the WithDerive hooks, each a func(*T) error typed per T and
+	// stored as any for the same reason preApply above is. They run after fields
+	// are decoded and BEFORE validation, so a derived field is validated like
+	// any other, and before the PreApply gate, so a rotation-safety hook proves
+	// the derived value rather than the one it replaced.
+	//
+	// A slice rather than a single hook: unrelated derivations stay in separate
+	// functions instead of accreting into one closure, and a field derived from
+	// another derived field works with no new concept, because a later hook sees
+	// an earlier one's output.
+	derives []any
+
 	// admin server config, consumed only by Watch (see adminhttp.go). Load
 	// accepts the same Option values but has no watcher to run a server
 	// against, so it ignores all three.
@@ -214,6 +226,47 @@ func WithTracer(t Tracer) Option { return func(o *options) { o.tracer = t } }
 // the tempting thing to write here; issue it from another goroutine, or let the
 // next reconciliation do it.
 func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn } }
+
+// WithDerive installs a hook that computes fields from already-resolved fields.
+// It runs on every Load and every reconciled update, after values are decoded
+// into the struct and before validation, so a value assembled from other fields
+// is rebuilt whenever any of its inputs changes rather than going stale.
+//
+// The canonical case is a DSN assembled from a host, a user, and a rotating
+// password. Built once in application code after Get, such a value is silently
+// wrong the moment the password rotates; built here, it is rebuilt on every
+// applied update and proven by any PreApply gate before Get serves it.
+//
+//	mamori.WithDerive(func(c *Config) error {
+//	    c.DSN = secret.NewString((&url.URL{
+//	        Scheme: "postgres",
+//	        User:   url.UserPassword(c.User, c.Password.Reveal()),
+//	        Host:   c.Host,
+//	        Path:   "/" + c.DB,
+//	    }).String())
+//	    return nil
+//	})
+//
+// Escaping and secret hygiene are the caller's, deliberately: net/url already
+// escapes a password containing '@' or '/' correctly, and assigning into a
+// secret.String is what keeps the assembled value redacted in fmt, JSON, and
+// slog. A tag-based derivation would have had to reinvent both.
+//
+// Unlike PreApply, the hook takes no context.Context. PreApply does I/O to
+// prove a credential; a derive is a pure transformation of a struct that has
+// already been resolved, and the missing parameter is how the API says so.
+//
+// Multiple calls run in registration order. Returning an error rejects the
+// whole candidate configuration exactly as a validation failure does: Get keeps
+// serving the last valid config and the error reaches OnError as a *DeriveError.
+func WithDerive[T any](fn func(*T) error) Option {
+	return func(o *options) {
+		if fn == nil {
+			return
+		}
+		o.derives = append(o.derives, fn)
+	}
+}
 
 // provider resolves the provider for a scheme, preferring explicit providers
 // over the global registry.

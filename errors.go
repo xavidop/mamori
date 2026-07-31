@@ -227,6 +227,24 @@ func (e *ValidationError) Error() string {
 
 func (e *ValidationError) Unwrap() error { return e.Err }
 
+// DeriveError is delivered to OnError when a WithDerive hook returns an error.
+// The update is rejected atomically, exactly as a validation failure is, and
+// Get continues to return the last valid config.
+//
+// Rejecting rather than continuing is deliberate: a configuration whose derived
+// fields were not built is not one anyone should serve, and half-applying it
+// would produce a snapshot where some fields reflect a rotated credential and a
+// value derived from them still reflects the old one.
+type DeriveError struct {
+	Err error
+}
+
+func (e *DeriveError) Error() string {
+	return fmt.Sprintf("mamori: derive failed: %v", e.Err)
+}
+
+func (e *DeriveError) Unwrap() error { return e.Err }
+
 // StaleError is returned/delivered when a value has exceeded the configured
 // WithStale max age without a successful refresh.
 type StaleError struct {

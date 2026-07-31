@@ -207,6 +207,31 @@ func typedPreApply[T any](o *options) (func(context.Context, Change[T]) error, e
 	return fn, nil
 }
 
+// typedDerives asserts the WithDerive hooks back to their concrete type. Like
+// typedPreApply it is shared by every caller that can observe a mismatch, so
+// none of them can drift into tolerating it.
+//
+// A mismatch is a loud error, deliberately unlike onChange's silent discard
+// below. A derive whose type parameter does not match Watch's would otherwise
+// present as "my derived field is empty and nothing told me why", with the
+// hook installed, never invoked, and no signal anywhere. The error names both
+// types so the mistake is findable by grep.
+func typedDerives[T any](o *options) ([]func(*T) error, error) {
+	if len(o.derives) == 0 {
+		return nil, nil
+	}
+	fns := make([]func(*T) error, 0, len(o.derives))
+	for _, d := range o.derives {
+		fn, ok := d.(func(*T) error)
+		if !ok {
+			var want func(*T) error
+			return nil, fmt.Errorf("mamori: WithDerive hook has type %T, want %T: %w", d, want, ErrInvalid)
+		}
+		fns = append(fns, fn)
+	}
+	return fns, nil
+}
+
 // Watch performs an initial, fail-fast Load of T and then keeps it reconciled at
 // runtime, delivering validated, diff-aware updates to OnChange. It returns after
 // the initial configuration is resolved (OnChange fires only on subsequent
