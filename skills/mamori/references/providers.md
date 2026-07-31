@@ -26,6 +26,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
+| `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
 | `k8s` | `k8s-secret://` `k8s-cm://` | `k8s-secret://ns/name#key` |
@@ -56,7 +57,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
 
 - Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
-  `doppler`, `k8s-secret`.
+  `doppler`, `scaleway-sm`, `k8s-secret`.
 - Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).

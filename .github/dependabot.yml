@@ -39,6 +39,13 @@ updates:
     directory: "/providers/doppler"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:doppler]
+  # Standard library only, so this entry will rarely fire, for the same reason
+  # vercel-gc and cloudflare-kv further down are: the coverage check requires
+  # every module to be listed regardless of how often it actually fires.
+  - package-ecosystem: gomod
+    directory: "/providers/scaleway-sm"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:scaleway-sm]
   - package-ecosystem: gomod
     directory: "/providers/onepassword"
     schedule: { interval: weekly }
