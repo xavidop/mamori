@@ -128,8 +128,15 @@ connection string rather than hardcoding it - which is what keeps the legacy
 origin working.
 
 The token always travels in the `Authorization: Bearer` header, never the
-documented `token` query parameter, so it can never leak into a log line, a trace
-span, or an error message.
+documented `token` query parameter, so a request to the Global Config API cannot
+leak it into a log line, a trace span, or an error message. That guarantee covers
+requests, not parsing: the token is still part of the connection string itself, so
+a malformed connection string (for example a trailing newline picked up from a
+file or `kubectl create secret --from-file`) can surface it inside the
+`url.Parse` diagnostic, which this provider strips before returning the error.
+The other place it can leak is self-inflicted: passing a full connection string
+to `WithBaseURL` by mistake - plausible, since `WithConnectionString` exists too -
+puts the token in the host, and therefore in every transport error.
 
 Precedence, most specific first:
 
@@ -163,7 +170,7 @@ so the fix is obvious from the error message alone.
 | `WithConnectionString(s)` | Set store, token, and host from a full connection string, overriding both `GLOBAL_CONFIG` and `EDGE_CONFIG` |
 | `WithStoreID(id)` | Set the store used by refs that name only a key |
 | `WithToken(t)` | Set the Global Config read token |
-| `WithBaseURL(u)` | Override the API origin, for an `httptest.Server` or a proxy; ignored when a connection string supplies its own host |
+| `WithBaseURL(u)` | Override the API origin, for an `httptest.Server` or a proxy; redirects the host even when a connection string supplies its own, so every request (token included) goes to the named host |
 | `WithHTTPClient(c)` | Inject a custom `*http.Client`; a nil client is a no-op |
 
 ## No native watch

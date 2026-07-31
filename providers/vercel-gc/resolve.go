@@ -3,6 +3,7 @@ package vercelgc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,6 +110,16 @@ func parseDigest(body []byte) (string, error) {
 	}
 	var s string
 	if err := json.Unmarshal([]byte(trimmed), &s); err == nil {
+		if s == "" {
+			// Both a bare "" and a bare null unmarshal into the empty string here
+			// (json.Unmarshal leaves a *string target untouched on a JSON null),
+			// and both must be rejected the same way the object branch already
+			// rejects an empty "digest" field. Accepting either would install a
+			// snapshot tagged with digest "", which every later call would match
+			// forever: /items would never be refetched again for the process
+			// lifetime, silently pinning stale config.
+			return "", fmt.Errorf("mamori/vercel-gc: empty digest response: %w", mamori.ErrInvalid)
+		}
 		return s, nil
 	}
 	var obj struct {
@@ -172,11 +183,16 @@ func (p *Provider) get(ctx context.Context, c connection, store, endpoint string
 // digest request and one items request instead of one pair per ref. mamori
 // calls it automatically on the Load path.
 //
-// A ref whose key is absent is omitted from the result map rather than failing
-// the batch, per the BatchProvider contract, so mamori applies that field's
-// default. A ref that cannot be parsed, or a store that cannot be read, does
-// fail the batch: those are configuration and connectivity faults rather than
-// an absent value.
+// A ref whose key is absent, or whose #field selection is absent from an
+// otherwise-present JSON value, is omitted from the result map rather than
+// failing the batch, per the BatchProvider contract, so mamori applies that
+// field's default. This must agree with Resolve, which reports the same two
+// cases as an error satisfying mamori.ErrNotFound rather than killing the
+// whole call. An ErrInvalid from selection (for example selecting a field of
+// a string-valued key) is deliberately not treated as not-found and still
+// fails the batch, as does a ref that cannot be parsed or a store that cannot
+// be read: those are configuration and connectivity faults rather than an
+// absent value.
 func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[string]mamori.Value, error) {
 	if len(refs) == 0 {
 		return map[string]mamori.Value{}, nil
@@ -217,6 +233,9 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 			}
 			v, err := valueFor(raw, t.ref, store, snap.digest)
 			if err != nil {
+				if errors.Is(err, mamori.ErrNotFound) {
+					continue // an absent selected field is still not-found; mamori applies the default
+				}
 				return nil, err
 			}
 			out[t.ref.Raw] = v

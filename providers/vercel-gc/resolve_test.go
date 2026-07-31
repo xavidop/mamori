@@ -258,6 +258,24 @@ func TestDigestShapes(t *testing.T) {
 	}
 }
 
+// An empty digest must never parse successfully: parseDigest("") installs a
+// snapshot tagged with digest "", and because every later call finds
+// held.digest == "" too, /items is never refetched again for the process
+// lifetime - Refresh and Doctor would both report success while silently
+// serving arbitrarily stale config, forever, with no error and no log. The
+// object branch already rejects an empty "digest" field; this covers the
+// bare-string branch, which used to accept both "" and null.
+func TestDigestShapesRejected(t *testing.T) {
+	for _, body := range []string{`""`, `null`, `{"digest":""}`, `[1,2,3]`} {
+		t.Run(body, func(t *testing.T) {
+			_, err := parseDigest([]byte(body))
+			if !errors.Is(err, mamori.ErrInvalid) {
+				t.Fatalf("parseDigest(%s): got %v, want an error satisfying mamori.ErrInvalid", body, err)
+			}
+		})
+	}
+}
+
 func TestResolveErrorClassification(t *testing.T) {
 	tests := []struct {
 		code int

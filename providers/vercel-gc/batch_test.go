@@ -2,6 +2,7 @@ package vercelgc
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -68,6 +69,59 @@ func TestResolveBatchOmitsNotFound(t *testing.T) {
 	}
 	if _, ok := got["vercel-gc://absent"]; ok {
 		t.Error("absent key must be omitted from the result map")
+	}
+}
+
+// Resolve and ResolveBatch must agree on a field-level not-found: selecting a
+// #field absent from an otherwise-present JSON value. mamori.SelectKey wraps
+// mamori.ErrNotFound for that case (see helpers.go), which Resolve already
+// surfaces as a plain error. Before this fix, ResolveBatch instead returned
+// that error verbatim from valueFor and killed the whole batch - and losing
+// the sibling ref along with it is the actual damage, so this asserts the
+// sibling explicitly rather than only that the call itself succeeds.
+func TestResolveBatchOmitsFieldLevelNotFound(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "api-config", `{"timeout":30}`)
+	f.set(testStore, "sibling", `"present"`)
+	p := f.provider()
+
+	_, err := p.Resolve(context.Background(), ref(t, "vercel-gc://api-config#retries"))
+	if !errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("Resolve: got %v, want an error satisfying mamori.ErrNotFound", err)
+	}
+
+	got, err := p.ResolveBatch(context.Background(), []mamori.Ref{
+		ref(t, "vercel-gc://api-config#retries"),
+		ref(t, "vercel-gc://sibling"),
+	})
+	if err != nil {
+		t.Fatalf("a field-level not-found must not fail the batch, got %v", err)
+	}
+	if _, ok := got["vercel-gc://api-config#retries"]; ok {
+		t.Error("ref with an absent selected field must be omitted from the result map")
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d values, want 1 (the sibling ref must still resolve, not be lost with the batch)", len(got))
+	}
+	if string(got["vercel-gc://sibling"].Bytes) != "present" {
+		t.Errorf("sibling ref: got %q, want %q", got["vercel-gc://sibling"].Bytes, "present")
+	}
+}
+
+// Selecting a #field of a string-valued key is a malformed request against
+// that payload (see TestValueForSelectingFieldOfStringIsInvalid), not an
+// absence, so it must still fail the whole batch rather than being swallowed
+// alongside a genuine not-found.
+func TestResolveBatchFailsOnInvalidSelection(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "log-level", `"info"`)
+	p := f.provider()
+
+	_, err := p.ResolveBatch(context.Background(), []mamori.Ref{
+		ref(t, "vercel-gc://log-level#timeout"),
+	})
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("got %v, want an error satisfying mamori.ErrInvalid", err)
 	}
 }
 

@@ -46,6 +46,28 @@ func TestParseConnectionString(t *testing.T) {
 	}
 }
 
+// A trailing newline is the realistic trigger for a malformed connection
+// string - GLOBAL_CONFIG read from a file, or a kubectl create secret
+// --from-file, commonly carries one - and url.Parse rejects it as an invalid
+// control character. Its *url.Error.Error() text is `parse "<the whole raw
+// URL>": <reason>`, and the raw URL is the connection string, token and all.
+// parseConnectionString must reach past that for just the reason.
+func TestParseConnectionStringNeverLeaksToken(t *testing.T) {
+	const token = "SUPER_SECRET_SENTINEL"
+	in := "https://global-config.vercel.com/ecfg_abc?token=" + token + "\n"
+
+	_, err := parseConnectionString(in)
+	if err == nil {
+		t.Fatal("want an error for a connection string containing a control character")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaked the token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "parsing") {
+		t.Fatalf("error must still name what went wrong, got: %v", err)
+	}
+}
+
 func TestParsePath(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -103,6 +125,28 @@ func TestConnectionPrecedence(t *testing.T) {
 	}
 	if got.host != defaultHost {
 		t.Fatalf("explicit options must default the host to %q, got %q", defaultHost, got.host)
+	}
+}
+
+// WithBaseURL redirects a connection-string-derived host rather than being
+// ignored when one is present - the opposite of what its doc comment used to
+// say. This is the option's only exported-symbol test: it had zero coverage
+// before this fix.
+func TestWithBaseURLRedirectsConnectionStringHost(t *testing.T) {
+	p := New(
+		WithConnectionString("https://global-config.vercel.com/ecfg_abc?token=tok"),
+		WithBaseURL("https://proxy.example.com"),
+	)
+
+	got, err := p.connection()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.host != "https://proxy.example.com" {
+		t.Fatalf("WithBaseURL must redirect the connection-string host, got %q", got.host)
+	}
+	if got.storeID != "ecfg_abc" || got.token != "tok" {
+		t.Fatalf("store and token must still come from the connection string, got %+v", got)
 	}
 }
 

@@ -97,7 +97,9 @@ func WithStoreID(id string) Option { return func(p *Provider) { p.storeID = id }
 func WithToken(t string) Option { return func(p *Provider) { p.token = t } }
 
 // WithBaseURL overrides the API origin, for an httptest.Server or a proxy. It
-// is ignored when a connection string supplies its own host.
+// redirects a connection-string-derived host rather than being ignored when
+// one is supplied: every request, including the Authorization header carrying
+// the real token, goes to whatever host this names.
 func WithBaseURL(u string) Option {
 	return func(p *Provider) {
 		if u != "" {
@@ -179,7 +181,17 @@ func parseConnectionString(s string) (connection, error) {
 	}
 	u, err := url.Parse(s)
 	if err != nil {
-		return connection{}, fmt.Errorf("mamori/vercel-gc: parsing connection string: %w", err)
+		// url.Error's Error() is "parse \"<the whole raw URL>\": <reason>", and
+		// the raw URL is s itself: the connection string, token and all. Reach
+		// past it for just the reason so the returned error never carries s, or
+		// any substring of it. A non-*url.Error would be unusual (url.Parse
+		// documents that it always returns one), so it falls back to a generic
+		// message rather than risking a type this wasn't checked against.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return connection{}, fmt.Errorf("mamori/vercel-gc: parsing connection string: %w", urlErr.Err)
+		}
+		return connection{}, errors.New("mamori/vercel-gc: parsing connection string: malformed URL")
 	}
 	storeID := strings.Trim(u.Path, "/")
 	if storeID == "" || strings.Contains(storeID, "/") {
