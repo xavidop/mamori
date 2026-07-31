@@ -1,0 +1,191 @@
+# Derived fields: `WithDerive`
+
+**Status:** approved
+**Date:** 2026-07-31
+
+Adds `WithDerive`, a typed hook that computes fields from already-resolved
+fields, running on every `Load` and every reconciled update.
+
+Core change. It hooks the resolve pipeline, which nothing outside the core can
+reach.
+
+## The problem
+
+Assembling a value from several resolved fields is routine, and a DSN is the
+canonical case:
+
+```go
+dsn := fmt.Sprintf("postgres://%s:%s@%s/%s", cfg.User, cfg.Password.Reveal(), cfg.Host, cfg.DB)
+```
+
+Today that line lives in application code, after `Get()`. Which means it runs
+**once**, at wiring time, and mamori's entire reason for existing does not
+reach it: when the password rotates, `Get()` returns a new snapshot with a new
+password and the DSN the application built an hour ago is silently wrong.
+
+The caller can fix this by rebuilding the DSN inside every `OnChange`, but that
+is exactly the hand-rolled reconciliation mamori exists to delete, and it is
+the kind of thing that is remembered on the first field and forgotten on the
+fourth.
+
+## Shape
+
+```go
+func WithDerive[T any](fn func(*T) error) Option
+```
+
+```go
+w, err := mamori.Watch[Config](ctx,
+    mamori.WithDerive(func(c *Config) error {
+        c.DSN = secret.NewString((&url.URL{
+            Scheme: "postgres",
+            User:   url.UserPassword(c.User, c.Password.Reveal()),
+            Host:   c.Host,
+            Path:   "/" + c.DB,
+        }).String())
+        return nil
+    }),
+)
+```
+
+### Why a function and not a `derive:` tag
+
+A tag reads more naturally and would be visible to `explain` and `schema`, but
+it drags in two mechanisms this design gets to skip entirely:
+
+- **Escaping.** A password containing `@`, `/`, or `:` silently produces a
+  broken DSN. A tag would need escape modifiers, and mamori would own a
+  template language. Here, escaping is `net/url`'s problem, which has already
+  solved it correctly.
+- **Sensitivity.** The assembled DSN contains the password. A tag assigning it
+  into a plain `string` would copy a secret into a field with no redaction, so
+  it would surface in logs, `fmt`, and JSON. Preventing that means inferring
+  sensitivity from inputs and rejecting at parse time. Here the caller writes
+  `secret.String` and the type system carries it.
+
+Neither mechanism is deferred. Both are structurally unnecessary.
+
+### Why no `context.Context`
+
+`PreApply` is `func(ctx context.Context, ev Change[T]) error` because its job
+is I/O: proving a credential against a real dependency. A derive is a pure
+transformation of an already-resolved struct. Omitting the context is how the
+API says which of those two things it is, and the asymmetry is deliberate
+rather than an oversight.
+
+## Where it runs
+
+```
+resolve refs -> apply defaults -> DERIVE -> validate -> PreApply -> swap in
+```
+
+Two positions in that line are load-bearing:
+
+- **Before validation.** So `validate:"required,url"` on a derived field
+  checks the assembled value rather than the zero value it had a moment
+  earlier. A derived field that could not be validated would be the only
+  unvalidated field in the struct.
+- **Before `PreApply`.** So a rotation-safety hook can `Ping` using the
+  *derived* DSN. This is the motivating case end to end: the password rotates,
+  the DSN is rebuilt, and `PreApply` proves the rebuilt DSN works before
+  `Get()` serves it. Running derive after `PreApply` would prove the previous
+  one, which is worse than not proving anything, because it would look like it
+  worked.
+
+It runs on `Load` and on every reconciled update, on the same code path.
+
+## Errors
+
+A derive returning an error rejects the whole candidate snapshot, exactly as a
+validation failure does: `Get()` keeps serving the last good config, and the
+error reaches `OnError`.
+
+Not "report and continue". A config whose derived fields were not built is not
+a config anyone should serve, and half-applying one would produce a snapshot
+where some fields reflect the new password and the DSN reflects the old.
+
+## Composition
+
+Multiple `WithDerive` calls run in **registration order**. Unrelated
+derivations stay in separate functions rather than accreting into one closure,
+and a field derived from another derived field works with no new concept: the
+later function simply sees the earlier one's output.
+
+## Type mismatch fails loudly
+
+The generic hook is stored in the non-generic `options` struct as `any` and
+asserted at use, the pattern `preApply` and `onChange` already use.
+
+**Follow `preApply`, not `onChange`.** These two behave differently today, and
+the difference is worth knowing before copying either:
+
+```go
+// preApply, reconciler.go: loud
+fn, ok := o.preApply.(func(context.Context, Change[T]) error)
+if !ok {
+    return nil, fmt.Errorf("mamori: PreApply hook has type %T, want %T: %w", o.preApply, want, ErrInvalid)
+}
+
+// onChange, reconciler.go: silent
+onChange, _ = o.onChange.(func(Change[T]))
+```
+
+A `WithOnChange[Foo]` passed to `Watch[Bar]` compiles and then silently never
+runs. `WithDerive` must not inherit that: a mismatch is a programmer error, and
+one that would otherwise present as "my DSN is empty and nothing told me why".
+It returns an error naming both types and wrapping `ErrInvalid`.
+
+The `onChange` behavior is pre-existing and out of scope here, but it should be
+filed separately.
+
+## What mamori cannot know
+
+The derivation is opaque Go, so mamori does not know which fields it touches.
+Three consequences, which belong where the feature is introduced rather than in
+a footnote:
+
+- **Invisible to `mamori explain`, `schema`, and `diff`.** Those read struct
+  tags, and there is no tag. A derived field looks like an unsourced field to
+  every CLI surface.
+- **Absent from `Status()`'s per-field report.** There is no ref, so there is
+  no staleness or error kind to report. This is honest rather than a gap, but
+  it is a real difference from every other field, and an operator debugging a
+  wrong DSN will look in `Status()` first and find nothing.
+- **A `source` tag and a derive assignment on the same field cannot be flagged
+  as a conflict.** The derive simply wins, because mamori cannot see the
+  assignment. Documentation, not enforcement.
+
+These are the cost of choosing a function over a tag. They were accepted
+knowingly; the docs should present them the same way.
+
+## Change detection comes free
+
+Diffing runs on the finished struct, after derive. So `ev.Changed("DSN")` works
+with no special handling, and a rotation that changes only the password still
+reports the DSN as changed, which is precisely what a caller reacting to it
+needs. No code is required for this; it is a consequence of where derive sits,
+and a test should pin it so a later reordering cannot quietly break it.
+
+## Testing
+
+| Aspect | How |
+| --- | --- |
+| The motivating case | a password rotation rebuilds the DSN, and `ev.Changed("DSN")` is true |
+| Runs before validation | a derived field with `validate:"required"` passes when the derive fills it, and fails when the derive leaves it empty |
+| Runs before PreApply | `PreApply` observes the derived value, asserted by capturing what the hook saw |
+| Error rejects the snapshot | a derive returning an error leaves `Get()` on the previous config and fires `OnError` |
+| Composition order | two derives run in registration order, and the second sees the first's output |
+| Type mismatch | `WithDerive[Foo]` with `Watch[Bar]` returns an error wrapping `ErrInvalid` naming both types, rather than silently not running |
+| Load path too | the same derive runs under `Load`, not only under `Watch` |
+| Secret hygiene | a derived `secret.String` redacts in `fmt`, JSON, and `slog`, and a derive that reveals a password into a plain `string` field is the caller's choice, documented but not prevented |
+
+The type-mismatch test is the one most worth writing carefully. It is the
+difference between this feature and `onChange`, and without it a future
+refactor could quietly converge them.
+
+## Documentation
+
+A `usage/derived-fields.md` page leading with the rotation problem rather than
+the API, the option in `usage/options.md`, and a note in `usage/rotation.md`
+connecting derive to `PreApply`, since together they are what makes a rotated
+credential both rebuilt and proven before it goes live.
