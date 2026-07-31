@@ -257,6 +257,20 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		return nil, err
 	}
 
+	// Checked here for the identical reason preApply is checked just above:
+	// a mismatched hook is caught before any provider round trip is spent
+	// resolving fields, rather than surfacing only after loadValue's own
+	// (necessarily later) typedDerives check below. This is also where
+	// derives, below, comes from: it is the value stored into the engine
+	// (e.derives) for every flush after the initial one, not merely a
+	// discarded probe - see typedDerives's doc comment for why a mismatch
+	// must fail loudly rather than being tolerated as a nil, silently-never-
+	// called hook.
+	derives, err := typedDerives[T](o)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg, initial, err := loadValue[T](ctx, o)
 	if err != nil {
 		return nil, err
@@ -290,6 +304,7 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		sources:   make([][]srcState, len(specs)),
 		onChange:  onChange,
 		preApply:  preApply,
+		derives:   derives,
 		lastGood:  cfg,
 		version:   1, // initial snapshot
 		controlCh: w.control,
@@ -358,6 +373,11 @@ type engine[T any] struct {
 	// anyway - arguments are evaluated before the call, so those two copies of
 	// T are paid hook or no hook.
 	preApply func(context.Context, Change[T]) error
+
+	// derives are the WithDerive hooks, asserted once here rather than on every
+	// flush. A mismatched type parameter fails at Watch time, where it is
+	// findable, rather than silently never running (see typedDerives).
+	derives []func(*T) error
 
 	// updated only by the reconciler goroutine:
 	observed map[string]Value  // latest value seen per path (always advances)
@@ -1077,6 +1097,18 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 			ve := &ValidationError{Err: err}
 			e.emitErr(ve)
 			return cand, nil, ve
+		}
+	}
+	// Same position as the Load path: after decode, before validation, before
+	// the PreApply gate. See WithDerive.
+	for _, d := range e.derives {
+		if err := d(&cand); err != nil {
+			de := &DeriveError{Err: err}
+			e.o.meter.RecordApplyRejected(RejectDerive)
+			e.o.log().Error("candidate rejected by a derive hook; continuing to serve the previous config",
+				errAttrs(err)...)
+			e.emitErr(de)
+			return cand, nil, de
 		}
 	}
 	if err := e.o.validator.Validate(cand); err != nil {

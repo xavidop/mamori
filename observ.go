@@ -30,7 +30,7 @@ type Meter interface {
 }
 
 // RejectReason names why a candidate configuration was refused. It is a closed
-// set of two so an adapter can use it as a metric label without unbounded
+// set of three so an adapter can use it as a metric label without unbounded
 // cardinality, which a free-form string would invite.
 type RejectReason string
 
@@ -39,6 +39,8 @@ const (
 	RejectValidation RejectReason = "validation"
 	// RejectPreApply means a PreApply hook refused the change.
 	RejectPreApply RejectReason = "preapply"
+	// RejectDerive means a WithDerive hook returned an error.
+	RejectDerive RejectReason = "derive"
 )
 
 // Tracer is the minimal tracing sink mamori emits to (see Meter for the no-dep
