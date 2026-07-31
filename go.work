@@ -32,6 +32,7 @@ use (
 	./providers/postgres
 	./providers/redis
 	./providers/s3
+	./providers/scaleway-sm
 	./providers/sops
 	./providers/split
 	./providers/sqlite
