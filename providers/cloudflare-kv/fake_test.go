@@ -100,6 +100,18 @@ func (f *fakeKV) failStatus(namespace string, code int) {
 	f.failCode[namespace] = code
 }
 
+// clearFail cancels a failStatus injected for namespace, restoring ordinary
+// service. Every test file up to this one starts from a fresh newFake() and
+// never needs this, but providertest's ErrorClassification case (Task 4)
+// reuses one fakeKV across its whole run: it injects a failure per case and
+// must undo it before the next case, or the failure leaks into every later
+// case that touches this fake.
+func (f *fakeKV) clearFail(namespace string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.failCode, namespace)
+}
+
 // counts returns how many single-key GET and bulk POST requests have been
 // served.
 func (f *fakeKV) counts() (get, bulk int) {
