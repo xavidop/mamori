@@ -154,23 +154,55 @@ a footnote:
 - **A `source` tag and a derive assignment on the same field cannot be flagged
   as a conflict.** The derive simply wins, because mamori cannot see the
   assignment. Documentation, not enforcement.
+- **A derived field never appears in `ev.Changed()`.** Same root cause: the
+  diff is keyed on `source`-tagged specs and their per-ref versions, and a
+  derived field has neither. See the change-detection section below.
 
 These are the cost of choosing a function over a tag. They were accepted
 knowingly; the docs should present them the same way.
 
-## Change detection comes free
+## Change detection does NOT come free
 
-Diffing runs on the finished struct, after derive. So `ev.Changed("DSN")` works
-with no special handling, and a rotation that changes only the password still
-reports the DSN as changed, which is precisely what a caller reacting to it
-needs. No code is required for this; it is a consequence of where derive sits,
-and a test should pin it so a later reordering cannot quietly break it.
+An earlier revision of this spec claimed it did. That was wrong, and the error
+was found during implementation rather than by reading, which is worth
+recording because it is the kind of claim that reads as obviously true.
+
+`ev.Changed("DSN")` **can never be true for a derived field.** Both diff sites
+in `reconciler.go` (`buildCandidate`'s loop and `diffApplied`) walk `e.specs`,
+which `fieldSpecs` populates only for fields carrying a `source` tag, and they
+compare the `Version` strings recorded per ref. A derived field has no spec, no
+ref, and no version, so it cannot enter `Change.Fields` at all. Where the derive
+runs is irrelevant to this; it is not an ordering problem.
+
+**Callers therefore trigger on an input and read the derived field:**
+
+```go
+mamori.OnChange(func(ev mamori.Change[Config]) {
+    if ev.Changed("Pass") || ev.Changed("Host") || ev.Changed("User") {
+        pool.Rotate(w.Get().DSN.Reveal())   // always correct, always rebuilt
+    }
+})
+```
+
+The derived value itself is never stale. Only the *trigger* has to name inputs.
+
+This is an honest cost and it partly reopens the problem the feature exists to
+solve: forget one input in that condition and the pool never rotates when that
+field changes, which is the same bookkeeping `WithDerive` set out to delete.
+The docs must say so where the feature is introduced, not bury it.
+
+Two alternatives were considered and rejected for now. Having `WithDerive`
+declare the field paths it writes would restore `ev.Changed("DSN")`, at the
+cost of a list that can silently drift from the function it describes.
+Diffing the finished structs reflectively would fix it with no API change, but
+that changes core `Changed()` semantics for every field and all 38 providers
+and deserves its own spec rather than riding along here.
 
 ## Testing
 
 | Aspect | How |
 | --- | --- |
-| The motivating case | a password rotation rebuilds the DSN, and `ev.Changed("DSN")` is true |
+| The motivating case | a password rotation rebuilds the DSN, and `ev.Changed("Pass")` is true while `ev.Changed("DSN")` is false, with a comment naming why |
 | Runs before validation | a derived field with `validate:"required"` passes when the derive fills it, and fails when the derive leaves it empty |
 | Runs before PreApply | `PreApply` observes the derived value, asserted by capturing what the hook saw |
 | Error rejects the snapshot | a derive returning an error leaves `Get()` on the previous config and fires `OnError` |

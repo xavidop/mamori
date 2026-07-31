@@ -520,7 +520,7 @@ func TestDeriveRebuildsOnRotation(t *testing.T) {
 	w, err := Watch[rotCfg](context.Background(),
 		WithProvider(p),
 		WithDerive(buildDSN),
-		OnChange(func(ev Change[rotCfg]) { changed = ev.Changed("DSN") }),
+		OnChange(func(ev Change[rotCfg]) { changed = ev.Changed("Pass") }),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -537,13 +537,18 @@ func TestDeriveRebuildsOnRotation(t *testing.T) {
 	if got := w.Get().DSN.Reveal(); got != "postgres://alice:new@db" {
 		t.Fatalf("after rotation: got %q, want the rebuilt DSN", got)
 	}
+	// Changed("Pass"), NOT Changed("DSN"). A derived field can never appear in
+	// the diff: both diff sites walk e.specs, which only carries source-tagged
+	// fields, and compare per-ref versions. A derived field has neither. The
+	// DSN itself is rebuilt correctly, which the assertion above proves; only
+	// the trigger has to name an input.
 	if !changed {
-		t.Error("ev.Changed(\"DSN\") must be true after a rotation that changed only the password")
+		t.Error(`ev.Changed("Pass") must be true after a rotation that changed the password`)
 	}
 }
 ```
 
-That test also covers change detection, which comes free from diffing on the finished struct; the assertion exists so a later reordering cannot quietly break it.
+Note the assertion is `Changed("Pass")`, not `Changed("DSN")`. A derived field can never enter the diff, and the comment in the test says why so nobody "fixes" it later.
 
 Then add, in the same style:
 
@@ -639,6 +644,17 @@ The page must state, plainly rather than in a footnote, the three things mamori 
 - Derived fields are **invisible to `mamori explain`, `schema`, and `diff`**, which read struct tags, and there is no tag.
 - Derived fields **do not appear in `Status()`'s per-field report**. There is no ref, so there is no staleness or error kind to report. An operator debugging a wrong DSN will look there first and find nothing.
 - A field with both a `source` tag and a derive assignment **cannot be flagged as a conflict**; the derive wins, because mamori cannot see the assignment.
+- **A derived field never appears in `ev.Changed()`.** This one needs its own worked example, because it is the most likely to bite. Both diff sites walk `e.specs`, which only carries `source`-tagged fields, and compare per-ref versions; a derived field has neither. So a caller triggers on an **input** and reads the derived field:
+
+```go
+mamori.OnChange(func(ev mamori.Change[Config]) {
+    if ev.Changed("Pass") || ev.Changed("Host") || ev.Changed("User") {
+        pool.Rotate(w.Get().DSN.Reveal())   // always correct, always rebuilt
+    }
+})
+```
+
+  Say plainly that the derived value itself is never stale, only the trigger has to name inputs, and that forgetting an input there means the reaction never fires for that field. That is the same bookkeeping `WithDerive` set out to delete, so it is a real cost and must not be buried.
 
 Also cover: registration order for multiple hooks, derived-from-derived working as a consequence of that order, a derive error rejecting the whole update, and why there is no `context.Context`.
 
