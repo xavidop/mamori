@@ -55,6 +55,7 @@ them deliberately:
 
 **A rejection**, which is what you usually want to report:
 
+- a `WithDerive` hook returned an error (a `*DeriveError`),
 - a field failed validation,
 - `PreApply` rejected the candidate (a `*PreApplyError`),
 - a field is blocked by `onfail:"fail"` and stayed blocked.

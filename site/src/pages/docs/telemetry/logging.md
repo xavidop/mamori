@@ -25,6 +25,7 @@ Every event mamori can log:
 | `watch error` | Warn | A runtime watch or poll delivered a non-not-found error for a field. |
 | `value is stale` | Warn | In addition to `watch error`, once the field has gone unrefreshed longer than the `WithStale` threshold. |
 | `resolve recovered` | Info | A field that previously carried an error resolved cleanly (or fell back to a tolerated absence); logged only when there was an error to recover from, so a healthy refresh stays quiet. |
+| `candidate rejected by a derive hook; continuing to serve the previous config` | Error | A `WithDerive` hook returned an error and the reconciled candidate was discarded. |
 | `candidate rejected by validation; continuing to serve the previous config` | Error | A reconciled candidate failed struct validation and was discarded. |
 | `change rejected by PreApply; continuing to serve the previous config` | Warn | A `PreApply` hook rejected a candidate. |
 | `config change applied` | Info | A reconciled snapshot was accepted; logged once per flush, with the number of changed fields. |

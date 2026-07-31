@@ -53,8 +53,12 @@ time an unrelated field changes, such as a log level.
 ```go
 w, err := mamori.Watch[Config](ctx,
 	mamori.WithDerive(func(c *Config) error {
-		c.DSN = secret.NewString(fmt.Sprintf(
-			"postgres://%s:%s@%s/app", c.User, c.Pass.Reveal(), c.Host))
+		c.DSN = secret.NewString((&url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(c.User, c.Pass.Reveal()),
+			Host:   c.Host,
+			Path:   "/app",
+		}).String())
 		return nil
 	}),
 	mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {

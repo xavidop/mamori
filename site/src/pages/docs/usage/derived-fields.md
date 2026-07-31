@@ -20,8 +20,12 @@ Three weeks later the password rotates. mamori does its job perfectly: `w.Get().
 ```go
 w, err := mamori.Watch[Config](ctx,
 	mamori.WithDerive(func(c *Config) error {
-		c.DSN = secret.NewString(fmt.Sprintf(
-			"postgres://%s:%s@%s/app", c.User, c.Pass.Reveal(), c.Host))
+		c.DSN = secret.NewString((&url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(c.User, c.Pass.Reveal()),
+			Host:   c.Host,
+			Path:   "/app",
+		}).String())
 		return nil
 	}),
 )
@@ -29,7 +33,7 @@ w, err := mamori.Watch[Config](ctx,
 
 `WithDerive` installs a hook that runs on every `Load` and every reconciled update, after fields are decoded and before validation, so `DSN` above is rebuilt from whatever `User`, `Pass`, and `Host` currently hold, not from what they held when the process started.
 
-Escaping and secret hygiene are yours, deliberately: `net/url` already escapes a password containing `@` or `/` correctly, and assigning into a `secret.String` (not a plain `string`) is what keeps the assembled value redacted in `fmt`, JSON, and `slog`. A tag-based derivation would have had to reinvent both, so `WithDerive` takes a plain function instead.
+Escaping and secret hygiene are yours, deliberately: `net/url` already escapes a password containing `@` or `/` correctly, and assigning into a `secret.String` (not a plain `string`) is what keeps the assembled value redacted in `fmt`, JSON, and `slog`. A tag-based derivation would have had to reinvent both, so `WithDerive` takes a plain function instead. Build the DSN with `net/url`, as above, not `fmt.Sprintf`: `Sprintf` does not escape a password containing `@` or `/`, so a rotated password containing either would silently produce a broken DSN, exactly the failure this feature exists to prevent.
 
 Unlike `PreApply`, the hook takes no `context.Context`. `PreApply` does I/O to prove a credential works; a derive is a pure transformation of a struct that has already been resolved, and the missing parameter is how the API says so. If assembling your value needs a network round trip, it is not a derive.
 
@@ -83,7 +87,7 @@ A derive is opaque Go, not a declaration mamori can inspect, and that costs thre
 
 This is the one limitation most likely to bite, so it gets called out on its own rather than folded into the list above.
 
-Both places mamori computes a diff (the reconciler's candidate build and the coalesced diff `Unpin` produces) walk the same field list `ev.Changed` consults, and that list is populated only from `source`-tagged fields, each compared by its own resolved version. A derived field has neither a `source` tag nor a version: there is nothing to diff, so it can never be in that list, regardless of where in the derive chain it was built or how much it actually changed.
+All three places mamori computes a diff (the reconciler's candidate build, the coalesced diff `Unpin` produces, and the initial-load `Change` a `PreApply` hook reads) walk the same field list `ev.Changed` consults, and that list is populated only from `source`-tagged fields, each compared by its own resolved version. A derived field has neither a `source` tag nor a version: there is nothing to diff, so it can never be in that list, regardless of where in the derive chain it was built or how much it actually changed.
 
 So triggering on the derived field itself does not work:
 

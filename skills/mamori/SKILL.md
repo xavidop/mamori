@@ -119,6 +119,30 @@ Rules to hold onto:
 - **The same rule covers `OnError`,** which is delivered inline on the reconciler goroutine rather than through the `OnChange` queue. Do not call `w.Refresh` from an `OnError` callback to retry a rejected reload - it returns `ErrReentrantCall`. Issue it from another goroutine, or let the next reconciliation carry it. `OnChange` is safe: it runs on its own dispatch goroutine.
 - A hook typed for a different config than the one passed to `Watch[T]`/`Load[T]` fails `Watch` and `Load` outright (an error wrapping `ErrInvalid`), rather than silently leaving the gate open.
 
+## Derive fields from already-resolved fields
+
+`mamori.WithDerive` computes a field from other already-resolved fields - a DSN assembled from a host, a user, and a rotating password - so it is rebuilt on every applied update instead of going stale the moment one input rotates. It runs after fields are decoded and before validation, and before any `PreApply` gate, so a rotation-safety hook proves the rebuilt value rather than the one it replaced.
+
+```go
+mamori.WithDerive(func(c *Config) error {
+	c.DSN = secret.NewString((&url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(c.User, c.DBPassword.Reveal()),
+		Host:   c.Host,
+		Path:   "/app",
+	}).String())
+	return nil
+})
+```
+
+Rules to hold onto:
+- Use `net/url` to assemble the value, not `fmt.Sprintf` - a password containing `@` or `/` needs escaping, and `net/url` already does it correctly. Assign into a `secret.String`/`secret.Bytes` field, not a plain `string`, so the derived value stays redacted in `fmt`, JSON, and `slog`.
+- `WithDerive` can be given more than once; each call appends a hook, and hooks run in registration order, so a field derived from another derived field just works (the second hook sees the first hook's output).
+- Returning an error rejects the whole candidate atomically, exactly like a validation failure: `Get()` keeps the last valid config, `OnChange` does not fire, and `OnError` receives a `*DeriveError`.
+- A hook typed for a different config than `Watch[T]`/`Load[T]` fails outright (`ErrInvalid`), the same as a mismatched `PreApply` hook - never a silent no-op.
+- **A derived field never appears in `ev.Changed()`.** Change detection walks `source`-tagged fields only, compared by resolved version; a derived field has neither. Trigger on an input instead (`ev.Changed("DBPassword")`), then read the derived field, which is always correct even though it is never itself "changed".
+- A derived field also never appears in `Status()`, `mamori explain`, `schema`, or `diff` - none of them see anything without a `source` tag.
+
 ## Force an immediate refresh
 
 `w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals, and **blocks until the result is applied or rejected** - which is the point: a SIGHUP handler wants to know whether the reload it triggered actually worked, not just that it was requested.
@@ -132,7 +156,7 @@ for range sighupCh {
 		// You stopped waiting; the reload still proceeds. Not a rejection.
 		log.Printf("stopped waiting for the reload: %v", err)
 	default:
-		log.Printf("reload rejected: %v", err) // validation, PreApply, or onfail:"fail"
+		log.Printf("reload rejected: %v", err) // derive, validation, PreApply, or onfail:"fail"
 	}
 }
 ```

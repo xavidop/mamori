@@ -38,7 +38,7 @@ Groups below are ordered by what you are trying to do, not alphabetically, becau
 | Option | What it does | Default |
 | --- | --- | --- |
 | `OnChange` | Installs the callback invoked once per applied update; see [React to a field with Change and Changed](/docs/usage/watching/#react-to-a-field-with-change-and-changed). | none |
-| `OnError` | Installs a callback for runtime resolve, validation, stale, and PreApply-rejection errors; see [Handle errors with OnError](/docs/usage/watching/#handle-errors-with-onerror). | none |
+| `OnError` | Installs a callback for runtime resolve, validation, stale, PreApply-rejection, and derive-rejection errors; see [Handle errors with OnError](/docs/usage/watching/#handle-errors-with-onerror). | none |
 | `PreApply` | Installs a gate that must pass before a candidate snapshot becomes current; see [Rotation safety](/docs/usage/rotation/). | none (no gate) |
 | `WithPreApplyTimeout` | Bounds how long a `PreApply` hook may run. | 10s |
 | `WithDerive` | Computes fields from already-resolved fields, after decoding and before validation; see [Derived fields](/docs/usage/derived-fields/). | none (no derivation runs) |

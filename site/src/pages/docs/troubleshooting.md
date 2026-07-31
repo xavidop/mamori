@@ -50,8 +50,9 @@ Causes:
 
 - The candidate failed the configured `Validator`.
 - A `PreApply` gate rejected it (the credential the candidate carries does not actually work).
+- A `WithDerive` hook returned an error (a value assembled from other fields could not be built).
 
-Diagnostics: `OnError` receives a `*ValidationError` for the first case and a `*PreApplyError` for the second, so `errors.As` tells them apart:
+Diagnostics: `OnError` receives a `*ValidationError` for the first case, a `*PreApplyError` for the second, and a `*DeriveError` for the third, so `errors.As` tells them apart:
 
 ```go
 mamori.OnError(func(err error) {
@@ -63,6 +64,11 @@ mamori.OnError(func(err error) {
 	var verr *mamori.ValidationError
 	if errors.As(err, &verr) {
 		// the candidate failed struct validation
+		return
+	}
+	var derr *mamori.DeriveError
+	if errors.As(err, &derr) {
+		// a WithDerive hook returned an error
 	}
 })
 ```
