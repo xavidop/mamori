@@ -116,9 +116,13 @@ the strongest reason to leave it as the default rather than pinning `latest`.
   read a general-purpose config or KV store and report `Sensitive: false`, this
   provider reads a real secret manager, so every resolved value is marked
   accordingly.
-- **`Value.Version` is the backend revision, not a content hash.** It is always
-  `resp.Revision` rendered as a decimal string - never `mamori.VersionHash`, and
-  never affected by a `#field` selection that narrows the returned bytes. This is
+- **`Value.Version` is the backend revision, not a content hash.** It is
+  `resp.Revision` rendered as a decimal string whenever the response reports one,
+  which in practice is always, since Scaleway numbers revisions from 1. It falls
+  back to `mamori.VersionHash` only if a response arrives with no `revision` at
+  all, because a constant `Version` would make every later rotation invisible to
+  mamori's poller. Either way it is never affected by a `#field` selection that
+  narrows the returned bytes. This is
   the first provider in this trio of recent additions (alongside `providers/vercel-gc`
   and `providers/cloudflare-kv`) that can do this: the other two read a
   general-purpose config or KV store and fall back to a content hash because their
@@ -248,6 +252,7 @@ revision, see above) to detect a change between ticks.
 | Ref parsing: last-segment split into path/name, default revision `latest_enabled`, explicit `?revision=<n>`/`latest`, a `#fragment` is not part of the name, error cases (empty name, trailing slash) | **Verified** (unit tests) |
 | Settings precedence (explicit option over environment), region falling back to `fr-par`, and errors that name the missing option without ever echoing a set secret key or project id | **Verified** (unit tests) |
 | `Value.Version` is the real backend revision, not a content hash: two revisions carrying byte-identical payloads report different `Version`, and a `#field` selection narrows `Bytes` without changing `Version` | **Verified** (`TestResolveVersionIsRevisionNotContentHash`, `TestResolveVersionStaysRevisionEvenWithFieldSelection`) |
+| `Value.Version` falls back to a content hash if a response ever carries no revision, so a constant `Version` cannot make later rotations invisible to the poller | **Verified** (`TestValueForVersionFallsBackToContentHashWhenRevisionAbsent`) |
 | `Value.Sensitive` is `true`, and wrapping the resolved bytes in `secret.String` redacts under `fmt` | **Verified** (`TestResolveValueSensitiveAndRedactsViaSecretString`) |
 | `Value.Metadata` carries exactly `region` and `revision` - never the secret id, project id, path, or value | **Verified** (`TestResolveMetadataOnlyRegionAndRevision`) |
 | CRC verification: a matching `data_crc32` resolves, a mismatch fails with `mamori.ErrInvalid`, and an absent `data_crc32` is not an error | **Verified** (unit tests) |

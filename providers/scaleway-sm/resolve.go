@@ -93,6 +93,15 @@ func (p *Provider) access(ctx context.Context, s settings, path, name, revision 
 		// version inaccessible, not merely non-default - see the package doc
 		// comment on the ?revision default); see classifyStatus's doc comment
 		// for why the response does not reliably distinguish any of these.
+		//
+		// That a disabled revision arrives here as a 404 specifically is the
+		// one part of this not confirmed from a published source. Scaleway
+		// documents the inaccessibility but not the status it returns, and 404
+		// is the reading consistent with an inaccessible version being absent
+		// from the caller's view. If it turns out to be a 403, the sentinel
+		// changes from ErrNotFound to ErrPermissionDenied and a disabled
+		// revision would fail loudly rather than degrading to the field's
+		// default. The live integration test is what would reveal it.
 		// Drain and discard a bounded amount of the body before returning:
 		// this provider caches nothing (see Resolve's doc comment), so an
 		// absent secret is read again on every poll tick, and leaving the
