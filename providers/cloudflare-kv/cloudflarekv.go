@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/xavidop/mamori"
@@ -83,10 +84,12 @@ func WithAccountID(id string) Option { return func(p *Provider) { p.accountID = 
 func WithNamespaceID(id string) Option { return func(p *Provider) { p.namespaceID = id } }
 
 // WithBaseURL overrides the API origin, for an httptest.Server or a proxy.
+// A trailing slash is trimmed so that joining it with a path never produces
+// a double slash.
 func WithBaseURL(u string) Option {
 	return func(p *Provider) {
 		if u != "" {
-			p.baseURL = u
+			p.baseURL = strings.TrimRight(u, "/")
 		}
 	}
 }

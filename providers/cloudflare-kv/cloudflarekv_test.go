@@ -85,6 +85,28 @@ func TestSettingsRefNamespaceWins(t *testing.T) {
 	}
 }
 
+// TestSettingsNamespaceAllThreeSourcesRefWins sets the environment, an
+// explicit WithNamespaceID, and the ref's ?namespace= to three distinguishable
+// values at once. TestSettingsRefNamespaceWins alone only pits the ref
+// against the environment, and TestSettingsPrecedence only pits the explicit
+// option against the environment, so neither catches a reordering of
+// firstNonEmpty's arguments in settingsFor that puts the explicit option
+// ahead of the ref's option. This test does.
+func TestSettingsNamespaceAllThreeSourcesRefWins(t *testing.T) {
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "a")
+	t.Setenv("CLOUDFLARE_KV_NAMESPACE_ID", "env-ns")
+
+	p := New(WithNamespaceID("opt-ns"))
+	got, err := p.settingsFor(ref(t, "cloudflare-kv://k?namespace=ref-ns"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.namespace != "ref-ns" {
+		t.Fatalf("got namespace %q, want the ref's %q to win over both WithNamespaceID and the environment", got.namespace, "ref-ns")
+	}
+}
+
 func TestSettingsMissing(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -123,5 +145,15 @@ func TestSettingsErrorsNeverCarryCredentials(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SUPER_SECRET_TOKEN") {
 		t.Fatalf("error leaked the API token: %v", err)
+	}
+}
+
+// A trailing slash must be trimmed here, not left for Task 2's request
+// building to trip over: baseURL + "/accounts/..." must never produce a
+// double slash.
+func TestWithBaseURLTrimsTrailingSlash(t *testing.T) {
+	p := New(WithBaseURL("https://example.com/kv/"))
+	if p.baseURL != "https://example.com/kv" {
+		t.Fatalf("got baseURL %q, want the trailing slash trimmed", p.baseURL)
 	}
 }
