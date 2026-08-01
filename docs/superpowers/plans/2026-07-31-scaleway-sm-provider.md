@@ -165,6 +165,8 @@ Add `func init() { mamori.Register(New()) }` and delete the deferral comment. Pi
 - **`Metadata` contains region and revision, and contains none of** the secret id, the project id, the path, or the value.
 - **CRC:** a matching `data_crc32` resolves; a mismatched one returns an error satisfying `mamori.ErrInvalid`; an absent one is not an error.
 - **`latest_enabled` semantics:** with revision 4 disabled and 3 enabled, the default ref resolves revision 3, while `?revision=latest` resolves 4. Assert the revision reaching the URL and the `Version` returned.
+
+  > **Note added after the final review, not corrected in place:** the claim above that `?revision=latest` resolves a disabled revision 4 is the pre-correction understanding this plan was written under. The review established that Scaleway makes a disabled revision *inaccessible*, not merely non-default, so requesting `?revision=latest` (or a pinned disabled revision) fails rather than resolving it. The design spec and all shipped code and docs reflect that correction; this plan is a historical record of how the work was actually executed and is deliberately left with its original wording rather than rewritten to match, per [issue #109](https://github.com/xavidop/mamori/issues/109).
 - `#field` and `#/a/b` selection.
 - An unknown secret returns `mamori.ErrNotFound`.
 - A cancelled context returns `context.Canceled`.

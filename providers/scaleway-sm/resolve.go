@@ -256,7 +256,13 @@ func valueFor(resp accessResponse, ref mamori.Ref, region string) (mamori.Value,
 		// the value. A secret's location is itself information - this is a
 		// secret manager, not a config store - and Metadata reaches the
 		// admin HTTP endpoint and the status report, both broader-audience
-		// surfaces than "whoever holds the resolved value".
+		// surfaces than "whoever holds the resolved value". "revision" is
+		// simply version, so in the resp.Revision == 0 fallback above it
+		// holds a content hash rather than a numbered revision, same as
+		// Version does; that discloses nothing new, but a reader should not
+		// assume this key is always a number. That fallback should not occur
+		// against the real API in the first place (see Version's paragraph
+		// above).
 		Metadata: map[string]string{
 			"region":   region,
 			"revision": version,
