@@ -31,14 +31,41 @@ type fakeGC struct {
 	digestReq int
 	itemsReq  int
 	lastAuth  string
+
+	// malformedItems is store id -> whether its /items endpoint should serve
+	// a body that fails to json.Unmarshal into map[string]jsonRaw, until the
+	// test replaces the fake. It powers TestResolveItemsDecodeFailureIsInvalid.
+	malformedItems map[string]bool
+
+	// callOrder records every request's endpoint ("digest" or "items"), in
+	// the order the fake's handler observed them, regardless of outcome
+	// (success, injected failure, or unknown store). It powers
+	// TestResolveFetchesDigestBeforeItems.
+	callOrder []string
 }
 
 func newFake() *fakeGC {
 	return &fakeGC{
-		stores:   map[string]map[string]jsonRaw{},
-		rev:      map[string]int{},
-		failCode: map[string]map[string]int{},
+		stores:         map[string]map[string]jsonRaw{},
+		rev:            map[string]int{},
+		failCode:       map[string]map[string]int{},
+		malformedItems: map[string]bool{},
 	}
+}
+
+// setMalformedItems makes store's /items endpoint serve a body that fails to
+// json.Unmarshal into map[string]jsonRaw, until the test replaces the fake.
+func (f *fakeGC) setMalformedItems(store string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.malformedItems[store] = true
+}
+
+// order returns every request's endpoint observed so far, in arrival order.
+func (f *fakeGC) order() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.callOrder...)
 }
 
 // set writes a raw JSON value and bumps the store digest, exactly as a real
@@ -123,6 +150,7 @@ func (f *fakeGC) handle(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.lastAuth = r.Header.Get("Authorization")
+	f.callOrder = append(f.callOrder, endpoint)
 	if code, ok := f.failCodeFor(store, endpoint); ok {
 		f.mu.Unlock()
 		w.WriteHeader(code)
@@ -153,6 +181,16 @@ func (f *fakeGC) handle(w http.ResponseWriter, r *http.Request) {
 		// TestDigestShapes covers the object form as well.
 		_, _ = io.WriteString(w, strconv.Quote("rev"+strconv.Itoa(rev)))
 	case "items":
+		f.mu.Lock()
+		malformed := f.malformedItems[store]
+		f.mu.Unlock()
+		if malformed {
+			// Deliberately invalid JSON: fetchItems's json.Unmarshal into
+			// map[string]jsonRaw must fail on this, exercising the decode
+			// failure branch TestResolveItemsDecodeFailureIsInvalid pins.
+			_, _ = io.WriteString(w, `{not valid json`)
+			return
+		}
 		out := map[string]json.RawMessage{}
 		f.mu.Lock()
 		for k, v := range items {

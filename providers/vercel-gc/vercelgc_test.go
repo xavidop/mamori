@@ -82,6 +82,12 @@ func TestParsePath(t *testing.T) {
 		{name: "leading slash tolerated", path: "/log-level", defaultStore: "ecfg_def", wantStore: "ecfg_def", wantKey: "log-level"},
 		{name: "one segment with no default store", path: "log-level", defaultStore: "", wantErr: "no store"},
 		{name: "empty path", path: "", defaultStore: "ecfg_def", wantErr: "requires a key"},
+		// Both the key and the store are missing here, which is the only case
+		// that actually pins parsePath's check ORDER (key before store): the
+		// two cases above each leave one of the two non-empty, so neither can
+		// tell which check runs first. If store were checked first, this case
+		// would report "no store" instead.
+		{name: "empty path and no default store: key is checked before store", path: "", defaultStore: "", wantErr: "requires a key"},
 		{name: "three segments", path: "a/b/c", defaultStore: "ecfg_def", wantErr: "at most"},
 		{name: "empty key in two-segment form", path: "ecfg_abc/", defaultStore: "", wantErr: "requires a key"},
 	}

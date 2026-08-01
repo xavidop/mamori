@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -625,5 +626,75 @@ func TestResolveErrorBodyIsBounded(t *testing.T) {
 	}
 	if len(err.Error()) > 10000 {
 		t.Fatalf("error message is %d bytes long; the diagnostic read must be bounded well below the %d-byte oversized body", len(err.Error()), len(oversized))
+	}
+}
+
+// TestResolveRegionIsPathEscaped pins #108's scaleway-sm region-escape gap:
+// access builds the request URL as ".../regions/" + url.PathEscape(s.region)
+// + "/...", but every other test in this package uses testRegion
+// ("test-region"), which needs no escaping at all, so dropping
+// url.PathEscape(s.region) in favor of the bare region would leave every
+// other test green.
+//
+// This uses a region containing a literal slash rather than a space:
+// net/http's own request-line writer normalizes an unescaped space back to
+// "%20" regardless of whether application code called url.PathEscape, which
+// would make a space a false discriminator here. A raw slash is not
+// "unsafe" the same way - url.Parse treats it as a genuine path-segment
+// boundary and leaves it alone - so without url.PathEscape(s.region) it
+// splits the region across two path segments instead of one, which the
+// exact-segment comparison below catches.
+func TestResolveRegionIsPathEscaped(t *testing.T) {
+	const region = "region/with-slash"
+	var gotEscapedPath string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"message":"not found"}`)
+	}))
+	defer srv.Close()
+
+	p := New(WithSecretKey(testSecretKey), WithProjectID(testProjectID), WithRegion(region), WithBaseURL(srv.URL))
+
+	_, _ = p.Resolve(context.Background(), ref(t, "scaleway-sm://k"))
+
+	_, rest, ok := strings.Cut(gotEscapedPath, "/regions/")
+	if !ok {
+		t.Fatalf("request path %q has no /regions/ segment", gotEscapedPath)
+	}
+	gotRegionSegment, _, ok := strings.Cut(rest, "/secrets-by-path/versions/")
+	if !ok {
+		t.Fatalf("request path %q has no /secrets-by-path/versions/ marker after /regions/", gotEscapedPath)
+	}
+	want := url.PathEscape(region)
+	if gotRegionSegment != want {
+		t.Fatalf("region segment in request path = %q, want %q (url.PathEscape(region), one path segment); full path was %q", gotRegionSegment, want, gotEscapedPath)
+	}
+}
+
+// TestDefaultBaseURLIsV1Beta1 pins #108's scaleway-sm defaultBaseURL gap:
+// TestWithBaseURLEmptyIsNoOp only compares p.baseURL against the
+// defaultBaseURL constant itself, so mutating the constant's value (for
+// example "v1beta1" to "v1") survives that test tautologically - it changes
+// what the constant IS, and the test just checks the field still holds
+// whatever the constant currently says. This test instead asserts the
+// literal API version segment that reaches the wire, hardcoded here rather
+// than read from the constant under test.
+func TestDefaultBaseURLIsV1Beta1(t *testing.T) {
+	f := newFakeSM()
+	f.set("/", "k", []byte("v"))
+	p := f.provider(WithBaseURL("")) // "" is a no-op; New's default must still be v1beta1
+
+	if _, err := p.Resolve(context.Background(), ref(t, "scaleway-sm://k")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	f.mu.Lock()
+	path := f.lastPath
+	f.mu.Unlock()
+	const wantSegment = "/secret-manager/v1beta1/regions/"
+	if !strings.Contains(path, wantSegment) {
+		t.Fatalf("request path %q does not contain %q; defaultBaseURL must still name the v1beta1 API version", path, wantSegment)
 	}
 }

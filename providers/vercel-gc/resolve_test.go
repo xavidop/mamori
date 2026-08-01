@@ -175,8 +175,16 @@ func TestResolveTwoStoresAreIndependent(t *testing.T) {
 	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://k")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://ecfg_other/k")); err != nil {
+	// Asserting this first resolved value, not just its error, is what makes
+	// an incorrectly-keyed snapshot cache (for example one that mixed up two
+	// stores' maps) fail deterministically right here, rather than depending
+	// on TestResolveConcurrentAcrossStores to carry that load by accident.
+	first, err := p.Resolve(ctx, ref(t, "vercel-gc://ecfg_other/k"))
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(first.Bytes) != "b1" {
+		t.Fatalf("got %q, want %q: the second store's own value must come back, not the default store's", first.Bytes, "b1")
 	}
 	_, itemsBefore := f.counts()
 
@@ -376,6 +384,89 @@ func TestResolveUnknownStoreIsNotFound(t *testing.T) {
 	_, err := p.Resolve(context.Background(), ref(t, "vercel-gc://ecfg_missing/k"))
 	if !errors.Is(err, mamori.ErrNotFound) {
 		t.Fatalf("got %v, want an error satisfying mamori.ErrNotFound", err)
+	}
+}
+
+// TestResolveTwoFragmentsOfSameKeyAreIndependent pins that two refs
+// differing only by fragment - vercel-gc://cfg#a and vercel-gc://cfg#b -
+// each resolve their own selected field of the SAME underlying item,
+// verified correct by inspection during review (Resolve looks up snap.items
+// once per call and valueFor's selection is stateless per call, so nothing
+// caches a selected result keyed only by store+path while ignoring the
+// fragment), but nothing in this package exercised two such refs side by
+// side before this test.
+func TestResolveTwoFragmentsOfSameKeyAreIndependent(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "cfg", `{"a":"1","b":"2"}`)
+	p := f.provider()
+	ctx := context.Background()
+
+	va, err := p.Resolve(ctx, ref(t, "vercel-gc://cfg#a"))
+	if err != nil {
+		t.Fatalf("resolving #a: unexpected error: %v", err)
+	}
+	if string(va.Bytes) != "1" {
+		t.Fatalf("vercel-gc://cfg#a: got %q, want %q", va.Bytes, "1")
+	}
+
+	vb, err := p.Resolve(ctx, ref(t, "vercel-gc://cfg#b"))
+	if err != nil {
+		t.Fatalf("resolving #b: unexpected error: %v", err)
+	}
+	if string(vb.Bytes) != "2" {
+		t.Fatalf("vercel-gc://cfg#b: got %q, want %q", vb.Bytes, "2")
+	}
+
+	// Re-resolving #a after #b must still return #a's own field, not #b's
+	// (or the whole object), which is what would happen if selection were
+	// somehow cached keyed only on store+path.
+	va2, err := p.Resolve(ctx, ref(t, "vercel-gc://cfg#a"))
+	if err != nil {
+		t.Fatalf("re-resolving #a: unexpected error: %v", err)
+	}
+	if string(va2.Bytes) != "1" {
+		t.Fatalf("re-resolving vercel-gc://cfg#a: got %q, want %q", va2.Bytes, "1")
+	}
+}
+
+// TestResolveItemsDecodeFailureIsInvalid pins fetchItems's decode-failure
+// branch: an /items response that is not valid JSON must surface as
+// mamori.ErrInvalid, not some other error class. Nothing in this package
+// exercised a malformed /items body before this test; TestDigestShapesRejected
+// covers parseDigest's own failure shapes, but fetchItems has an entirely
+// separate json.Unmarshal call with its own error-wrapping line.
+func TestResolveItemsDecodeFailureIsInvalid(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "k", `"v"`)
+	f.setMalformedItems(testStore)
+	p := f.provider()
+
+	_, err := p.Resolve(context.Background(), ref(t, "vercel-gc://k"))
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("got %v, want an error satisfying mamori.ErrInvalid", err)
+	}
+}
+
+// TestResolveFetchesDigestBeforeItems pins the invariant the package doc
+// comment on snapshotFor relies on: an /items response fetched after
+// observing digest D must reflect content at least as new as D, which only
+// holds if the digest request actually happens first. Nothing asserted the
+// order before this test; TestResolveDigestGatesItemFetches and its siblings
+// only assert request COUNTS, which stay identical whichever order the two
+// requests happen in.
+func TestResolveFetchesDigestBeforeItems(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "k", `"v"`)
+	p := f.provider()
+
+	if _, err := p.Resolve(context.Background(), ref(t, "vercel-gc://k")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := f.order()
+	want := []string{"digest", "items"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got request order %v, want %v", got, want)
 	}
 }
 

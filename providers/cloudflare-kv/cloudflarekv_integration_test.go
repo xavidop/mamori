@@ -119,3 +119,46 @@ func TestIntegrationResolveBatchAgreesWithResolve(t *testing.T) {
 		t.Errorf("Resolve and ResolveBatch disagree on Version for %q", key)
 	}
 }
+
+// TestIntegrationResolveBatchTwoKeysOmitsAbsent closes #108's one remaining
+// gap in this file: every test above resolves a single-key batch, which can
+// confirm this provider's bulk parsing against the fake's own encoding of
+// "an absent key is omitted from result.values", but never against what
+// Cloudflare's real API actually returns for a batch that mixes a present
+// key with an absent one. Cloudflare's published SDK types make values
+// non-nullable, so this was not expected to be a defect, but a two-key live
+// batch closes the gap for good at no added setup cost: it reuses
+// CLOUDFLARE_KV_TEST_KEY (no new required environment variable) alongside a
+// second key deterministically derived from it that is overwhelmingly
+// unlikely to exist in any real namespace.
+func TestIntegrationResolveBatchTwoKeysOmitsAbsent(t *testing.T) {
+	token, account, namespace, key := liveCreds(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	p := New(WithAPIToken(token), WithAccountID(account), WithNamespaceID(namespace))
+
+	presentRef := liveRef(t, key)
+	absentKey := key + "-mamori-integration-test-absent-key-should-not-exist"
+	absentRef := liveRef(t, absentKey)
+
+	batch, err := p.ResolveBatch(ctx, []mamori.Ref{presentRef, absentRef})
+	if err != nil {
+		t.Fatalf("ResolveBatch(%q, %q): %v", key, absentKey, err)
+	}
+
+	present, ok := batch[presentRef.Raw]
+	if !ok {
+		t.Fatalf("ResolveBatch(%q, %q) omitted %q, but it must exist per CLOUDFLARE_KV_TEST_KEY's contract", key, absentKey, key)
+	}
+	if len(present.Bytes) == 0 {
+		t.Fatalf("ResolveBatch(%q) returned an empty value for the present key", key)
+	}
+
+	if _, ok := batch[absentRef.Raw]; ok {
+		t.Fatalf("ResolveBatch included %q, which is expected to be absent; if this environment genuinely has a "+
+			"key of this derived name, pick a CLOUDFLARE_KV_TEST_KEY whose derived sibling does not collide", absentKey)
+	}
+
+	t.Logf("present key %q: %d byte(s); absent key %q correctly omitted from result.values", key, len(present.Bytes), absentKey)
+}

@@ -46,3 +46,23 @@ func TestClassifyStatusPreservesChain(t *testing.T) {
 		t.Fatalf("underlying status error no longer reachable: %v", wrapped)
 	}
 }
+
+// TestClassifyStatusUnauthorizedIsNotPermissionDenied is the negative half of
+// TestClassifyStatusPreservesChain's 403 case: 401 and 403 sit next to each
+// other in classifyStatus's switch, and every existing test only asserts what
+// each code DOES satisfy, never what it must NOT. A copy-paste swap of the
+// two cases (401 mapped to ErrPermissionDenied, 403 to ErrUnauthenticated)
+// would still pass every positive assertion elsewhere in this package - each
+// status would just be asserted against the wrong sentinel by a test that
+// only checks its own code - so this pins the negative directly.
+func TestClassifyStatusUnauthorizedIsNotPermissionDenied(t *testing.T) {
+	base := errors.New(`mamori/vercel-gc: unexpected status 401 from items of store ecfg_test: unauthorized`)
+	got := classifyStatus(http.StatusUnauthorized, base)
+
+	if !errors.Is(got, mamori.ErrUnauthenticated) {
+		t.Fatalf("classifyStatus(401, base) = %v, want an error satisfying mamori.ErrUnauthenticated", got)
+	}
+	if errors.Is(got, mamori.ErrPermissionDenied) {
+		t.Fatalf("classifyStatus(401, base) = %v, must not satisfy mamori.ErrPermissionDenied", got)
+	}
+}
