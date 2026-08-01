@@ -75,6 +75,7 @@ type FieldStatus struct {
 	LastError string        // text of the last resolve error, empty if none
 	LastKind  Kind          // classification of LastError, empty if none
 	Sensitive bool          // field is a secret.String or secret.Bytes
+	Derived   bool          // a WithDerive hook declares writing this field; see below
 }
 
 type Report struct {
@@ -88,6 +89,8 @@ type Report struct {
 ```
 
 `Snapshot` and `Live` are equal, and `Pinned` is `false`, unless the watcher is frozen with `Watcher.Pin` / `Watcher.PinCurrent`: see [Snapshots and pinning](/docs/usage/snapshots/) for what that divergence means.
+
+A `FieldStatus` with `Derived: true` is a field a [`WithDerive`](/docs/usage/derived-fields/) hook declares writing, not one mamori resolved from a source: it carries a `Path` and nothing else, since there is no ref, version, staleness, or error to report for it, and it never affects `Healthy`. It only appears at all if the hook that writes it names the field explicitly; an undeclared derive write has no entry here.
 
 ## Health: one yes/no for a probe
 

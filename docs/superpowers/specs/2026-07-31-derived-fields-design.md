@@ -146,35 +146,46 @@ a footnote:
 
 - **Invisible to `mamori explain`, `schema`, and `diff`.** Those read struct
   tags, and there is no tag. A derived field looks like an unsourced field to
-  every CLI surface.
-- **Absent from `Status()`'s per-field report.** There is no ref, so there is
-  no staleness or error kind to report. This is honest rather than a gap, but
-  it is a real difference from every other field, and an operator debugging a
-  wrong DSN will look in `Status()` first and find nothing.
+  every CLI surface, whether or not its write is declared: all three are
+  static analysis over Go source, and a `writes` declaration lives at the
+  `Watch`/`Load` call site, not in the struct tags they read.
+- **Absent from `Status()`'s per-field report, unless the write is declared.**
+  There is no ref, so there is no staleness or error kind to report either way.
+  This was a real gap in the first shipped version: an operator debugging a
+  wrong DSN looked in `Status()` first and found nothing. See the change-detection
+  section below for the `writes` declaration that closed it, and note what it
+  still cannot close: an undeclared write is exactly as absent as before.
 - **A `source` tag and a derive assignment on the same field cannot be flagged
   as a conflict.** The derive simply wins, because mamori cannot see the
-  assignment. Documentation, not enforcement.
-- **A derived field never appears in `ev.Changed()`.** Same root cause: the
-  diff is keyed on `source`-tagged specs and their per-ref versions, and a
-  derived field has neither. See the change-detection section below.
+  assignment. Documentation, not enforcement. `writes` does not change this:
+  declaring a path only reports that path changed, it does not detect a
+  conflicting `source` tag on it.
+- **A derived field never appears in `ev.Changed()`, unless its write is
+  declared.** Same root cause as the rest of this list: mamori cannot infer
+  which fields an opaque function writes, so nothing keys a diff to it by
+  default. See the change-detection section below for what shipped to fix
+  this and why the first version of this spec rejected it.
 
 These are the cost of choosing a function over a tag. They were accepted
 knowingly; the docs should present them the same way.
 
-## Change detection does NOT come free
+## Change detection: the free-lunch claim, the real cost, and what shipped
 
-An earlier revision of this spec claimed it did. That was wrong, and the error
-was found during implementation rather than by reading, which is worth
-recording because it is the kind of claim that reads as obviously true.
+An earlier revision of this spec claimed change detection came free. That was
+wrong, and the error was found during implementation rather than by reading,
+which is worth recording because it is the kind of claim that reads as
+obviously true. This section originally recorded that correction; a second
+round of implementation then revisited the decision it led to, which this
+section now also records, so the history reads as what actually happened
+rather than as though the spec were right the first time.
 
-`ev.Changed("DSN")` **can never be true for a derived field.** Both diff sites
-in `reconciler.go` (`buildCandidate`'s loop and `diffApplied`) walk `e.specs`,
-which `fieldSpecs` populates only for fields carrying a `source` tag, and they
-compare the `Version` strings recorded per ref. A derived field has no spec, no
-ref, and no version, so it cannot enter `Change.Fields` at all. Where the derive
-runs is irrelevant to this; it is not an ordering problem.
-
-**Callers therefore trigger on an input and read the derived field:**
+**As first shipped, `ev.Changed("DSN")` could never be true for a derived
+field.** Both diff sites in `reconciler.go` (`buildCandidate`'s loop and
+`diffApplied`) walked `e.specs`, which `fieldSpecs` populates only for fields
+carrying a `source` tag, comparing the `Version` strings recorded per ref. A
+derived field had no spec, no ref, and no version, so it could not enter
+`Change.Fields` at all, regardless of where in the derive chain it ran.
+Callers had to trigger on an input and read the derived field instead:
 
 ```go
 mamori.OnChange(func(ev mamori.Change[Config]) {
@@ -184,25 +195,52 @@ mamori.OnChange(func(ev mamori.Change[Config]) {
 })
 ```
 
-The derived value itself is never stale. Only the *trigger* has to name inputs.
+That was an honest cost, and it partly reopened the problem the feature exists
+to solve: forget one input in that condition and the pool never rotates when
+that field changes, the same bookkeeping `WithDerive` set out to delete.
 
-This is an honest cost and it partly reopens the problem the feature exists to
-solve: forget one input in that condition and the pool never rotates when that
-field changes, which is the same bookkeeping `WithDerive` set out to delete.
-The docs must say so where the feature is introduced, not bury it.
-
-Two alternatives were considered and rejected for now. Having `WithDerive`
+Two alternatives were considered and rejected at the time. Having `WithDerive`
 declare the field paths it writes would restore `ev.Changed("DSN")`, at the
 cost of a list that can silently drift from the function it describes.
 Diffing the finished structs reflectively would fix it with no API change, but
-that changes core `Changed()` semantics for every field and all 38 providers
-and deserves its own spec rather than riding along here.
+that changes core `Changed()` semantics for every field and all 38 providers,
+and was judged to deserve its own spec rather than riding along here.
+
+**The first alternative shipped, in a follow-up round rather than this one.**
+`WithDerive[T any](fn func(*T) error, writes ...string) Option` now takes a
+variadic `writes` parameter naming the dotted field paths the hook writes
+(`WithDerive(buildDSN, "DSN")`). mamori carries that declaration through both
+diff sites via `derivedFieldChanges`, the single implementation shared by the
+candidate build, the coalesced `Unpin` diff, and the initial-load `Change`, and
+into `Status()`'s per-field report as `FieldStatus{Path: "DSN", Derived: true}`.
+A declared write is reported changed exactly when the rebuilt value differs
+from the one it replaced, compared with `reflect.DeepEqual` rather than a
+version string, since a derived field still has no ref and no version of its
+own to compare.
+
+The drift risk that got the declared-writes alternative rejected the first
+time was real, and turned out to be worth accepting rather than designing
+around: a wrong or missing declaration degrades to exactly the original
+undeclared behavior (invisible to `ev.Changed` and `Status()`, never enforced
+or rejected) rather than misbehaving, and `WithDerive(fn)` with zero paths
+still compiles and behaves exactly as it always did, so no existing caller
+broke. The reflective-diff alternative stayed rejected on its own merits: it
+still changes every field's `Changed()` semantics, not only derived ones, and
+still deserves its own spec if anyone revisits it.
+
+`writes` does not close every gap this section opened with. A path is
+validated for shape only (non-empty, non-whitespace) at `Load`/`Watch` time,
+never checked against `T`, and a hook that writes a field it never declares is
+exactly as invisible as it was before `writes` existed - mamori still cannot
+inspect the hook's body, only the paths it is told about. See
+[Derived fields](https://mamorigo.dev/docs/usage/derived-fields) for the
+user-facing account.
 
 ## Testing
 
 | Aspect | How |
 | --- | --- |
-| The motivating case | a password rotation rebuilds the DSN, and `ev.Changed("Pass")` is true while `ev.Changed("DSN")` is false, with a comment naming why |
+| The motivating case | a password rotation rebuilds the DSN; with the write declared (`WithDerive(fn, "DSN")`), `ev.Changed("DSN")` is true and `Status().Fields` carries a `Derived: true` entry for it; with no write declared, both stay exactly as invisible as before `writes` existed |
 | Runs before validation | a derived field with `validate:"required"` passes when the derive fills it, and fails when the derive leaves it empty |
 | Runs before PreApply | `PreApply` observes the derived value, asserted by capturing what the hook saw |
 | Error rejects the snapshot | a derive returning an error leaves `Get()` on the previous config and fires `OnError` |

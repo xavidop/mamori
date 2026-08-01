@@ -60,9 +60,9 @@ w, err := mamori.Watch[Config](ctx,
 			Path:   "/app",
 		}).String())
 		return nil
-	}),
+	}, "DSN"),
 	mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
-		if !ev.Changed("Pass") {
+		if !ev.Changed("DSN") {
 			return nil
 		}
 		return pool.Ping(ctx, ev.New.DSN.Reveal())
@@ -71,6 +71,8 @@ w, err := mamori.Watch[Config](ctx,
 ```
 
 `WithDerive` and `PreApply` together are what make a rotated credential both **rebuilt** and **proven**: the derive reassembles the DSN from the new password, and because it runs first, `PreApply` proves the rebuilt DSN rather than the one it replaced. Without the derive, `PreApply` would still be gated correctly, just against a DSN nobody ever rebuilt.
+
+The guard checks `ev.Changed("DSN")` rather than `ev.Changed("Pass")` because `WithDerive` declares `"DSN"` as a write above: a declared derive write is reported changed exactly when its rebuilt value differs, so the guard can name the field it actually cares about instead of enumerating every input (`Pass`, `Host`, `User`) that could have moved it.
 
 ## What a rejection does
 

@@ -121,7 +121,7 @@ Rules to hold onto:
 
 ## Derive fields from already-resolved fields
 
-`mamori.WithDerive` computes a field from other already-resolved fields - a DSN assembled from a host, a user, and a rotating password - so it is rebuilt on every applied update instead of going stale the moment one input rotates. It runs after fields are decoded and before validation, and before any `PreApply` gate, so a rotation-safety hook proves the rebuilt value rather than the one it replaced.
+`mamori.WithDerive` computes a field from other already-resolved fields - a DSN assembled from a host, a user, and a rotating password - so it is rebuilt on every applied update instead of going stale the moment one input rotates. It runs after fields are decoded and before validation, and before any `PreApply` gate, so a rotation-safety hook proves the rebuilt value rather than the one it replaced. Declare the dotted field path(s) it writes as the trailing argument(s): this is the ordinary way to call it, not an advanced option, since it is what makes the field visible at all.
 
 ```go
 mamori.WithDerive(func(c *Config) error {
@@ -132,17 +132,18 @@ mamori.WithDerive(func(c *Config) error {
 		Path:   "/app",
 	}).String())
 	return nil
-})
+}, "DSN")
 ```
 
 Rules to hold onto:
 - Use `net/url` to assemble the value, not `fmt.Sprintf` - a password containing `@` or `/` needs escaping, and `net/url` already does it correctly. Assign into a `secret.String`/`secret.Bytes` field, not a plain `string`, so the derived value stays redacted in `fmt`, JSON, and `slog`.
-- `WithDerive` can be given more than once; each call appends a hook, and hooks run in registration order, so a field derived from another derived field just works (the second hook sees the first hook's output).
+- `WithDerive` can be given more than once; each call appends a hook, and hooks run in registration order, so a field derived from another derived field just works (the second hook sees the first hook's output). Each call keeps its own declared writes.
 - Returning an error rejects the whole candidate atomically, exactly like a validation failure: `Get()` keeps the last valid config, `OnChange` does not fire, and `OnError` receives a `*DeriveError`.
 - A hook typed for a different config than `Watch[T]`/`Load[T]` fails outright (`ErrInvalid`), the same as a mismatched `PreApply` hook - never a silent no-op.
 - **The same reentrancy rule covers `WithDerive`:** it too runs inline on the reconciler goroutine, so `w.Pin`, `w.PinCurrent`, `w.Unpin`, and `w.Refresh` called from inside a derive hook get the same refusal `PreApply` and `OnError` get - `Pin`/`Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0`, `Unpin` does nothing. Never call back into the same `Watcher` from a derive hook. It is worse here than for `PreApply`: a derive hook takes no `ctx` at all, so there is no `WithPreApplyTimeout` bound to lean on either.
-- **A derived field never appears in `ev.Changed()`.** Change detection walks `source`-tagged fields only, compared by resolved version; a derived field has neither. Trigger on an input instead (`ev.Changed("DBPassword")`), then read the derived field, which is always correct even though it is never itself "changed".
-- A derived field also never appears in `Status()`, `mamori explain`, `schema`, or `diff` - none of them see anything without a `source` tag.
+- **A declared write path appears in `ev.Changed()` and in `Status()`,** reported changed exactly when the rebuilt value differs from the one it replaced - the same as any other field. Trigger on the derived field itself (`ev.Changed("DSN")`) now that it is visible, rather than on every input that feeds it.
+- **An undeclared write stays invisible.** A hook that assigns a field without naming it in `WithDerive`'s trailing arguments produces no entry in `ev.Changed()` or `Status()`, and mamori has no way to detect that the assignment happened at all - it cannot inspect the hook's body, only its declared paths.
+- `mamori explain`, `schema`, and `diff` never see a derived field, declared or not: all three are static analysis over `source:` struct tags in your Go source, and a derive is a runtime function call with no tag to read.
 
 ## Force an immediate refresh
 

@@ -20,15 +20,17 @@ mamori doctor --endpoint <ep> [--insecure] [--json] [--compare "<patterns>"]
 
 ```bash
 $ mamori doctor --endpoint https://svc.internal:9090 --compare ./...
-PATH            SCHEME  REF                     VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE
-Redis.Addr      env     env://REDIS_ADDR        3        false  -          -           false
-Redis.Password  aws-sm  aws-sm://prod/redis-pw  3        false  -          -           true
+PATH            SCHEME  REF                     VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
+Redis.Addr      env     env://REDIS_ADDR        3        false  -          -           false      false
+Redis.Password  aws-sm  aws-sm://prod/redis-pw  3        false  -          -           true       false
 
 HEALTHY: 2 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
 
 compare: source vs. live field paths
   no drift: source and live field sets match
 ```
+
+A row with `DERIVED` `true` is a [`WithDerive`](/docs/usage/derived-fields/)-declared write path, not a field mamori resolved: `SCHEME`, `REF`, and `VERSION` are blank for it, since there is no ref behind it. `--compare` excludes it from the live side of the comparison entirely, so a declared derive never reports as drift against source, which has no `source:` tag for it to match in the first place.
 
 ## status
 
@@ -43,8 +45,8 @@ mamori status --endpoint <ep> [--insecure] [--watch] [--interval <dur>]
 
 ```bash
 $ mamori status --endpoint unix:///run/app-admin.sock --watch --interval 5s
-PATH        SCHEME  REF               VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE
-Redis.Addr  env     env://REDIS_ADDR  3        false  -          -           false
+PATH        SCHEME  REF               VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
+Redis.Addr  env     env://REDIS_ADDR  3        false  -          -           false      false
 
 HEALTHY: 1 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
 # ...re-renders every 5s until Ctrl-C
