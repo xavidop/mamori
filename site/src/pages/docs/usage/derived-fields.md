@@ -91,10 +91,17 @@ rather than hanging.
 | `Unpin()` | Does nothing. It has no error to return. |
 | `Refresh(ctx)` | `ErrReentrantCall`. Nothing is re-resolved. |
 
-It is worse here than for `PreApply`: a derive hook takes no
-`context.Context` at all (see above), so there is no deadline to escape on
-either - `PreApply` at least bounds the hang with `WithPreApplyTimeout` before
-this detection existed; a derive never had that fallback.
+It is worse here than for `PreApply` in three of the four cases: a derive
+hook takes no `context.Context` at all (see above), so there is no deadline
+to escape on either. `PreApply`'s hook does receive a `ctx` bounded by
+`WithPreApplyTimeout`, but that only rescues a call written as
+`Refresh(ctx)`, passing the hook's own bounded context straight through -
+`Pin`, `PinCurrent`, and `Unpin` take no context argument at all and are
+serviced through `sendPin` with a fresh `context.Background()`, so
+`WithPreApplyTimeout` never bounded them, and `Refresh(context.Background())`
+(the call shown below as the mistake to avoid, since a derive hook has no
+`ctx` of its own to pass instead) is not bounded either. A derive hook is in
+the same position as those three: no timeout, no escape, until `Close`.
 
 ```go
 mamori.WithDerive(func(c *Config) error {

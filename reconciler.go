@@ -95,10 +95,13 @@ type Watcher[T any] struct {
 
 	// inCallback holds the ID of the goroutine currently running one of this
 	// watcher's INLINE callbacks, and 0 whenever none is - which is always, for
-	// a watcher that installed neither. Two arm it, and they are exactly the two
-	// this package runs on the reconciler goroutine itself: flush's PreApply
-	// gate (via runPreApply's mark parameter) and emitErr's OnError. So it names
-	// the reconciler goroutine and no other; sendPinCtx is the only reader.
+	// a watcher that installed none of them. Three arm it, and they are exactly
+	// the three this package runs on the reconciler goroutine itself: flush's
+	// PreApply gate (via runPreApply's mark parameter), buildCandidate's derive
+	// loop, and emitErr's OnError. See reentrantCallbacks (errors.go) for that
+	// list kept as data rather than as a count restated in prose, and for the
+	// test that checks it against the real call sites. So it names the
+	// reconciler goroutine and no other; sendPinCtx is the only reader.
 	//
 	// OnChange is deliberately absent. It runs on the dispatch goroutine, which
 	// receives Change events from a queue rather than occupying the reconciler,
@@ -1114,24 +1117,34 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 	// Guarded on len(e.derives) > 0 so the goroutineID lookup (a runtime.Stack
 	// walk) is never paid by a watcher configured with no derive hooks, the same
 	// condition that already keeps runPreApply and emitErr free for a watcher
-	// with no PreApply hook or no OnError callback. Armed only around the loop
-	// itself, disarmed immediately after (on both the success and the failure
-	// path) rather than left set through validation below, so the mark's
-	// lifetime matches exactly the code it exists to guard.
+	// with no PreApply hook or no OnError callback.
+	//
+	// The disarm is deferred inside the IIFE below rather than called
+	// explicitly on each return path, for the same reason runPreApply's is
+	// (see its doc comment): deferring is what makes the mark's lifetime a
+	// property of THIS call rather than of the hook's cooperation, so a derive
+	// that panics cannot leave the mark set. See
+	// TestBuildCandidateDeriveClearsMarkWhenHookPanics (derive_test.go). The
+	// IIFE keeps that guarantee scoped to exactly the loop it exists to guard,
+	// rather than left armed through validation below, matching the scoping
+	// the old explicit calls achieved without their gap.
 	if len(e.derives) > 0 {
-		disarm := armReentrancy(&e.w.inCallback)
-		for _, d := range e.derives {
-			if err := d(&cand); err != nil {
-				de := &DeriveError{Err: err}
-				e.o.meter.RecordApplyRejected(RejectDerive)
-				e.o.log().Error("candidate rejected by a derive hook; continuing to serve the previous config",
-					errAttrs(err)...)
-				disarm()
-				e.emitErr(de)
-				return cand, nil, de
+		de := func() (de *DeriveError) {
+			defer armReentrancy(&e.w.inCallback)()
+			for _, d := range e.derives {
+				if err := d(&cand); err != nil {
+					e.o.meter.RecordApplyRejected(RejectDerive)
+					e.o.log().Error("candidate rejected by a derive hook; continuing to serve the previous config",
+						errAttrs(err)...)
+					return &DeriveError{Err: err}
+				}
 			}
+			return nil
+		}()
+		if de != nil {
+			e.emitErr(de)
+			return cand, nil, de
 		}
-		disarm()
 	}
 	if err := e.o.validator.Validate(cand); err != nil {
 		ve := &ValidationError{Err: err}
@@ -1668,7 +1681,8 @@ func (e *engine[T]) enqueue(ev Change[T]) {
 // TestPinFromInsideOnErrorFailsFast, both of which time out rather than fail
 // without the arming below. "The reload was rejected, retry it" is a natural
 // thing to write in an OnError callback and Refresh is how you would write it,
-// which is what makes this the more tempting of the two callbacks to get wrong.
+// which is what makes this the most tempting of the three inline callbacks to
+// get wrong.
 //
 // The mark is armed only when a callback actually exists, and this is an error
 // path rather than a per-flush one - buildCandidate's validation failures,

@@ -341,8 +341,10 @@ func TestPinFromAnotherGoroutineIsUnaffected(t *testing.T) {
 	}
 }
 
-// TestRefreshFromInsideOnErrorFailsFast covers the OTHER callback this package
-// runs inline on the reconciler goroutine.
+// TestRefreshFromInsideOnErrorFailsFast covers OnError, another of the
+// callbacks this package runs inline on the reconciler goroutine alongside
+// PreApply and WithDerive (see reentrantCallbacks, errors.go, for the full
+// set).
 //
 // OnError is not dispatched through the queue OnChange goes through: emitErr
 // calls it directly, on the reconciler goroutine, from buildCandidate,
@@ -354,7 +356,7 @@ func TestPinFromAnotherGoroutineIsUnaffected(t *testing.T) {
 // The reason it matters more now than it read before: "the reload was rejected,
 // retry it" is a natural thing to write in an OnError callback, and Refresh is
 // what you would reach for to write it. Guarding only PreApply would have left
-// the more tempting of the two callbacks unguarded.
+// the most tempting of the inline callbacks unguarded.
 func TestRefreshFromInsideOnErrorFailsFast(t *testing.T) {
 	defer goleak.VerifyNone(t)
 

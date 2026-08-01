@@ -256,6 +256,16 @@ func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn }
 // prove a credential; a derive is a pure transformation of a struct that has
 // already been resolved, and the missing parameter is how the API says so.
 //
+// It must not call back into the same Watcher. Get is safe (it is a
+// lock-free atomic load), but Pin, PinCurrent, Unpin and Refresh are commands
+// serviced by the very goroutine this hook is occupying, so they would wait
+// for themselves; mamori detects that and refuses the call instead - see
+// [ErrReentrantCall], which spells out what each one returns. It is worse
+// here than for PreApply: this hook carries no context.Context at all (see
+// above), so unlike a PreApply hook bounded by WithPreApplyTimeout, there is
+// no deadline of its own to escape on either. Issue the call from another
+// goroutine, or let the next reconciliation carry it.
+//
 // Multiple calls run in registration order. Returning an error rejects the
 // whole candidate configuration exactly as a validation failure does: Get keeps
 // serving the last valid config and the error reaches OnError as a *DeriveError.

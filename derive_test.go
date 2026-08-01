@@ -359,3 +359,48 @@ func TestLogsDeriveRejected(t *testing.T) {
 		t.Errorf("level = %v, want Error", r.Level)
 	}
 }
+
+// TestBuildCandidateDeriveClearsMarkWhenHookPanics mirrors
+// TestRunPreApplyClearsMarkWhenHookPanics (preapply_reentrancy_test.go) for
+// the derive loop in buildCandidate: a derive hook occupies the identical
+// inline position on the reconciler goroutine that a PreApply hook does (see
+// the derive loop's own doc comment in reconciler.go and armReentrancy in
+// preapply.go), so a derive that panics must not leave e.w.inCallback set
+// either.
+//
+// It is written directly against buildCandidate rather than a live Watcher for
+// the same reason the PreApply version is: a panicking hook is not survivable
+// on the real path today (nothing in this package recovers), so there is no
+// "and then a later Pin still works" left to observe on a process that no
+// longer exists. This is the regression test for the commit that added the
+// derive loop to armReentrancy's list of call sites while making it the only
+// one of the three that disarmed with explicit calls instead of a deferred
+// one - restore that explicit-disarm version and this test fails, because the
+// panic propagates out of the derive loop's for-range before either explicit
+// disarm() call is reached.
+func TestBuildCandidateDeriveClearsMarkWhenHookPanics(t *testing.T) {
+	type cfg struct{ A string }
+
+	o := defaultOptions()
+	w := &Watcher[cfg]{}
+	e := &engine[cfg]{
+		o: o,
+		w: w,
+		derives: []func(*cfg) error{
+			func(*cfg) error { panic("derive blew up") },
+		},
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("buildCandidate swallowed the derive hook's panic; it must propagate")
+			}
+		}()
+		_, _, _ = e.buildCandidate()
+	}()
+
+	if got := w.inCallback.Load(); got != 0 {
+		t.Errorf("inCallback = %d after a panicking derive hook, want 0: a mark left set would reject every later pin command from the reconciler goroutine", got)
+	}
+}
