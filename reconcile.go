@@ -446,7 +446,7 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 		// TestDerivedFieldAgreesOnInitialLoadAndReconcile (derive_test.go)
 		// pins directly.
 		var zero T
-		fields = append(fields, derivedFieldChanges(zero, cfg, derives)...)
+		fields = append(fields, derivedFieldChanges(zero, cfg, derives, specs)...)
 	}
 	// The reentrancy mark is nil here, and that is not an oversight: this gate
 	// runs on the CALLER's goroutine, inside Load or inside Watch before it has

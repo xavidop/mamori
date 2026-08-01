@@ -269,6 +269,30 @@ func typedDerives[T any](o *options) ([]typedDerive[T], error) {
 	return out, nil
 }
 
+// hasSpecPath reports whether path names one of specs's own fields - a path a
+// source tag declares and fieldSpecs already discovered, as opposed to an
+// opaque WithDerive write path that names nothing fieldSpecs ever walked.
+//
+// It is shared by derivedFieldChanges and buildReport's derived-append loop
+// (report.go), the two places a WithDerive write path could otherwise produce
+// a second, redundant entry for a path that ALSO carries a source tag - a
+// combination the design spec calls legal ("the derive simply wins"), and one
+// a caller who declares a derive's own INPUT field, rather than its output,
+// can produce by accident. The fieldSpec-driven entry already built for such a
+// path - a FieldChange with a real OldVersion/NewVersion, or a FieldStatus with
+// a real Ref/Scheme/Version - is the one that must survive; a second,
+// Derived-flavored entry appended alongside it would double the path in
+// Change.Fields and Status().Fields alike, and would also be the reason a ref
+// that genuinely rotated stopped being metered (see isDerivedPath, below).
+func hasSpecPath(specs []fieldSpec, path string) bool {
+	for _, s := range specs {
+		if s.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 // derivedFieldChanges returns a FieldChange for every declared WithDerive
 // write path whose value differs between oldCfg and newCfg, comparing values
 // with reflect.DeepEqual rather than a per-ref Version - a derived field has
@@ -287,6 +311,15 @@ func typedDerives[T any](o *options) ([]typedDerive[T], error) {
 // TestDeriveDeclaredWriteSurvivesPinUnpin (derive_watch_test.go), which drive
 // two of the three sites end to end and assert they agree.
 //
+// specs is consulted (via hasSpecPath) to skip a declared write path that
+// names a real fieldSpec: that path already gets a version-based FieldChange
+// from the caller's own per-spec loop, and producing a second, value-based one
+// here would duplicate the path in Change.Fields for exactly the legal case
+// the design spec calls "the derive simply wins" - a declared write that also
+// carries a source tag. Without this skip a rotating field named as both would
+// carry two FieldChange entries for the same path, one with real
+// Old/NewVersion and one with neither.
+//
 // A declared path that does not resolve identically on both sides (an unknown
 // field name, a path segment that is not itself a struct, or a field that
 // cannot be read via Interface - e.g. it names an unexported field) is
@@ -297,7 +330,7 @@ func typedDerives[T any](o *options) ([]typedDerive[T], error) {
 // path declared by more than one hook is compared only once, on its first
 // declared occurrence, so it can never produce two FieldChange entries for the
 // same path.
-func derivedFieldChanges[T any](oldCfg, newCfg T, derives []typedDerive[T]) []FieldChange {
+func derivedFieldChanges[T any](oldCfg, newCfg T, derives []typedDerive[T], specs []fieldSpec) []FieldChange {
 	if len(derives) == 0 {
 		return nil
 	}
@@ -311,6 +344,9 @@ func derivedFieldChanges[T any](oldCfg, newCfg T, derives []typedDerive[T]) []Fi
 				continue
 			}
 			seen[p] = struct{}{}
+			if hasSpecPath(specs, p) {
+				continue
+			}
 			of, ok1 := fieldByPath(ov, p)
 			nf, ok2 := fieldByPath(nv, p)
 			if !ok1 || !ok2 || !of.CanInterface() || !nf.CanInterface() {
@@ -1267,7 +1303,7 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 	// wrote to it). See derivedFieldChanges for why this is the single
 	// implementation shared with diffApplied and loadValue's initial-load
 	// Change, rather than a copy of the same walk.
-	fields = append(fields, derivedFieldChanges(e.lastGood, cand, e.derives)...)
+	fields = append(fields, derivedFieldChanges(e.lastGood, cand, e.derives, e.specs)...)
 	return cand, fields, nil
 }
 
@@ -1729,7 +1765,7 @@ func (e *engine[T]) diffApplied(before, after map[string]string, oldCfg, newCfg 
 			fields = append(fields, FieldChange{Path: spec.Path, OldVersion: b, NewVersion: a})
 		}
 	}
-	fields = append(fields, derivedFieldChanges(oldCfg, newCfg, e.derives)...)
+	fields = append(fields, derivedFieldChanges(oldCfg, newCfg, e.derives, e.specs)...)
 	return fields
 }
 
@@ -1826,26 +1862,38 @@ func (e *engine[T]) emitErr(err error) {
 	e.o.onError(err)
 }
 
-// isDerivedPath reports whether path is one of the write paths some WithDerive
-// hook has declared (regardless of whether that path resolves to a real field
-// on T - see derivedFieldChanges for why that distinction does not matter
-// here). flush uses this to skip a derived FieldChange in its metering and
-// per-field debug logging, rather than recording a refresh under an empty
-// scheme label: schemeForPath returns "" for any path outside e.specs, which a
-// derived path always is (it has no fieldSpec at all), and RecordRefresh's own
-// contract - "a watched value changed and was reconciled" - does not describe
-// a derive rebuild in the first place, since a derived field is never watched.
-// See RecordRefresh's doc comment (observ.go) for the same reasoning stated
-// from the metric's side.
+// isDerivedPath reports whether path can only have reached this flush's
+// Change.Fields through derivedFieldChanges - equivalently (see hasSpecPath),
+// whether path names no fieldSpec on this engine's T. flush uses this to skip
+// a derived FieldChange in its metering and per-field debug logging, rather
+// than recording a refresh under an empty scheme label: schemeForPath returns
+// "" for any path outside e.specs, and RecordRefresh's own contract - "a
+// watched value changed and was reconciled" - does not describe a derive
+// rebuild in the first place, since a derived field is never watched. See
+// RecordRefresh's doc comment (observ.go) for the same reasoning stated from
+// the metric's side.
+//
+// This is a structural test on the FieldChange's ORIGIN - does it have a
+// fieldSpec - not a name lookup against some WithDerive hook's writes list,
+// which is what this function used to do and was wrong: a declared write path
+// that ALSO names a source-tagged field keeps its fieldSpec (the design spec
+// calls this legal - "the derive simply wins" - and a caller who declares a
+// derive's INPUT field rather than its output produces it by accident), so
+// its FieldChange comes from the per-spec loop in buildCandidate, carrying a
+// real OldVersion/NewVersion, same as any other sourced field's. The old
+// name-based check reported that entry as derived anyway, purely because its
+// path happened to appear in some hook's writes, which stopped its refresh
+// metric and its "field updated" log from firing for a ref that had genuinely
+// rotated. derivedFieldChanges (above) refusing to produce a second
+// FieldChange for a path that already has a fieldSpec (via hasSpecPath) is
+// what makes "no fieldSpec" and "came from derivedFieldChanges" the same
+// question for every path that can appear in fields: the per-spec loop only
+// ever produces an entry for a path IN e.specs, and derivedFieldChanges now
+// only ever produces one for a path NOT in e.specs, so the two loops can never
+// both contribute an entry for the same path, and checking e.specs directly
+// answers exactly what checking the writes list was trying to.
 func (e *engine[T]) isDerivedPath(path string) bool {
-	for _, d := range e.derives {
-		for _, w := range d.writes {
-			if w == path {
-				return true
-			}
-		}
-	}
-	return false
+	return !hasSpecPath(e.specs, path)
 }
 
 // schemeForPath returns the scheme of the ref that most recently determined

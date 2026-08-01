@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/xavidop/mamori/secret"
 )
 
 type deriveCfg struct {
@@ -1062,6 +1064,219 @@ func TestDerivedFieldChangeSkipsDebugFieldUpdatedLog(t *testing.T) {
 	}
 	if !sawUser {
 		t.Error(`no "field updated" record found for User; the source field's own log line must still fire`)
+	}
+}
+
+// TestDeriveDeclaredWriteSharingSourceTagStillMetersLogsAndDeduplicates is the
+// regression test for the whole-branch review's I1 finding: isDerivedPath
+// used to decide "is this FieldChange derived" by checking whether its path
+// appeared in some WithDerive hook's declared writes, which stays true even
+// when that same path ALSO carries its own source tag - a combination the
+// design spec calls legal ("the derive simply wins") and one a caller
+// produces by accident whenever they declare a derive's INPUT/output field
+// rather than some other name. Probed directly, matching the review's own
+// probe: DSN below carries both a source tag and a WithDerive write
+// declaration, and rotating its provider value used to leave RecordRefresh
+// uncalled, the "field updated" debug record unlogged, and DSN appearing
+// twice in both Change.Fields and Status().Fields (once from the per-spec
+// loop with a real Old/NewVersion or Ref/Scheme, once Derived-flavored with
+// neither).
+//
+// isDerivedPath (reconciler.go) now decides structurally - a path with a
+// fieldSpec is never derived, full stop, regardless of whether some hook also
+// declares it as a write - and derivedFieldChanges/buildReport now refuse to
+// produce the redundant second entry for such a path at all (hasSpecPath).
+// This asserts every one of those properties in one probe: the metric, the
+// log, and both report shapes.
+func TestDeriveDeclaredWriteSharingSourceTagStillMetersLogsAndDeduplicates(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-collision")
+	wp.set("dsn", "first", "v1")
+	m := &recordingMeter{}
+	h, logger := newRecorder()
+
+	type Config struct {
+		DSN string `source:"sderive-collision://dsn"`
+	}
+	events := make(chan Change[Config], 4)
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk), WithMeter(m), WithLogger(logger),
+		// Declares DSN written without touching it: isolates the exact
+		// accident the finding describes (a write path that also names a
+		// source-tagged field) from anything the hook's body might do.
+		WithDerive(func(c *Config) error { return nil }, "DSN"),
+		OnChange(func(ev Change[Config]) { events <- ev }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("dsn", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	// The refresh metric must still fire, under the real scheme, exactly once
+	// - not skipped, and not fabricated under an empty scheme.
+	schemes := m.refreshSchemeList()
+	if len(schemes) != 1 || schemes[0] != "sderive-collision" {
+		t.Fatalf(`RecordRefresh calls = %v, want exactly ["sderive-collision"]: a ref that genuinely rotated must still be metered even though its path is also declared as a WithDerive write`, schemes)
+	}
+
+	// The per-field debug log must still fire, exactly once.
+	dsnLogCount := 0
+	for _, r := range h.all() {
+		if r.Message != "field updated" {
+			continue
+		}
+		if field, _ := attrOf(r, logAttrField); field == "DSN" {
+			dsnLogCount++
+		}
+	}
+	if dsnLogCount != 1 {
+		t.Errorf(`"field updated" logged %d times for DSN, want exactly 1`, dsnLogCount)
+	}
+
+	// Change.Fields must carry DSN exactly once, with the real version diff a
+	// genuinely rotated ref carries - not the empty-version shape a derived
+	// entry carries.
+	select {
+	case ev := <-events:
+		count := 0
+		for _, f := range ev.Fields {
+			if f.Path != "DSN" {
+				continue
+			}
+			count++
+			if f.OldVersion != "v1" || f.NewVersion != "v2" {
+				t.Errorf("Change.Fields DSN entry = %+v, want OldVersion=v1 NewVersion=v2", f)
+			}
+		}
+		if count != 1 {
+			t.Fatalf("Change.Fields carries DSN %d times, want exactly 1: %+v", count, ev.Fields)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnChange did not fire for the rotation")
+	}
+
+	// Status().Fields must carry DSN exactly once too, as an ordinary sourced
+	// field (Derived: false, a real Scheme/Ref), not a duplicated Derived row.
+	rep := w.Status()
+	statusCount := 0
+	for _, f := range rep.Fields {
+		if f.Path != "DSN" {
+			continue
+		}
+		statusCount++
+		if f.Derived {
+			t.Errorf("Status().Fields DSN entry has Derived = true, want false: DSN has its own fieldSpec, which must win")
+		}
+		if f.Scheme != "sderive-collision" {
+			t.Errorf("Status().Fields DSN entry has Scheme = %q, want %q", f.Scheme, "sderive-collision")
+		}
+	}
+	if statusCount != 1 {
+		t.Fatalf("Status().Fields carries DSN %d times, want exactly 1: %+v", statusCount, rep.Fields)
+	}
+}
+
+// TestDerivedFieldChangeSkipsRefreshMetricWhilePinned is the pinned-branch
+// counterpart to TestDerivedFieldChangeSkipsRefreshMetric above. flush's
+// pinned branch (the `if e.pinned` case, reconciler.go) carries its own
+// isDerivedPath-gated RecordRefresh loop, a second copy of the same skip the
+// unpinned branch performs a few lines below it, and nothing exercised it
+// directly: deleting that guard leaves the whole suite green, because no
+// other pinned test in this package (pin_test.go) installs a WithDerive hook
+// at all. Pinning does not stop RecordRefresh from firing for the source
+// field that actually rotated - flush's own doc comment is explicit that the
+// counter documents "a watched value changed and was reconciled" regardless
+// of pin state - so the derived path must still be skipped there for the
+// identical reason the unpinned branch skips it.
+func TestDerivedFieldChangeSkipsRefreshMetricWhilePinned(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-pinned-metric")
+	wp.set("user", "alice", "v1")
+	m := &recordingMeter{}
+
+	type Config struct {
+		User string `source:"sderive-pinned-metric://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk), WithMeter(m),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if got := w.PinCurrent(); got != 1 {
+		t.Fatalf("PinCurrent() = %d, want 1", got)
+	}
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	// Live still advances while pinned (only Get/OnChange freeze), so this is
+	// the same proof-of-completion waitFlushed uses everywhere else.
+	waitFlushed(t, w, 2)
+
+	schemes := m.refreshSchemeList()
+	if len(schemes) != 1 {
+		t.Fatalf("RecordRefresh called %d times for a pinned flush with one source field and one derived field, want exactly 1 (the derived rebuild must not record its own refresh even while pinned): %v", len(schemes), schemes)
+	}
+	if schemes[0] != "sderive-pinned-metric" {
+		t.Errorf(`RecordRefresh scheme = %q, want "sderive-pinned-metric" (the source field's own scheme)`, schemes[0])
+	}
+}
+
+// TestStatusReportsSensitiveOnDerivedSecretField is the regression test for a
+// review finding (M3): a derived FieldStatus's Sensitive was always false,
+// even when the declared write path resolves to a secret.String or
+// secret.Bytes field - exactly the type derived-fields.md tells a caller to
+// assign a derived DSN into, so the CLI's SENSITIVE column read false for
+// precisely the field an operator scans it for. buildReport (report.go) now
+// checks the resolved field's own reflect.Type, the identical
+// secretStringType/secretBytesType comparison walkSpecs (decode.go) already
+// uses for a sourced field.
+func TestStatusReportsSensitiveOnDerivedSecretField(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-sensitive")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-sensitive://user"`
+		DSN  secret.String
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error {
+			c.DSN = secret.NewString("postgres://" + c.User)
+			return nil
+		}, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	rep := w.Status()
+	var found *FieldStatus
+	for i := range rep.Fields {
+		if rep.Fields[i].Path == "DSN" {
+			found = &rep.Fields[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("Status().Fields has no entry for DSN: %+v", rep.Fields)
+	}
+	if !found.Sensitive {
+		t.Error("DSN entry has Sensitive = false, want true: DSN resolves to a secret.String")
+	}
+	if found.Ref != "" || found.Scheme != "" {
+		t.Errorf("DSN entry carries Ref=%q Scheme=%q, want both empty: a derived field has no ref", found.Ref, found.Scheme)
 	}
 }
 

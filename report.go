@@ -56,6 +56,15 @@ func (e *engine[T]) buildReport() *Report {
 	// order" property. They never affect healthy: fieldUnhealthy always
 	// returns false for a Derived entry, so there is nothing to check here.
 	//
+	// hasSpecPath (reconciler.go) skips a declared write path that ALSO names
+	// a real fieldSpec: that path already got a full FieldStatus (Scheme,
+	// Ref, Version, ...) from the loop above, and appending a second,
+	// Derived-flavored entry for the identical path here would publish two
+	// rows for one field to Status(), the admin HTTP body, and the CLI table
+	// - the same duplication derivedFieldChanges (reconciler.go) refuses to
+	// produce for Change.Fields, via the same helper, so the two can never
+	// disagree about which paths this applies to.
+	//
 	// A declared path is only ever validated for SHAPE at Load/Watch time
 	// (typedDerives rejects an empty or whitespace-only path, nothing else),
 	// so a path that names no field on T at all - a typo like "DSNN", a
@@ -73,6 +82,16 @@ func (e *engine[T]) buildReport() *Report {
 	// name just as readily as an exported one; Interface() on that result
 	// panics, so a path spelled after a real-but-unexported field would
 	// otherwise crash report building rather than degrade quietly.
+	//
+	// Sensitive is set from the resolved field's own reflect.Type, the same
+	// secretStringType/secretBytesType comparison walkSpecs (decode.go) uses
+	// for a sourced field, rather than left false unconditionally: a derived
+	// field assigned into a secret.String or secret.Bytes - exactly what
+	// derived-fields.md tells a caller to use for anything embedding a
+	// password - is sensitive in exactly the sense that field means for every
+	// other row, and an operator scanning a CLI's SENSITIVE column for it
+	// deserves the same true a sourced secret field gets. No value is
+	// published either way; this only changes one bool.
 	lastGood := reflect.ValueOf(e.lastGood)
 	seenDerived := make(map[string]struct{})
 	for _, d := range e.derives {
@@ -81,10 +100,15 @@ func (e *engine[T]) buildReport() *Report {
 				continue
 			}
 			seenDerived[p] = struct{}{}
-			if v, ok := fieldByPath(lastGood, p); !ok || !v.CanInterface() {
+			if hasSpecPath(e.specs, p) {
 				continue
 			}
-			fields = append(fields, FieldStatus{Path: p, Derived: true})
+			v, ok := fieldByPath(lastGood, p)
+			if !ok || !v.CanInterface() {
+				continue
+			}
+			sensitive := v.Type() == secretStringType || v.Type() == secretBytesType
+			fields = append(fields, FieldStatus{Path: p, Derived: true, Sensitive: sensitive})
 		}
 	}
 	// served is the version Get actually returns: the pinned version while
