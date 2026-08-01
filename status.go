@@ -11,7 +11,8 @@ import (
 
 // FieldStatus is the live state of one configured field, as reported by
 // Watcher.Status and Doctor. It is safe to serialize and safe to serve over
-// HTTP: Ref has sensitive query options redacted, and no field value appears.
+// HTTP: Ref has sensitive query options redacted, and no field value appears -
+// including for a Derived entry, which carries no value at all.
 type FieldStatus struct {
 	Path      string        // dotted field path, e.g. "Redis.Password"
 	Scheme    string        // provider scheme of the ref
@@ -23,10 +24,21 @@ type FieldStatus struct {
 	LastError string        // text of the last resolve error, empty if none
 	LastKind  Kind          // classification of LastError, empty if none
 	Sensitive bool          // field is a secret.String or secret.Bytes
+
+	// Derived is true for a field a WithDerive hook declares it writes. A
+	// derived field has no ref, so Scheme, Ref, Version, LastOK, Age, Stale,
+	// LastError and LastKind are all zero for it, and it never affects Healthy:
+	// there is no resolve that could fail. It is reported so an operator can
+	// see the field exists and is maintained, which is the whole reason a
+	// caller declares it.
+	Derived bool
 }
 
 // Report is a point-in-time snapshot of a Watcher's health, or the result of a
-// one-shot Doctor probe. Fields are in struct declaration order.
+// one-shot Doctor probe. Fields are in struct declaration order, except for any
+// declared WithDerive write paths (FieldStatus.Derived): a derived field has no
+// fieldSpec and therefore no spot in that order, so its entries are appended
+// after every sourced field instead, in WithDerive registration order.
 type Report struct {
 	Fields      []FieldStatus
 	Snapshot    uint64    // version of the snapshot Get currently returns (the pinned version, while Pinned)

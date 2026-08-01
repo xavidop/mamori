@@ -2,10 +2,12 @@ package mamori
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -570,5 +572,321 @@ func TestBuildCandidateDeriveClearsMarkWhenHookPanics(t *testing.T) {
 
 	if got := w.inCallback.Load(); got != 0 {
 		t.Errorf("inCallback = %d after a panicking derive hook, want 0: a mark left set would reject every later pin command from the reconciler goroutine", got)
+	}
+}
+
+// TestStatusReportsDeclaredDerivedField is Task 2's headline Status()
+// assertion: a path declared via WithDerive(fn, "DSN") must appear in
+// Status().Fields, carrying Derived: true and nothing else - no ref, no
+// scheme, no staleness, no error - which is exactly what an operator needs to
+// see that the field exists and is maintained, without mamori inventing a ref
+// or version for a field that has neither.
+func TestStatusReportsDeclaredDerivedField(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-status")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-status://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	rep := w.Status()
+	if len(rep.Fields) != 2 {
+		t.Fatalf("Status().Fields has %d entries, want 2 (User + DSN): %+v", len(rep.Fields), rep.Fields)
+	}
+	var found *FieldStatus
+	for i := range rep.Fields {
+		if rep.Fields[i].Path == "DSN" {
+			found = &rep.Fields[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("Status().Fields has no entry for DSN, want one for a declared derive write path: %+v", rep.Fields)
+	}
+	if !found.Derived {
+		t.Error("DSN entry has Derived = false, want true")
+	}
+	if found.Ref != "" || found.Scheme != "" {
+		t.Errorf("DSN entry carries Ref=%q Scheme=%q, want both empty: a derived field has no ref", found.Ref, found.Scheme)
+	}
+	if found.Stale || !found.LastOK.IsZero() || found.LastError != "" || found.LastKind != "" {
+		t.Errorf("DSN entry carries staleness/error/LastOK state, want all zero: %+v", found)
+	}
+}
+
+// TestReportJSONNeverCarriesDerivedValue is the security-relevant assertion
+// from the brief: the report is the admin endpoint's HTTP body, so a derived
+// field's entry must never carry its value. This is pinned against the
+// report's actual JSON encoding, not against struct fields, because the
+// encoding is what a caller of the admin endpoint actually receives.
+func TestReportJSONNeverCarriesDerivedValue(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-json")
+	wp.set("user", "alice", "v1")
+
+	const marker = "UNIQUE_DERIVED_MARKER_VALUE_98765"
+	type Config struct {
+		User string `source:"sderive-json://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = marker; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	b, err := json.Marshal(w.Status())
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(b), marker) {
+		t.Fatalf("Report JSON carried the derived field's value: %s", b)
+	}
+}
+
+// TestHealthyUnaffectedByDerivedField pins the brief's third constraint: a
+// derived field has no ref, so it can never be stale and can never carry a
+// resolve error, and Healthy must reflect that - not merely happen to stay
+// true because a fresh Derived entry's zero-valued LastKind/Stale coincide
+// with "healthy".
+func TestHealthyUnaffectedByDerivedField(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-health")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-health://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	rep := w.Status()
+	if !rep.Healthy {
+		t.Fatalf("Healthy = false with only a derived field present and no error, want true: %+v", rep)
+	}
+	if err := w.Health(); err != nil {
+		t.Fatalf("Health() = %v, want nil", err)
+	}
+}
+
+// TestDerivedFieldChangedTrueAfterInputRotation is the headline diff
+// behavior: DSN is declared as a WithDerive write path, so once User rotates
+// and the derive rebuilds DSN to a genuinely different value, ev.Changed
+// ("DSN") must be true.
+func TestDerivedFieldChangedTrueAfterInputRotation(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-changed")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-changed://user"`
+		DSN  string
+	}
+	events := make(chan Change[Config], 4)
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+		OnChange(func(ev Change[Config]) { events <- ev }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	select {
+	case ev := <-events:
+		if !ev.Changed("DSN") {
+			t.Errorf(`ev.Changed("DSN") = false, want true: the derived value changed from "postgres://alice" to "postgres://bob"`)
+		}
+		if !ev.Changed("User") {
+			t.Error(`ev.Changed("User") = false, want true`)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnChange did not fire for the rotation")
+	}
+}
+
+// TestDerivedFieldChangedFalseWhenValueUnchanged is the mutation-catching
+// counterpart to the test above: Aux rotates (which is enough to trigger a
+// reconcile and rebuild every derive), but DSN is derived only from User,
+// which never changes, so the rebuilt DSN is byte-identical to the one
+// already applied. A subtly wrong implementation that reported a declared
+// derive as changed on every flush - rather than only when its value
+// actually moved - would fail this test.
+func TestDerivedFieldChangedFalseWhenValueUnchanged(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-unchanged")
+	wp.set("user", "alice", "v1")
+	wp.set("aux", "x", "v1")
+
+	type Config struct {
+		User string `source:"sderive-unchanged://user"`
+		Aux  string `source:"sderive-unchanged://aux"`
+		DSN  string
+	}
+	events := make(chan Change[Config], 4)
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+		OnChange(func(ev Change[Config]) { events <- ev }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("aux", "y", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	select {
+	case ev := <-events:
+		if !ev.Changed("Aux") {
+			t.Error(`ev.Changed("Aux") = false, want true`)
+		}
+		if ev.Changed("DSN") {
+			t.Errorf(`ev.Changed("DSN") = true, want false: User never changed, so the rebuilt DSN is byte-identical to what was already applied`)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnChange did not fire for the rotation")
+	}
+}
+
+// TestUndeclaredDerivedFieldStillInvisible pins the backward-compatibility
+// constraint: a derive that mutates a field but never declares it as a write
+// path must keep behaving exactly as it always did - invisible to both
+// Status() and the change diff - even though the mutation itself still
+// happens.
+func TestUndeclaredDerivedFieldStillInvisible(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-undeclared")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-undeclared://user"`
+		DSN  string
+	}
+	events := make(chan Change[Config], 4)
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }), // no writes declared
+		OnChange(func(ev Change[Config]) { events <- ev }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	rep := w.Status()
+	if len(rep.Fields) != 1 {
+		t.Fatalf("Status().Fields has %d entries, want 1 (User only): %+v", len(rep.Fields), rep.Fields)
+	}
+	for _, f := range rep.Fields {
+		if f.Derived {
+			t.Errorf("Status().Fields carries a Derived entry for an undeclared derive write: %+v", f)
+		}
+	}
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	select {
+	case ev := <-events:
+		if ev.Changed("DSN") {
+			t.Error(`ev.Changed("DSN") = true for an undeclared derive write, want false`)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnChange did not fire for the rotation")
+	}
+}
+
+// TestDerivedFieldAgreesOnInitialLoadAndReconcile is the regression test the
+// brief calls for directly: the three FieldChange construction sites
+// (loadValue's initial-load Change, buildCandidate's candidate diff, and
+// diffApplied's Unpin diff) must agree about a declared derive, rather than
+// only two of three implementing it - the exact defect class ("Resolve and
+// ResolveBatch disagreed about not-found", "a 404 branch existed on one
+// request path and not its sibling") that produced two Criticals earlier in
+// this project. This exercises the first two sites end to end: PreApply
+// receives the SAME Change loadValue builds for the initial resolve, so its
+// ev.Changed("DSN") reflects the initial-load site; OnChange's ev.Changed
+// ("DSN") after a rotation reflects buildCandidate's site. Both must report
+// true. (TestDeriveDeclaredWriteSurvivesPinUnpin, in derive_watch_test.go,
+// exercises the third site, diffApplied, the same way.)
+func TestDerivedFieldAgreesOnInitialLoadAndReconcile(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-agree")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-agree://user"`
+		DSN  string
+	}
+
+	var mu sync.Mutex
+	var initialChanged bool
+	events := make(chan Change[Config], 4)
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+		PreApply(func(_ context.Context, ev Change[Config]) error {
+			mu.Lock()
+			initialChanged = ev.Changed("DSN")
+			mu.Unlock()
+			return nil
+		}),
+		OnChange(func(ev Change[Config]) { events <- ev }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	mu.Lock()
+	gotInitial := initialChanged
+	mu.Unlock()
+	if !gotInitial {
+		t.Fatal(`initial-load site (loadValue, reconcile.go) reported Changed("DSN") = false, want true: DSN was built from the zero value on the first load`)
+	}
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	select {
+	case ev := <-events:
+		if !ev.Changed("DSN") {
+			t.Fatal(`reconciler site (buildCandidate, reconciler.go) reported Changed("DSN") = false after a rotation, want true - disagreeing with the initial-load site, which reported true above`)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnChange did not fire for the rotation")
 	}
 }

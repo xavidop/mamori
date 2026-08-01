@@ -175,6 +175,35 @@ func setField(root reflect.Value, spec fieldSpec, raw []byte, hooks []mapstructu
 	return decodeScalar(fv, spec, raw)
 }
 
+// fieldByPath returns the field reached by walking root's dotted path (the
+// same shape spec.Path and a WithDerive write path both use), and whether
+// every segment resolved to a real field. It is setField's read-side
+// counterpart: setField writes a field once its caller has already resolved
+// spec.Index (precomputed by walkSpecs from the struct's own field layout), but
+// a WithDerive write path has no fieldSpec at all - the field it names is
+// never source-tagged, so fieldSpecs never discovers it - which means there is
+// no Index to reuse and the dotted string has to be walked directly instead,
+// exactly the way walkSpecs built it in the first place: split on ".", stepping
+// into a nested struct field by name at each segment.
+//
+// A path that does not resolve (an unknown field name, or a segment that is
+// not itself a struct) reports false rather than panicking: a WithDerive write
+// path is validated only for shape, never for existence (see typedDerives), so
+// a path naming nothing on T is expected input here, not a bug to surface.
+func fieldByPath(root reflect.Value, path string) (reflect.Value, bool) {
+	v := root
+	for _, part := range strings.Split(path, ".") {
+		if v.Kind() != reflect.Struct {
+			return reflect.Value{}, false
+		}
+		v = v.FieldByName(part)
+		if !v.IsValid() {
+			return reflect.Value{}, false
+		}
+	}
+	return v, true
+}
+
 func decodeScalar(fv reflect.Value, spec fieldSpec, raw []byte) error {
 	switch spec.Type {
 	case secretStringType:

@@ -269,6 +269,62 @@ func typedDerives[T any](o *options) ([]typedDerive[T], error) {
 	return out, nil
 }
 
+// derivedFieldChanges returns a FieldChange for every declared WithDerive
+// write path whose value differs between oldCfg and newCfg, comparing values
+// with reflect.DeepEqual rather than a per-ref Version - a derived field has
+// none, so there is nothing else to diff.
+//
+// It is the single implementation shared by every place a Change's Fields is
+// built for a derive: buildCandidate's candidate diff and diffApplied's
+// coalesced Unpin diff (both below), and loadValue's initial-load Change
+// (reconcile.go). Sharing it, rather than three independent copies of the same
+// walk, is what keeps those sites from drifting on what counts as a derived
+// field changing - exactly the "two of three disagree" defect class (Resolve
+// and ResolveBatch disagreeing about not-found; a 404 branch present on one
+// request path and missing from its sibling) that produced two Critical
+// findings earlier in this project. See
+// TestDerivedFieldAgreesOnInitialLoadAndReconcile (derive_test.go) and
+// TestDeriveDeclaredWriteSurvivesPinUnpin (derive_watch_test.go), which drive
+// two of the three sites end to end and assert they agree.
+//
+// A declared path that does not resolve identically on both sides (an unknown
+// field name, a path segment that is not itself a struct, or a field that
+// cannot be read via Interface - e.g. it names an unexported field) is
+// silently skipped rather than reported changed: this mirrors how an
+// undeclared or malformed write path already degrades to invisible everywhere
+// else in this package (see WithDerive's own doc comment), rather than
+// panicking or fabricating a change neither Report nor Status could explain. A
+// path declared by more than one hook is compared only once, on its first
+// declared occurrence, so it can never produce two FieldChange entries for the
+// same path.
+func derivedFieldChanges[T any](oldCfg, newCfg T, derives []typedDerive[T]) []FieldChange {
+	if len(derives) == 0 {
+		return nil
+	}
+	ov := reflect.ValueOf(oldCfg)
+	nv := reflect.ValueOf(newCfg)
+	seen := make(map[string]struct{})
+	var fields []FieldChange
+	for _, d := range derives {
+		for _, p := range d.writes {
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			of, ok1 := fieldByPath(ov, p)
+			nf, ok2 := fieldByPath(nv, p)
+			if !ok1 || !ok2 || !of.CanInterface() || !nf.CanInterface() {
+				continue
+			}
+			if reflect.DeepEqual(of.Interface(), nf.Interface()) {
+				continue
+			}
+			fields = append(fields, FieldChange{Path: p})
+		}
+	}
+	return fields
+}
+
 // Watch performs an initial, fail-fast Load of T and then keeps it reconciled at
 // runtime, delivering validated, diff-aware updates to OnChange. It returns after
 // the initial configuration is resolved (OnChange fires only on subsequent
@@ -1204,6 +1260,14 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 			e.applied[spec.Path] = v.Version
 		}
 	}
+	// A declared derive write path carries no ref and no Version, so it never
+	// shows up in the loop above; append its own diff here, comparing the
+	// value at each declared path in the previously-applied config against the
+	// same path in cand (already carrying whatever the derive loop above just
+	// wrote to it). See derivedFieldChanges for why this is the single
+	// implementation shared with diffApplied and loadValue's initial-load
+	// Change, rather than a copy of the same walk.
+	fields = append(fields, derivedFieldChanges(e.lastGood, cand, e.derives)...)
 	return cand, fields, nil
 }
 
@@ -1446,7 +1510,7 @@ func (e *engine[T]) handlePin(ctx context.Context, cmd pinCmd) {
 		old := e.pinnedConfig
 		newCfg := e.lastGood
 		e.w.cfg.Store(&newCfg)
-		fields := e.diffApplied(e.pinnedApplied, e.applied)
+		fields := e.diffApplied(e.pinnedApplied, e.applied, old, newCfg)
 		if len(fields) > 0 {
 			e.enqueue(Change[T]{Old: old, New: newCfg, Fields: fields})
 		}
@@ -1622,13 +1686,23 @@ func (e *engine[T]) findSnapshot(version uint64) (Snapshot[T], bool) {
 }
 
 // diffApplied returns a FieldChange for every path whose applied version in
-// after differs from before, in spec order for a deterministic result. It is
-// the counterpart, at Unpin time, to the diff buildCandidate performs on
-// every flush: buildCandidate advances e.applied one flush at a time
-// (pinned or not), and diffApplied collapses however many of those steps
-// happened while pinned into the single accumulated diff Unpin emits, so
-// several Sets while pinned still produce exactly one Change.
-func (e *engine[T]) diffApplied(before, after map[string]string) []FieldChange {
+// after differs from before, in spec order for a deterministic result, plus
+// one for every declared derive write path whose value differs between
+// oldCfg and newCfg. It is the counterpart, at Unpin time, to the diff
+// buildCandidate performs on every flush: buildCandidate advances e.applied
+// one flush at a time (pinned or not), and diffApplied collapses however many
+// of those steps happened while pinned into the single accumulated diff
+// Unpin emits, so several Sets while pinned still produce exactly one
+// Change.
+//
+// oldCfg and newCfg are the full configs diffApplied's own version-map diff
+// cannot get a derived value out of - before/after carry only per-ref
+// Versions, and a derived field has none. They are the pinned and live
+// configs at Unpin (handlePin's own e.pinnedConfig and e.lastGood), the same
+// two ends the version-map diff already spans; see derivedFieldChanges for
+// why this is the identical comparison buildCandidate performs, not a second
+// implementation of it.
+func (e *engine[T]) diffApplied(before, after map[string]string, oldCfg, newCfg T) []FieldChange {
 	var fields []FieldChange
 	for _, spec := range e.specs {
 		b, a := before[spec.Path], after[spec.Path]
@@ -1636,6 +1710,7 @@ func (e *engine[T]) diffApplied(before, after map[string]string) []FieldChange {
 			fields = append(fields, FieldChange{Path: spec.Path, OldVersion: b, NewVersion: a})
 		}
 	}
+	fields = append(fields, derivedFieldChanges(oldCfg, newCfg, e.derives)...)
 	return fields
 }
 

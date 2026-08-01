@@ -50,21 +50,21 @@ func buildRotDSN(c *rotCfg) error {
 // rotation, which is the entire point of wiring derives into the reconciler
 // path.
 //
-// ev.Changed("DSN") is NOT asserted here, and that is decided, not an open
-// question: a derived field can never appear in Change.Fields, because both
-// diff sites (buildCandidate's loop and diffApplied, reconciler.go) walk
-// e.specs, which fieldSpecs (decode.go) populates only for fields carrying a
-// `source` tag and compares per-ref Version strings - DSN has neither. Where
-// the derive runs does not change this; it is not an ordering bug. The human
-// ruled to accept this limitation and document it (see the corrected
-// docs/superpowers/specs/2026-07-31-derived-fields-design.md, "Change
-// detection does NOT come free") rather than teach buildCandidate to diff
-// untagged fields, which would be a much larger change to Changed()'s
-// semantics for every field, not just derived ones. The usage docs Task 4
-// adds at site/src/pages/docs/usage/derived-fields.md carry the caller-facing
-// guidance: trigger on an input field (ev.Changed("Pass") below), then read
-// the derived value, which is always correct even though it is never itself
-// "changed".
+// ev.Changed("DSN") is NOT asserted here, and that is deliberate for THIS
+// test, not a residual limitation: buildRotDSN is registered below via
+// mamori.WithDerive(buildRotDSN), with no write path declared, so DSN stays
+// invisible to Change.Fields exactly the way an undeclared derived field
+// always has (see WithDerive's writes parameter and
+// TestUndeclaredDerivedFieldStillInvisible in derive_test.go, which pins that
+// backward-compatibility contract directly). A caller who wants
+// ev.Changed("DSN") declares it - mamori.WithDerive(buildRotDSN, "DSN") - and
+// gets it: see TestDeriveDeclaredWriteSurvivesPinUnpin below, and
+// TestDerivedFieldChangedTrueAfterInputRotation /
+// TestDerivedFieldAgreesOnInitialLoadAndReconcile in derive_test.go. The usage
+// docs Task 4 adds at site/src/pages/docs/usage/derived-fields.md carry the
+// caller-facing guidance for the undeclared case shown here: trigger on an
+// input field (ev.Changed("Pass") below), then read the derived value, which
+// is always correct even when it is not itself declared as "changed".
 //
 // The Change event is received with a bounded timeout, not a non-blocking
 // default: case: OnChange is dispatched asynchronously, on a goroutine
@@ -110,12 +110,11 @@ func TestDeriveRebuildsOnRotation(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		// Changed("Pass"), NOT Changed("DSN"). A derived field can never
-		// appear in the diff: both diff sites walk e.specs, which only
-		// carries source-tagged fields, and compare per-ref versions. A
-		// derived field has neither. The DSN itself is rebuilt correctly,
-		// which the assertion above proves; only the trigger has to name an
-		// input.
+		// Changed("Pass"), NOT Changed("DSN"): buildRotDSN is registered
+		// above with no write path declared, so DSN stays invisible to the
+		// diff here (see this test's own doc comment). The DSN itself is
+		// rebuilt correctly, which the assertion above proves; only the
+		// trigger has to name an input.
 		if !ev.Changed("Pass") {
 			t.Error(`ev.Changed("Pass") must be true after a rotation that changed the password`)
 		}
@@ -343,6 +342,63 @@ func TestDeriveSecretHygiene(t *testing.T) {
 	}
 	if leaksAny(string(b), leaked) {
 		t.Errorf("json.Marshal leaked the rotated secret: %s", b)
+	}
+}
+
+// TestDeriveDeclaredWriteSurvivesPinUnpin exercises diffApplied
+// (reconciler.go), the third of the three FieldChange construction sites
+// Task 2 has to keep in agreement with buildCandidate's own candidate diff
+// (TestDerivedFieldChangedTrueAfterInputRotation, derive_test.go) and
+// loadValue's initial-load Change (TestDerivedFieldAgreesOnInitialLoadAndReconcile,
+// derive_test.go). Pin freezes what Get returns while the reconciler keeps
+// flushing normally underneath; Unpin's single coalesced diff is built by
+// diffApplied comparing the pinned and live applied-version maps - which,
+// for DSN, carry no version at all, so diffApplied has to fall back to
+// comparing DSN's actual value the identical way buildCandidate does. If
+// diffApplied disagreed with buildCandidate here, ev.Changed("DSN") would be
+// false after Unpin even though the password rotated while pinned - exactly
+// the "two of three disagree" defect class the brief calls out.
+func TestDeriveDeclaredWriteSurvivesPinUnpin(t *testing.T) {
+	p := mamoritest.NewProvider("fake") // rotCfg's source tags are scheme "fake"
+	p.Set("user", "alice")
+	p.Set("pass", "old")
+
+	events := make(chan mamori.Change[rotCfg], 4)
+	w, err := mamori.Watch[rotCfg](context.Background(),
+		mamori.WithProvider(p),
+		mamori.WithDerive(buildRotDSN, "DSN"),
+		mamori.OnChange(func(ev mamori.Change[rotCfg]) { events <- ev }),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if got := w.PinCurrent(); got != 1 {
+		t.Fatalf("PinCurrent() = %d, want 1", got)
+	}
+
+	p.Set("pass", "new")
+	waitForLive(t, w, 2)
+
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected Change delivered while still pinned: %+v", ev.Fields)
+	default:
+	}
+
+	w.Unpin()
+
+	select {
+	case ev := <-events:
+		if !ev.Changed("DSN") {
+			t.Fatalf(`Unpin's coalesced Change reported Changed("DSN") = false, want true: the password rotated while pinned, so the rebuilt DSN differs from what was pinned`)
+		}
+		if !ev.Changed("Pass") {
+			t.Fatal(`Unpin's coalesced Change reported Changed("Pass") = false, want true`)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Unpin did not deliver a Change")
 	}
 }
 

@@ -46,6 +46,23 @@ func (e *engine[T]) buildReport() *Report {
 		}
 		fields = append(fields, fs)
 	}
+	// Derived entries carry no fieldSpec at all - a WithDerive hook writes an
+	// opaque field, not one fieldSpecs (decode.go) ever discovers walking the
+	// struct - so nothing in the loop above ever visits them. Append one per
+	// declared write path here instead, after every sourced field; see
+	// Report's own doc comment for what this does to the "struct declaration
+	// order" property. They never affect healthy: fieldUnhealthy always
+	// returns false for a Derived entry, so there is nothing to check here.
+	seenDerived := make(map[string]struct{})
+	for _, d := range e.derives {
+		for _, p := range d.writes {
+			if _, dup := seenDerived[p]; dup {
+				continue
+			}
+			seenDerived[p] = struct{}{}
+			fields = append(fields, FieldStatus{Path: p, Derived: true})
+		}
+	}
 	// served is the version Get actually returns: the pinned version while
 	// pinned (Snapshot freezes there even as Live keeps climbing), otherwise
 	// the same as Live.
@@ -70,7 +87,16 @@ func (e *engine[T]) buildReport() *Report {
 // is unhealthy immediately. Everything else (including no error at all) is
 // judged only by staleness, since KindUnavailable and KindRateLimited are
 // expected to self-heal on the next successful resolve.
+//
+// A Derived field is never unhealthy, checked explicitly rather than left to
+// fall out of its zero-valued LastKind and Stale: it has no ref, so there is
+// no resolve that could fail and no staleness clock that could elapse, and the
+// explicit check is what keeps that true even if a future caller ever
+// constructed a Derived FieldStatus carrying stray state.
 func fieldUnhealthy(fs FieldStatus) bool {
+	if fs.Derived {
+		return false
+	}
 	switch fs.LastKind {
 	case KindNotFound, KindPermissionDenied, KindUnauthenticated, KindInvalid:
 		return true

@@ -436,6 +436,17 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 				fields = append(fields, FieldChange{Path: r.spec.Path, NewVersion: r.value.Version})
 			}
 		}
+		// A declared derive write path carries no ref and no Version, so the
+		// loop above never sees it; append its own diff here, comparing the
+		// zero value of T (nothing was serving before this load) against cfg,
+		// which already carries whatever the derive loop just above just wrote
+		// to it. See derivedFieldChanges for why this is the identical
+		// comparison buildCandidate and diffApplied perform for a reconciled
+		// update, not a second implementation of it - the property
+		// TestDerivedFieldAgreesOnInitialLoadAndReconcile (derive_test.go)
+		// pins directly.
+		var zero T
+		fields = append(fields, derivedFieldChanges(zero, cfg, derives)...)
 	}
 	// The reentrancy mark is nil here, and that is not an oversight: this gate
 	// runs on the CALLER's goroutine, inside Load or inside Watch before it has
