@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -210,29 +211,62 @@ func typedPreApply[T any](o *options) (func(context.Context, Change[T]) error, e
 	return fn, nil
 }
 
-// typedDerives asserts the WithDerive hooks back to their concrete type. Like
-// typedPreApply it is shared by every caller that can observe a mismatch, so
-// none of them can drift into tolerating it.
+// typedDerive pairs a WithDerive hook, asserted back to its concrete type,
+// with the field paths it declares having written. See WithDerive for what
+// writes means and does not mean.
+type typedDerive[T any] struct {
+	fn     func(*T) error
+	writes []string
+}
+
+// typedDerives asserts the WithDerive hooks back to their concrete type and
+// carries each hook's declared writes through unchanged. Like typedPreApply
+// it is shared by every caller that can observe a mismatch, so none of them
+// can drift into tolerating it.
 //
 // A mismatch is a loud error, deliberately unlike onChange's silent discard
 // below. A derive whose type parameter does not match Watch's would otherwise
 // present as "my derived field is empty and nothing told me why", with the
 // hook installed, never invoked, and no signal anywhere. The error names both
 // types so the mistake is findable by grep.
-func typedDerives[T any](o *options) ([]func(*T) error, error) {
+//
+// A declared write path is validated here, not resolved, and only for shape:
+// an empty or whitespace-only path is rejected outright, naming the
+// offending hook's position (its index among every WithDerive call
+// registered on this options value), because a silently ignored bad path
+// would reintroduce exactly the invisible-field problem writes exists to
+// fix. Validation happens here rather than in WithDerive itself because an
+// Option returns nothing - WithDerive has no way to report an error - so
+// failing at Load/Watch time matches how every other malformed-input case in
+// this package behaves, and matches how the type mismatch just below is
+// already handled.
+//
+// A non-empty path that names no field on T is deliberately NOT validated
+// against T. That is tempting and wrong here: the path is a dotted field
+// path into a possibly nested struct, the same shape spec.Path uses, and no
+// resolver for it exists outside the decode machinery (fieldSpecs, setField)
+// this generic function has no access to. A path matching nothing simply
+// never reports as written later, which degrades to today's (undeclared)
+// behavior rather than misbehaving.
+func typedDerives[T any](o *options) ([]typedDerive[T], error) {
 	if len(o.derives) == 0 {
 		return nil, nil
 	}
-	fns := make([]func(*T) error, 0, len(o.derives))
-	for _, d := range o.derives {
-		fn, ok := d.(func(*T) error)
+	out := make([]typedDerive[T], 0, len(o.derives))
+	for i, d := range o.derives {
+		fn, ok := d.fn.(func(*T) error)
 		if !ok {
 			var want func(*T) error
-			return nil, fmt.Errorf("mamori: WithDerive hook has type %T, want %T: %w", d, want, ErrInvalid)
+			return nil, fmt.Errorf("mamori: WithDerive hook has type %T, want %T: %w", d.fn, want, ErrInvalid)
 		}
-		fns = append(fns, fn)
+		for _, w := range d.writes {
+			if strings.TrimSpace(w) == "" {
+				return nil, fmt.Errorf("mamori: WithDerive hook at position %d declares an empty or whitespace-only write path: %w", i, ErrInvalid)
+			}
+		}
+		out = append(out, typedDerive[T]{fn: fn, writes: d.writes})
 	}
-	return fns, nil
+	return out, nil
 }
 
 // Watch performs an initial, fail-fast Load of T and then keeps it reconciled at
@@ -378,9 +412,10 @@ type engine[T any] struct {
 	preApply func(context.Context, Change[T]) error
 
 	// derives are the WithDerive hooks, asserted once here rather than on every
-	// flush. A mismatched type parameter fails at Watch time, where it is
-	// findable, rather than silently never running (see typedDerives).
-	derives []func(*T) error
+	// flush, paired with each hook's declared write paths (see typedDerive and
+	// typedDerives). A mismatched type parameter fails at Watch time, where it
+	// is findable, rather than silently never running.
+	derives []typedDerive[T]
 
 	// updated only by the reconciler goroutine:
 	observed map[string]Value  // latest value seen per path (always advances)
@@ -1132,7 +1167,7 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 		de := func() (de *DeriveError) {
 			defer armReentrancy(&e.w.inCallback)()
 			for _, d := range e.derives {
-				if err := d(&cand); err != nil {
+				if err := d.fn(&cand); err != nil {
 					e.o.meter.RecordApplyRejected(RejectDerive)
 					e.o.log().Error("candidate rejected by a derive hook; continuing to serve the previous config",
 						errAttrs(err)...)

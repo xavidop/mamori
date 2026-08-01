@@ -18,6 +18,17 @@ const (
 	defaultJitter       = 0.2
 )
 
+// deriveEntry holds one WithDerive hook alongside the field paths it declares
+// having written. fn is stored as any (options is not generic, the same
+// reason preApply and onChange are); writes stays on this non-generic side
+// deliberately, because it is just strings, and it lets the reconciler read
+// the declared paths without ever needing to know T (see typedDerive and
+// typedDerives, reconciler.go).
+type deriveEntry struct {
+	fn     any
+	writes []string
+}
+
 // options holds all configuration for a Load or Watch call.
 type options struct {
 	providers    map[string]Provider // explicit providers, override the registry
@@ -47,17 +58,19 @@ type options struct {
 	preApply        any
 	preApplyTimeout time.Duration
 
-	// derives holds the WithDerive hooks, each a func(*T) error typed per T and
-	// stored as any for the same reason preApply above is. They run after fields
-	// are decoded and BEFORE validation, so a derived field is validated like
-	// any other, and before the PreApply gate, so a rotation-safety hook proves
-	// the derived value rather than the one it replaced.
+	// derives holds the WithDerive hooks in registration order. Each entry
+	// pairs the hook (a func(*T) error typed per T and stored as any, for the
+	// same reason preApply above is) with the field paths it declares having
+	// written (see deriveEntry). They run after fields are decoded and BEFORE
+	// validation, so a derived field is validated like any other, and before
+	// the PreApply gate, so a rotation-safety hook proves the derived value
+	// rather than the one it replaced.
 	//
 	// A slice rather than a single hook: unrelated derivations stay in separate
 	// functions instead of accreting into one closure, and a field derived from
 	// another derived field works with no new concept, because a later hook sees
 	// an earlier one's output.
-	derives []any
+	derives []deriveEntry
 
 	// admin server config, consumed only by Watch (see adminhttp.go). Load
 	// accepts the same Option values but has no watcher to run a server
@@ -270,15 +283,39 @@ func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn }
 // whole candidate configuration exactly as a validation failure does: Get keeps
 // serving the last valid config and the error reaches OnError as a *DeriveError.
 //
+// writes declares the dotted field paths the hook writes (the same shape
+// spec.Path uses, e.g. "Redis.DSN"), in any order. mamori cannot infer which
+// fields an opaque Go function writes, so the caller states them; declaring
+// them is what lets a derived field appear in ev.Changed and in Status()'s
+// per-field report, rather than being invisible to both the way an
+// undeclared derived field always has been.
+//
+// writes is variadic and optional: WithDerive(fn), with no paths at all,
+// keeps compiling and behaves exactly as it always has - the hook still
+// registers and runs, it simply reports no writes, matching the original,
+// undeclared form of this option.
+//
+// A declared path is validated for shape only, not existence, and that is
+// deliberate. An empty or whitespace-only path is rejected at Load/Watch time
+// (see typedDerives): silently ignoring one would reintroduce exactly the
+// invisible-field problem writes exists to fix. A non-empty path that names
+// no field on T is, by contrast, NOT rejected - it is tempting to check, but
+// wrong: the path is a dotted field path into a possibly nested struct, the
+// same shape spec.Path uses, and no resolver for it exists outside the
+// decode machinery (fieldSpecs, setField) that this hook's own opaqueness
+// keeps mamori from running against it. A path that matches nothing simply
+// never reports as written, degrading to today's behavior rather than
+// misbehaving.
+//
 // A nil fn installs nothing and is silently dropped rather than reported: a
 // deliberate clamp on bad input, the same posture WithHistory and
 // WithPreApplyTimeout already take, not an oversight.
-func WithDerive[T any](fn func(*T) error) Option {
+func WithDerive[T any](fn func(*T) error, writes ...string) Option {
 	return func(o *options) {
 		if fn == nil {
 			return
 		}
-		o.derives = append(o.derives, fn)
+		o.derives = append(o.derives, deriveEntry{fn: fn, writes: writes})
 	}
 }
 
@@ -354,7 +391,7 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// assertion itself already happened above, before resolveAll; this loop
 	// only invokes the hooks.
 	for _, d := range derives {
-		if err := d(&cfg); err != nil {
+		if err := d.fn(&cfg); err != nil {
 			return cfg, nil, &DeriveError{Err: err}
 		}
 	}

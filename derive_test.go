@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,12 +30,179 @@ func TestWithDeriveRegistersInOrder(t *testing.T) {
 
 	var cfg deriveCfg
 	for _, fn := range fns {
-		if err := fn(&cfg); err != nil {
+		if err := fn.fn(&cfg); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 	if cfg.A != "first-second" {
 		t.Fatalf("got %q, want %q: derives must run in registration order", cfg.A, "first-second")
+	}
+}
+
+// TestWithDeriveNoWritesIsBackwardCompatible is the backward-compatibility
+// pin: WithDerive(fn), with no writes declared at all, must keep compiling
+// (this call site has no third argument) and must keep behaving exactly as
+// it did before writes existed - the hook still registers, still runs, and
+// reports no writes. A subtly wrong implementation that made writes
+// effectively required (for example, by treating a zero-length writes as an
+// error, or by requiring at least one call site in the package to pass one)
+// would fail this test either at compile time (the call below has no third
+// argument) or at the typedDerives/fn.fn checks below.
+func TestWithDeriveNoWritesIsBackwardCompatible(t *testing.T) {
+	o := &options{}
+	ran := false
+	WithDerive(func(c *deriveCfg) error { ran = true; return nil })(o)
+
+	fns, err := typedDerives[deriveCfg](o)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fns) != 1 {
+		t.Fatalf("got %d derives, want 1", len(fns))
+	}
+	if len(fns[0].writes) != 0 {
+		t.Fatalf("got writes %v, want none for WithDerive(fn) with no paths declared", fns[0].writes)
+	}
+	var cfg deriveCfg
+	if err := fns[0].fn(&cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ran {
+		t.Fatal("WithDerive(fn) with no writes must still register and run its hook")
+	}
+}
+
+// TestWithDeriveRecordsSingleWrite: WithDerive(fn, "DSN") must record writes
+// as ["DSN"].
+func TestWithDeriveRecordsSingleWrite(t *testing.T) {
+	o := &options{}
+	WithDerive(func(c *deriveCfg) error { return nil }, "DSN")(o)
+
+	fns, err := typedDerives[deriveCfg](o)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fns) != 1 {
+		t.Fatalf("got %d derives, want 1", len(fns))
+	}
+	want := []string{"DSN"}
+	if !slices.Equal(fns[0].writes, want) {
+		t.Fatalf("got writes %v, want %v", fns[0].writes, want)
+	}
+}
+
+// TestWithDeriveRecordsMultipleWritesInOrder: WithDerive(fn, "DSN",
+// "RedisURL") must record both paths, in the order given.
+func TestWithDeriveRecordsMultipleWritesInOrder(t *testing.T) {
+	o := &options{}
+	WithDerive(func(c *deriveCfg) error { return nil }, "DSN", "RedisURL")(o)
+
+	fns, err := typedDerives[deriveCfg](o)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fns) != 1 {
+		t.Fatalf("got %d derives, want 1", len(fns))
+	}
+	want := []string{"DSN", "RedisURL"}
+	if !slices.Equal(fns[0].writes, want) {
+		t.Fatalf("got writes %v, want %v in order", fns[0].writes, want)
+	}
+}
+
+// TestWithDeriveMultipleHooksKeepOwnWrites: two WithDerive calls must each
+// keep their own declared writes, and registration order must be preserved
+// (mirroring TestWithDeriveRegistersInOrder's ordering guarantee, now for
+// writes as well as behavior).
+func TestWithDeriveMultipleHooksKeepOwnWrites(t *testing.T) {
+	o := &options{}
+	WithDerive(func(c *deriveCfg) error { return nil }, "A")(o)
+	WithDerive(func(c *deriveCfg) error { return nil }, "B", "C")(o)
+
+	fns, err := typedDerives[deriveCfg](o)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fns) != 2 {
+		t.Fatalf("got %d derives, want 2", len(fns))
+	}
+	if !slices.Equal(fns[0].writes, []string{"A"}) {
+		t.Fatalf("first hook: got writes %v, want [A]", fns[0].writes)
+	}
+	if !slices.Equal(fns[1].writes, []string{"B", "C"}) {
+		t.Fatalf("second hook: got writes %v, want [B C]", fns[1].writes)
+	}
+}
+
+// TestTypedDerivesRejectsEmptyWritePath: an empty write path is exactly the
+// invisible-field problem writes exists to fix, so it must be rejected loudly
+// rather than silently ignored.
+func TestTypedDerivesRejectsEmptyWritePath(t *testing.T) {
+	o := &options{}
+	WithDerive(func(c *deriveCfg) error { return nil }, "")(o)
+
+	_, err := typedDerives[deriveCfg](o)
+	if err == nil {
+		t.Fatal("want an error for an empty write path")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error must satisfy ErrInvalid, got %v", err)
+	}
+}
+
+// TestTypedDerivesRejectsWhitespaceOnlyWritePath: whitespace-only is the same
+// invisible-field problem in disguise (it never matches a real field path
+// either), so it is rejected the same way an empty path is.
+func TestTypedDerivesRejectsWhitespaceOnlyWritePath(t *testing.T) {
+	o := &options{}
+	WithDerive(func(c *deriveCfg) error { return nil }, "   ")(o)
+
+	_, err := typedDerives[deriveCfg](o)
+	if err == nil {
+		t.Fatal("want an error for a whitespace-only write path")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error must satisfy ErrInvalid, got %v", err)
+	}
+}
+
+// TestTypedDerivesRejectsBadWritePathNamesHookPosition: the error must name
+// which WithDerive call is at fault, not just that some call is, so the
+// mistake is findable when a caller has registered more than one hook.
+func TestTypedDerivesRejectsBadWritePathNamesHookPosition(t *testing.T) {
+	o := &options{}
+	WithDerive(func(c *deriveCfg) error { return nil }, "A")(o)
+	WithDerive(func(c *deriveCfg) error { return nil }, "")(o)
+
+	_, err := typedDerives[deriveCfg](o)
+	if err == nil {
+		t.Fatal("want an error for the second hook's empty write path")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error must satisfy ErrInvalid, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "1") {
+		t.Errorf("error must name the offending hook's position (index 1, the second WithDerive call), got: %v", err)
+	}
+}
+
+// TestLoadRejectsDeriveWithEmptyWritePath proves the empty-path rejection
+// happens at Load time (through typedDerives, called from loadValue), not
+// merely when typedDerives is called directly. dsnCfg's env vars are
+// deliberately left unset: the write-path check runs before resolveAll (see
+// loadValue, reconcile.go), so this must fail on the bad write path, not on a
+// resolve failure - mirroring how
+// TestDeriveTypeMismatchOnLoadReportsHookErrorNotResolveError proves the same
+// ordering for a mismatched hook type.
+func TestLoadRejectsDeriveWithEmptyWritePath(t *testing.T) {
+	_, err := Load[dsnCfg](context.Background(),
+		WithDerive(func(c *dsnCfg) error { return nil }, ""),
+	)
+	if err == nil {
+		t.Fatal("Load must reject a WithDerive hook with an empty write path")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error must satisfy ErrInvalid, got %v", err)
 	}
 }
 
@@ -386,8 +554,8 @@ func TestBuildCandidateDeriveClearsMarkWhenHookPanics(t *testing.T) {
 	e := &engine[cfg]{
 		o: o,
 		w: w,
-		derives: []func(*cfg) error{
-			func(*cfg) error { panic("derive blew up") },
+		derives: []typedDerive[cfg]{
+			{fn: func(*cfg) error { panic("derive blew up") }},
 		},
 	}
 
