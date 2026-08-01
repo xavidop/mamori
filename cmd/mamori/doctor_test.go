@@ -193,6 +193,127 @@ func TestDoctorCompareNoDriftReportsMatch(t *testing.T) {
 	}
 }
 
+// TestDoctorCompareIgnoresDeclaredDerivedField is the regression test for a
+// review finding: a live report's Derived FieldStatus entries used to be
+// compared against the source-tagged field set at face value, so a declared
+// WithDerive write path - which by construction carries no `source` tag and
+// therefore can never appear in Extract's output, however correctly it is
+// configured - was always flagged "only in live (not source)": permanent,
+// unfixable false drift on an otherwise perfectly healthy process.
+// runCompare now excludes a Derived live field from the comparison entirely.
+func TestDoctorCompareIgnoresDeclaredDerivedField(t *testing.T) {
+	root := moduleRoot(t)
+	fixtureDir := filepath.Join(root, "testdata", "example")
+	enterFixtureModule(t, fixtureDir)
+
+	structs, err := Extract([]string{"./..."}, "", nil)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	seen := map[string]bool{}
+	var fields []mamori.FieldStatus
+	for _, s := range structs {
+		for _, f := range s.Fields {
+			if seen[f.Path] {
+				continue
+			}
+			seen[f.Path] = true
+			fields = append(fields, mamori.FieldStatus{Path: f.Path, Scheme: "env"})
+		}
+	}
+	// A declared derive write path: no source tag anywhere in the fixture, by
+	// construction, so it must never be reported as drift.
+	const derivedPath = "DSN"
+	fields = append(fields, mamori.FieldStatus{Path: derivedPath, Derived: true})
+
+	body, err := json.Marshal(mamori.Report{Fields: fields, Healthy: true})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write(body)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var outBuf, errBuf bytes.Buffer
+	code := doctorCmd([]string{"--endpoint", srv.URL, "--insecure", "--compare", "./..."}, &outBuf, &errBuf)
+	if code != 0 {
+		t.Fatalf("doctorCmd() code = %d, stderr = %s", code, errBuf.String())
+	}
+	out := outBuf.String()
+	if strings.Contains(out, derivedPath) && strings.Contains(out, "only in live") {
+		t.Errorf("a declared derived field was reported as live-only drift, want it excluded entirely:\n%s", out)
+	}
+	if strings.Contains(out, "only in") {
+		t.Errorf("expected no drift once the derived field is excluded from the comparison, got:\n%s", out)
+	}
+}
+
+// TestDoctorTableRendersDerivedColumn is the regression test for the other
+// half of the same review finding: writeReportTable rendered a Derived row
+// with blank SCHEME/REF/VERSION and no column explaining why, which reads as
+// a misconfigured or half-broken source field rather than a field that was
+// never supposed to have a ref in the first place. A DERIVED column now
+// makes that explicit for every row.
+func TestDoctorTableRendersDerivedColumn(t *testing.T) {
+	body, err := json.Marshal(mamori.Report{
+		Fields: []mamori.FieldStatus{
+			{Path: "Level", Scheme: "env", Ref: "env://LEVEL", Version: "v1"},
+			{Path: "DSN", Derived: true},
+		},
+		Healthy: true,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write(body)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var outBuf, errBuf bytes.Buffer
+	code := doctorCmd([]string{"--endpoint", srv.URL, "--insecure"}, &outBuf, &errBuf)
+	if code != 0 {
+		t.Fatalf("doctorCmd() code = %d, stderr = %s", code, errBuf.String())
+	}
+	out := outBuf.String()
+	if !strings.Contains(out, "DERIVED") {
+		t.Fatalf("table header missing a DERIVED column:\n%s", out)
+	}
+
+	var dsnLine, levelLine string
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(l, "DSN"):
+			dsnLine = l
+		case strings.HasPrefix(l, "Level"):
+			levelLine = l
+		}
+	}
+	if dsnLine == "" {
+		t.Fatalf("no row rendered for DSN:\n%s", out)
+	}
+	if !strings.HasSuffix(strings.TrimRight(dsnLine, " \t"), "true") {
+		t.Errorf("DSN row does not end with DERIVED=true: %q", dsnLine)
+	}
+	if levelLine == "" {
+		t.Fatalf("no row rendered for Level:\n%s", out)
+	}
+	if !strings.HasSuffix(strings.TrimRight(levelLine, " \t"), "false") {
+		t.Errorf("Level row does not end with DERIVED=false: %q", levelLine)
+	}
+}
+
 // TestStatusOnceMatchesFetchReport exercises statusCmd's non-watch path: a
 // single render and exit with the health exit code, the same classification
 // fetchReport produces.

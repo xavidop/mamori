@@ -128,12 +128,19 @@ func writeDoctorJSON(stdout io.Writer, res fetchResult) {
 }
 
 // writeReportTable renders rep for a human: one row per field (Path,
-// Scheme, Ref, Version, Stale, LastKind, LastError, Sensitive) followed by
-// a summary line. status.go's statusCmd reuses this so `doctor` and
-// `status` render an identical table for the same report.
+// Scheme, Ref, Version, Stale, LastKind, LastError, Sensitive, Derived)
+// followed by a summary line. status.go's statusCmd reuses this so `doctor`
+// and `status` render an identical table for the same report.
+//
+// A Derived row (WithDerive declared it as a write path; see
+// mamori.FieldStatus.Derived) always renders SCHEME, REF, and VERSION blank:
+// it has no ref, so there is nothing there to show. The DERIVED column is
+// what tells a reader that is expected - a field mamori maintains but never
+// resolved from anywhere - rather than a row that looks like a
+// misconfigured or half-broken source field.
 func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "PATH\tSCHEME\tREF\tVERSION\tSTALE\tLAST_KIND\tLAST_ERROR\tSENSITIVE")
+	_, _ = fmt.Fprintln(tw, "PATH\tSCHEME\tREF\tVERSION\tSTALE\tLAST_KIND\tLAST_ERROR\tSENSITIVE\tDERIVED")
 	for _, f := range rep.Fields {
 		lastKind := string(f.LastKind)
 		if lastKind == "" {
@@ -143,9 +150,10 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 		if lastErr == "" {
 			lastErr = "-"
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			f.Path, f.Scheme, f.Ref, f.Version,
-			strconv.FormatBool(f.Stale), lastKind, lastErr, strconv.FormatBool(f.Sensitive))
+			strconv.FormatBool(f.Stale), lastKind, lastErr, strconv.FormatBool(f.Sensitive),
+			strconv.FormatBool(f.Derived))
 	}
 	_ = tw.Flush()
 
@@ -170,6 +178,16 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 // field is reported as missing from live: --compare still runs and still
 // reports what it can, rather than silently doing nothing just because the
 // live half of the comparison came back empty.
+//
+// A Derived live field (mamori.FieldStatus.Derived) is excluded from the live
+// set entirely, not merely tolerated as a mismatch: Extract only ever walks
+// `source:`-tagged struct fields (sourcetag.go), and a WithDerive-declared
+// write path carries no `source` tag by construction, so it can never appear
+// on the source side of this comparison no matter how correctly it is
+// configured. Without this exclusion, every process that declares a derived
+// field would report "only in live (not source)" for it on every single
+// --compare run - permanent, unfixable drift for a field that is working
+// exactly as intended.
 func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report, schemes sourcetag.SchemeSet) {
 	structs, err := Extract(patterns, "", schemes)
 	if err != nil {
@@ -186,6 +204,9 @@ func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report,
 	live := map[string]bool{}
 	if rep != nil {
 		for _, f := range rep.Fields {
+			if f.Derived {
+				continue
+			}
 			live[f.Path] = true
 		}
 	}

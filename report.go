@@ -1,5 +1,7 @@
 package mamori
 
+import "reflect"
+
 // buildReport constructs an immutable Report from the engine's current state.
 // It is called only by the reconciler goroutine, so it reads the engine maps
 // without locking: they are never written by any other goroutine. Age and
@@ -53,6 +55,25 @@ func (e *engine[T]) buildReport() *Report {
 	// Report's own doc comment for what this does to the "struct declaration
 	// order" property. They never affect healthy: fieldUnhealthy always
 	// returns false for a Derived entry, so there is nothing to check here.
+	//
+	// A declared path is only ever validated for SHAPE at Load/Watch time
+	// (typedDerives rejects an empty or whitespace-only path, nothing else),
+	// so a path that names no field on T at all - a typo like "DSNN", a
+	// dotted path into a struct that does not exist ("Nope.Deep"), or a name
+	// that happens to match an unexported field - is expected input here, not
+	// a bug. fieldByPath (decode.go) is queried against e.lastGood, the
+	// engine's own last-applied config, to gate the append on that path
+	// actually resolving to a readable field: without this a bad or
+	// unexported path would still publish a phantom Derived row to the admin
+	// endpoint, disagreeing with derivedFieldChanges (reconciler.go), which
+	// already skips exactly this case for the diff, and contradicting
+	// WithDerive's own godoc ("a path that matches nothing simply never
+	// reports as written"). CanInterface is checked too, not just the
+	// fieldByPath lookup, because FieldByName matches an unexported field by
+	// name just as readily as an exported one; Interface() on that result
+	// panics, so a path spelled after a real-but-unexported field would
+	// otherwise crash report building rather than degrade quietly.
+	lastGood := reflect.ValueOf(e.lastGood)
 	seenDerived := make(map[string]struct{})
 	for _, d := range e.derives {
 		for _, p := range d.writes {
@@ -60,6 +81,9 @@ func (e *engine[T]) buildReport() *Report {
 				continue
 			}
 			seenDerived[p] = struct{}{}
+			if v, ok := fieldByPath(lastGood, p); !ok || !v.CanInterface() {
+				continue
+			}
 			fields = append(fields, FieldStatus{Path: p, Derived: true})
 		}
 	}

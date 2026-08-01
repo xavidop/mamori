@@ -70,9 +70,12 @@
 // resolved - a DSN assembled from a host, a user, and a password, for example -
 // and reruns it on every [Load] and every reconciled update, before validation
 // and before [PreApply], so the assembled value is rebuilt rather than going
-// stale the moment just one of its inputs rotates. A derived field carries no
-// `source` tag, so it never appears in [Change.Changed]; react to the inputs
-// that feed it instead and read the derived field back off [Watcher.Get].
+// stale the moment just one of its inputs rotates. Declare which fields the
+// hook writes ("DSN") and that field joins [Change.Changed] and
+// [Watcher.Status] like any other, reported changed exactly when its rebuilt
+// value differs from before; leave writes undeclared and mamori has no way to
+// know it exists, so it stays invisible to both, exactly as before this
+// option could name its own output.
 //
 // [Watcher.Refresh] forces an immediate re-resolve of every field, bypassing
 // poll intervals, and blocks until the resulting snapshot has been applied or

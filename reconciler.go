@@ -1404,7 +1404,14 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 		// and emits the coalesced Change, it does not reconcile anything
 		// itself, so it must not (and does not) call RecordRefresh again for
 		// these same fields.
+		//
+		// A derived FieldChange is skipped here (isDerivedPath), not metered
+		// under a fabricated scheme: see isDerivedPath's own doc comment for
+		// why.
 		for _, f := range fields {
+			if e.isDerivedPath(f.Path) {
+				continue
+			}
 			e.o.meter.RecordRefresh(e.schemeForPath(f.Path))
 		}
 		e.w.report.Store(e.buildReport())
@@ -1413,10 +1420,22 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 
 	e.w.cfg.Store(&cand)
 	for _, f := range fields {
+		if e.isDerivedPath(f.Path) {
+			continue
+		}
 		e.o.meter.RecordRefresh(e.schemeForPath(f.Path))
 	}
 	e.o.log().Info("config change applied", logAttrCount, len(fields))
 	for _, f := range fields {
+		// A derived FieldChange carries no ref and no Version (see
+		// derivedFieldChanges, above); logging it here would print a
+		// misleading empty version="" for a field that was never resolved
+		// from anything. isDerivedPath is the same check the metering loops
+		// above use, so this can never disagree with them about which
+		// fields in this same slice are derived.
+		if e.isDerivedPath(f.Path) {
+			continue
+		}
 		e.o.log().Debug("field updated",
 			logAttrField, f.Path, logAttrVersion, f.NewVersion)
 	}
@@ -1805,6 +1824,28 @@ func (e *engine[T]) emitErr(err error) {
 	}
 	defer armReentrancy(&e.w.inCallback)()
 	e.o.onError(err)
+}
+
+// isDerivedPath reports whether path is one of the write paths some WithDerive
+// hook has declared (regardless of whether that path resolves to a real field
+// on T - see derivedFieldChanges for why that distinction does not matter
+// here). flush uses this to skip a derived FieldChange in its metering and
+// per-field debug logging, rather than recording a refresh under an empty
+// scheme label: schemeForPath returns "" for any path outside e.specs, which a
+// derived path always is (it has no fieldSpec at all), and RecordRefresh's own
+// contract - "a watched value changed and was reconciled" - does not describe
+// a derive rebuild in the first place, since a derived field is never watched.
+// See RecordRefresh's doc comment (observ.go) for the same reasoning stated
+// from the metric's side.
+func (e *engine[T]) isDerivedPath(path string) bool {
+	for _, d := range e.derives {
+		for _, w := range d.writes {
+			if w == path {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // schemeForPath returns the scheme of the ref that most recently determined

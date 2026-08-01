@@ -11,13 +11,14 @@ import (
 // recordingMeter counts every Meter call, so a test can assert an engine event
 // reached the metrics sink without needing a real backend.
 type recordingMeter struct {
-	mu            sync.Mutex
-	resolves      int
-	refreshes     int
-	watchErrors   int
-	stale         []string
-	dropped       int
-	applyRejected []RejectReason
+	mu             sync.Mutex
+	resolves       int
+	refreshes      int
+	refreshSchemes []string // every scheme RecordRefresh was called with, in call order
+	watchErrors    int
+	stale          []string
+	dropped        int
+	applyRejected  []RejectReason
 }
 
 func (m *recordingMeter) RecordResolve(string, time.Duration, error) {
@@ -25,10 +26,11 @@ func (m *recordingMeter) RecordResolve(string, time.Duration, error) {
 	defer m.mu.Unlock()
 	m.resolves++
 }
-func (m *recordingMeter) RecordRefresh(string) {
+func (m *recordingMeter) RecordRefresh(scheme string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.refreshes++
+	m.refreshSchemes = append(m.refreshSchemes, scheme)
 }
 func (m *recordingMeter) RecordWatchError(string) {
 	m.mu.Lock()
@@ -65,6 +67,11 @@ func (m *recordingMeter) staleSchemes() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.stale...)
+}
+func (m *recordingMeter) refreshSchemeList() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.refreshSchemes...)
 }
 
 // TestMeterCountsDroppedChangeEvent is the counter this whole task exists for.

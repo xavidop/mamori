@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -888,5 +889,250 @@ func TestDerivedFieldAgreesOnInitialLoadAndReconcile(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OnChange did not fire for the rotation")
+	}
+}
+
+// TestStatusOmitsPhantomDerivedPathForUnknownField is the regression test for
+// a review finding: buildReport used to append a FieldStatus for every
+// declared write path unconditionally, so a typo'd path ("DSNN") or one
+// naming a nested struct that does not exist ("Nope.Deep") was published to
+// Status() - and the admin HTTP body - as a phantom Derived row for a field
+// that does not exist on T at all. That disagreed with derivedFieldChanges
+// (reconciler.go), which already skips exactly this case for the diff, and
+// with WithDerive's own godoc: "A path that matches nothing simply never
+// reports as written, degrading to today's behavior rather than
+// misbehaving." buildReport now gates the append on fieldByPath(e.lastGood,
+// p) resolving.
+func TestStatusOmitsPhantomDerivedPathForUnknownField(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-phantom")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-phantom://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil },
+			"DSN", "DSNN", "Nope.Deep"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	rep := w.Status()
+	for _, f := range rep.Fields {
+		if f.Path == "DSNN" || f.Path == "Nope.Deep" {
+			t.Errorf("Status().Fields published a phantom row for an unresolvable declared path: %+v", f)
+		}
+	}
+	if len(rep.Fields) != 2 {
+		t.Fatalf("Status().Fields has %d entries, want 2 (User + DSN only, no phantom rows): %+v", len(rep.Fields), rep.Fields)
+	}
+}
+
+// unexportedDeriveCfg carries a real field that is not exported, so a derive
+// declaring it as a write path exercises fieldByPath's CanInterface guard
+// (buildReport, report.go; derivedFieldChanges, reconciler.go) rather than
+// the "no such field at all" branch TestStatusOmitsPhantomDerivedPathForUnknownField
+// covers: FieldByName matches "hidden" by name just as readily as an exported
+// field, so without the CanInterface check the field would be found, and
+// calling Interface() on it would panic.
+type unexportedDeriveCfg struct {
+	User   string `source:"sderive-unexported://user"`
+	DSN    string
+	hidden string
+}
+
+func TestStatusOmitsDerivedPathNamingUnexportedField(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-unexported")
+	wp.set("user", "alice", "v1")
+
+	w, err := Watch[unexportedDeriveCfg](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *unexportedDeriveCfg) error {
+			c.DSN = "postgres://" + c.User
+			c.hidden = "internal"
+			return nil
+		}, "DSN", "hidden"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	rep := w.Status()
+	for _, f := range rep.Fields {
+		if f.Path == "hidden" {
+			t.Errorf("Status().Fields published a row for an unexported field: %+v", f)
+		}
+	}
+	if len(rep.Fields) != 2 {
+		t.Fatalf("Status().Fields has %d entries, want 2 (User + DSN only): %+v", len(rep.Fields), rep.Fields)
+	}
+}
+
+// TestDerivedFieldChangeSkipsRefreshMetric is the regression test for a
+// second review finding: a derived FieldChange used to flow into flush's
+// RecordRefresh loop the same as a source field's, and schemeForPath returns
+// "" for any path outside e.specs (which a derived path always is), so every
+// declared-write rebuild recorded an empty-scheme refresh - a new, unlabeled
+// mamori_refresh_total{scheme=""} series for every caller who declares a
+// write path. isDerivedPath (reconciler.go) now skips a derived FieldChange
+// in that loop entirely, deliberately, rather than fabricating a scheme
+// label: see RecordRefresh's doc comment (observ.go) for why "a watched value
+// changed" does not describe a derive rebuild in the first place.
+func TestDerivedFieldChangeSkipsRefreshMetric(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-metric")
+	wp.set("user", "alice", "v1")
+	m := &recordingMeter{}
+
+	type Config struct {
+		User string `source:"sderive-metric://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk), WithMeter(m),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	schemes := m.refreshSchemeList()
+	if len(schemes) != 1 {
+		t.Fatalf("RecordRefresh called %d times for a flush with one source field and one derived field, want exactly 1 (the derived rebuild must not record its own refresh): %v", len(schemes), schemes)
+	}
+	if schemes[0] != "sderive-metric" {
+		t.Errorf(`RecordRefresh scheme = %q, want "sderive-metric" (the source field's own scheme)`, schemes[0])
+	}
+}
+
+// TestDerivedFieldChangeSkipsDebugFieldUpdatedLog is the log-side counterpart
+// to TestDerivedFieldChangeSkipsRefreshMetric: the per-field "field updated"
+// debug log printed logAttrVersion for every FieldChange, including a derived
+// one, which carries no Version at all - so it logged a misleading
+// version="" for DSN. isDerivedPath skips it there too.
+func TestDerivedFieldChangeSkipsDebugFieldUpdatedLog(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-log")
+	wp.set("user", "alice", "v1")
+	h, logger := newRecorder()
+
+	type Config struct {
+		User string `source:"sderive-log://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk), WithLogger(logger),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	sawUser := false
+	for _, r := range h.all() {
+		if r.Message != "field updated" {
+			continue
+		}
+		field, _ := attrOf(r, logAttrField)
+		if field == "DSN" {
+			t.Errorf(`a debug "field updated" record was logged for the derived field DSN, want it skipped: %+v`, r)
+		}
+		if field == "User" {
+			sawUser = true
+		}
+	}
+	if !sawUser {
+		t.Error(`no "field updated" record found for User; the source field's own log line must still fire`)
+	}
+}
+
+// TestFieldUnhealthyDerivedGuardShortCircuits pins the Derived guard in
+// fieldUnhealthy directly, rather than relying on every Derived FieldStatus
+// this package happens to construct having a zero LastKind and Stale ==
+// false anyway (which is what let a review round notice the guard could be
+// deleted with the full suite staying green). This constructs a FieldStatus
+// that every rule BELOW the guard would call unhealthy - a terminal LastKind
+// and Stale both set - so only the early "if fs.Derived { return false }"
+// return can make this pass.
+func TestFieldUnhealthyDerivedGuardShortCircuits(t *testing.T) {
+	fs := FieldStatus{Derived: true, Stale: true, LastKind: KindNotFound}
+	if fieldUnhealthy(fs) {
+		t.Fatal("fieldUnhealthy(Derived: true, Stale: true, LastKind: KindNotFound) = true, want false: the Derived guard must short-circuit before the Stale/LastKind checks below it")
+	}
+}
+
+// fieldByPathOuter/fieldByPathInner are the fixture for TestFieldByPath, a
+// direct table test of the path-walking helper itself (decode.go): every
+// caller (derivedFieldChanges, buildReport) only ever exercises it indirectly
+// through a full Watch, which is not enough to pin the multi-segment walk on
+// its own - mutating fieldByPath to unconditionally reject any path
+// containing "." left the whole suite green, because none of the derive
+// fixtures elsewhere in this file declare a nested write path.
+type fieldByPathOuter struct {
+	Name  string
+	Inner fieldByPathInner
+}
+type fieldByPathInner struct {
+	DSN string
+}
+
+func TestFieldByPath(t *testing.T) {
+	cfg := fieldByPathOuter{Name: "top", Inner: fieldByPathInner{DSN: "nested-value"}}
+	root := reflect.ValueOf(cfg)
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"top-level field", "Name", "top"},
+		{"nested field (the brief's own Redis.DSN shape)", "Inner.DSN", "nested-value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, ok := fieldByPath(root, tt.path)
+			if !ok {
+				t.Fatalf("fieldByPath(%q) ok = false, want true", tt.path)
+			}
+			if got := v.String(); got != tt.want {
+				t.Errorf("fieldByPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+
+	notFoundTests := []struct {
+		name string
+		path string
+	}{
+		{"unknown top-level field", "Nope"},
+		{"unknown nested field", "Inner.Nope"},
+		{"segment that is not itself a struct", "Name.Deep"},
+		{"empty path", ""},
+	}
+	for _, tt := range notFoundTests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := fieldByPath(root, tt.path); ok {
+				t.Errorf("fieldByPath(%q) ok = true, want false", tt.path)
+			}
+		})
 	}
 }
