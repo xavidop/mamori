@@ -21,6 +21,17 @@ import (
 // error at all.
 const bulkMaxKeys = 100
 
+// errBodyLimit bounds how much of a non-200 response body get and bulkGet
+// read, so a hostile or broken upstream cannot put an unbounded response
+// into an error string. Both functions' 404 branches drain within this same
+// bound (see get's doc comment on why an absent key needs that drain), and
+// both 200 paths now drain within it too - get already does by reading the
+// whole body via io.ReadAll, and bulkGet's Decode-based path drains
+// explicitly right after decoding - so every branch that can be entered
+// shares one connection-reuse discipline rather than the 200 and 404 paths
+// silently differing.
+const errBodyLimit = 4096
+
 // Resolve fetches the value for ref from Workers KV.
 //
 // There is deliberately no cache and no TTL: mamori.Refresh and mamori.Doctor
@@ -211,12 +222,12 @@ func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[
 		// treats an absent key: this chunk's keys are skipped so their refs
 		// fall back to their defaults, rather than one bad namespace failing
 		// every sibling ref in the batch.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 		return nil, fmt.Errorf("mamori/cloudflare-kv: namespace not found for bulk get of %d key(s): %w", len(keys), mamori.ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
 		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d from bulk get of %d key(s): %s",
 			resp.StatusCode, len(keys), strings.TrimSpace(string(msg)))
 		return nil, classifyStatus(resp.StatusCode, statusErr)
@@ -226,6 +237,12 @@ func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("mamori/cloudflare-kv: decoding bulk response: %w: %w", mamori.ErrInvalid, err)
 	}
+	// Decode consumes a well-formed single JSON value, so this is normally a
+	// no-op; draining explicitly, rather than relying on that, is what makes
+	// this path's connection-reuse behavior a decision instead of an
+	// accident of Decode's internals, matching the 404 branch above and
+	// get's own 200 path (see errBodyLimit's doc comment).
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 	if !body.Success {
 		// A 200 status carrying "success":false is Cloudflare's own reported
 		// failure, distinct from an HTTP-level status code, and is a malformed
@@ -283,16 +300,19 @@ func (p *Provider) get(ctx context.Context, s settings, key string) ([]byte, err
 		// every poll tick, and leaving the body unread here would prevent
 		// the connection being reused, paying a fresh TCP and TLS handshake
 		// on every one of those ticks.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 		return nil, fmt.Errorf("mamori/cloudflare-kv: key %q not found: %w", key, mamori.ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
 		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d reading key %q: %s",
 			resp.StatusCode, key, strings.TrimSpace(string(msg)))
 		return nil, classifyStatus(resp.StatusCode, statusErr)
 	}
+	// The 200 path needs no matching drain step: it already reads the whole
+	// body via io.ReadAll below, so the connection is already fully consumed
+	// by the time this function returns (see errBodyLimit's doc comment).
 	return io.ReadAll(resp.Body)
 }
 

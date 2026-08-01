@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -386,5 +389,63 @@ func TestResolveHonorsContextCancellation(t *testing.T) {
 
 	if _, err := p.Resolve(ctx, ref(t, "vercel-gc://k")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}
+
+// TestGetErrorBodyIsBounded pins errBodyLimit: the diagnostic read in get's
+// non-200 branch must never let a hostile or broken upstream put an
+// unbounded response into an error string. Every other test in this file
+// serves bodies far smaller than the bound, so none of them would notice if
+// io.LimitReader(resp.Body, errBodyLimit) were replaced with resp.Body
+// directly; this one sends a body far larger than the bound with a
+// distinctive trailing marker, so an unbounded read would carry the marker
+// straight into the returned error.
+func TestGetErrorBodyIsBounded(t *testing.T) {
+	const marker = "TAIL_MARKER_MUST_NOT_SURVIVE"
+	oversized := strings.Repeat("A", 20000) + marker
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer srv.Close()
+
+	p := New(WithConnectionString(fmt.Sprintf("https://global-config.vercel.com/%s?token=%s", testStore, testToken)), WithBaseURL(srv.URL))
+
+	_, err := p.Resolve(context.Background(), ref(t, "vercel-gc://k"))
+	if err == nil {
+		t.Fatal("want an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("error body was not bounded: the trailing marker reached the error text: %v", err)
+	}
+	if len(err.Error()) > 10000 {
+		t.Fatalf("error message is %d bytes long; the diagnostic read must be bounded well below the %d-byte oversized body", len(err.Error()), len(oversized))
+	}
+}
+
+// TestGetNotFoundIncludesBodyDiagnostic pins the fix for #107 item 3: get's
+// 404 branch used to read the error body into a diagnostic, then discard it
+// in favor of a bare "store not found" error with no body content at all.
+// The body is the one place a real Global Config 404 - which carries a
+// "code" such as "edge_config_not_found" - would tell a caller what
+// actually went wrong, so it must survive into the returned error.
+func TestGetNotFoundIncludesBodyDiagnostic(t *testing.T) {
+	const diagnostic = "edge_config_not_found"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"code":"`+diagnostic+`"}}`)
+	}))
+	defer srv.Close()
+
+	p := New(WithConnectionString(fmt.Sprintf("https://global-config.vercel.com/%s?token=%s", testStore, testToken)), WithBaseURL(srv.URL))
+
+	_, err := p.Resolve(context.Background(), ref(t, "vercel-gc://k"))
+	if !errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("got %v, want an error satisfying mamori.ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), diagnostic) {
+		t.Fatalf("got %v, want the 404 body's diagnostic (%q) to survive into the error instead of being discarded", err, diagnostic)
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -592,4 +594,36 @@ func TestResolveMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
 		t.Fatal("want an error from a malformed base URL")
 	}
 	assertNoCredentialLeak(t, err)
+}
+
+// TestResolveErrorBodyIsBounded pins errBodyLimit: the diagnostic read in
+// access's non-200, non-404 branch must never let a hostile or broken
+// upstream put an unbounded response into an error string. Every other test
+// in this file serves bodies far smaller than the bound, so none of them
+// would notice if io.LimitReader(resp.Body, errBodyLimit) were replaced with
+// resp.Body directly; this one sends a body far larger than the bound with a
+// distinctive trailing marker, so an unbounded read would carry the marker
+// straight into the returned error.
+func TestResolveErrorBodyIsBounded(t *testing.T) {
+	const marker = "TAIL_MARKER_MUST_NOT_SURVIVE"
+	oversized := strings.Repeat("A", 20000) + marker
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer srv.Close()
+
+	p := New(WithSecretKey(testSecretKey), WithProjectID(testProjectID), WithRegion(testRegion), WithBaseURL(srv.URL))
+
+	_, err := p.Resolve(context.Background(), ref(t, "scaleway-sm://k"))
+	if err == nil {
+		t.Fatal("want an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("error body was not bounded: the trailing marker reached the error text: %v", err)
+	}
+	if len(err.Error()) > 10000 {
+		t.Fatalf("error message is %d bytes long; the diagnostic read must be bounded well below the %d-byte oversized body", len(err.Error()), len(oversized))
+	}
 }

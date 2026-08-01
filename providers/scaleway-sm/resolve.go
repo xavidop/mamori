@@ -15,6 +15,15 @@ import (
 	"github.com/xavidop/mamori"
 )
 
+// errBodyLimit bounds how much of a non-200 response body access reads, so
+// a hostile or broken upstream cannot put an unbounded response into an
+// error string. The 404 branch drains within this same bound (see access's
+// doc comment on why an absent secret needs that drain), and the 200 path
+// now drains within it too, right after its own Decode call, so every
+// branch that can be entered shares one connection-reuse discipline rather
+// than the 200 and 404 paths silently differing.
+const errBodyLimit = 4096
+
 // Resolve fetches ref's secret from Secret Manager.
 //
 // There is deliberately no cache and no TTL: mamori.Refresh and mamori.Doctor
@@ -107,12 +116,12 @@ func (p *Provider) access(ctx context.Context, s settings, path, name, revision 
 		// absent secret is read again on every poll tick, and leaving the
 		// body unread here would prevent the connection being reused, paying
 		// a fresh TCP and TLS handshake on every one of those ticks.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 		return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: secret %q not found: %w", name, mamori.ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
 		statusErr := fmt.Errorf("mamori/scaleway-sm: unexpected status %d accessing secret %q: %s",
 			resp.StatusCode, name, strings.TrimSpace(string(msg)))
 		return accessResponse{}, classifyStatus(resp.StatusCode, statusErr)
@@ -122,6 +131,12 @@ func (p *Provider) access(ctx context.Context, s settings, path, name, revision 
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: decoding access response for secret %q: %w: %w", name, mamori.ErrInvalid, err)
 	}
+	// Decode consumes a well-formed single JSON value, so this is normally a
+	// no-op; draining explicitly, rather than relying on that, is what makes
+	// this path's connection-reuse behavior a decision instead of an
+	// accident of Decode's internals, matching the 404 branch above (see
+	// errBodyLimit's doc comment).
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 	return body, nil
 }
 
