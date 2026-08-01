@@ -60,11 +60,15 @@ func buildRotDSN(c *rotCfg) error {
 // ev.Changed("DSN") declares it - mamori.WithDerive(buildRotDSN, "DSN") - and
 // gets it: see TestDeriveDeclaredWriteSurvivesPinUnpin below, and
 // TestDerivedFieldChangedTrueAfterInputRotation /
-// TestDerivedFieldAgreesOnInitialLoadAndReconcile in derive_test.go. The usage
-// docs Task 4 adds at site/src/pages/docs/usage/derived-fields.md carry the
-// caller-facing guidance for the undeclared case shown here: trigger on an
-// input field (ev.Changed("Pass") below), then read the derived value, which
-// is always correct even when it is not itself declared as "changed".
+// TestDerivedFieldAgreesOnInitialLoadAndReconcile in derive_test.go.
+// site/src/pages/docs/usage/derived-fields.md recommends exactly that
+// declared, trigger-on-the-derived-field shape going forward ("there is no
+// need to separately guard on ev.Changed(\"Pass\"): the derived field's own
+// change is the signal"); this test deliberately exercises the OLDER,
+// undeclared shape instead, where declaring is not an option and triggering
+// on an input field (ev.Changed("Pass") below) is the only thing left to
+// react to. The derived value read off ev.New is always correct either way,
+// even though it is never itself reported "changed" for this undeclared form.
 //
 // The Change event is received with a bounded timeout, not a non-blocking
 // default: case: OnChange is dispatched asynchronously, on a goroutine

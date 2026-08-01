@@ -218,6 +218,8 @@ go test -tags preflight ./...
 
 Unlike `Load`, `Doctor` never aborts on the first failure, so one run reports every misconfigured ref. See [Doctor](/docs/observability/doctor/) for the full `Report` shape.
 
+This preflight covers every `source`-tagged field, not a field a [`WithDerive`](/docs/usage/derived-fields/) hook writes: a derived field has no ref, so `Doctor` has nothing to resolve for it and reports nothing at all, healthy or otherwise. Exercise a derive hook's own logic with an ordinary unit test instead (call `Load` or `Watch` and assert on the resulting field), not by expecting this preflight to catch it.
+
 ## Drive poll intervals with the fake clock
 
 `mamoritest.Provider` delivers changes natively, not on a poll timer. To drive time itself (for example, testing `mamori.WithPollInterval` against a provider that only polls), inject `mamori.NewFakeClock` with `mamori.WithClock` and advance it manually:

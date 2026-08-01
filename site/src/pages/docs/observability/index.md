@@ -92,6 +92,8 @@ type Report struct {
 
 A `FieldStatus` with `Derived: true` is a field a [`WithDerive`](/docs/usage/derived-fields/) hook declares writing, not one mamori resolved from a source: it carries a `Path` and nothing else, since there is no ref, version, staleness, or error to report for it, and it never affects `Healthy`. It only appears at all if the hook that writes it names the field explicitly; an undeclared derive write has no entry here.
 
+A `Derived` entry appears only in a running `Watcher`'s `Status()`, never in a [`Doctor`](/docs/observability/doctor/) report: `Doctor` builds `Fields` from `source` tags alone and never reads a `WithDerive` hook's declared writes, so its `Report` never carries a `Derived` entry, even when the same `WithDerive` options are passed to it. A derived field has no ref, so there is nothing for a one-shot reachability probe to check in the first place.
+
 ## Health: one yes/no for a probe
 
 ```go

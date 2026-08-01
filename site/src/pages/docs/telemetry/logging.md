@@ -28,8 +28,8 @@ Every event mamori can log:
 | `candidate rejected by a derive hook; continuing to serve the previous config` | Error | A `WithDerive` hook returned an error and the reconciled candidate was discarded. |
 | `candidate rejected by validation; continuing to serve the previous config` | Error | A reconciled candidate failed struct validation and was discarded. |
 | `change rejected by PreApply; continuing to serve the previous config` | Warn | A `PreApply` hook rejected a candidate. |
-| `config change applied` | Info | A reconciled snapshot was accepted; logged once per flush, with the number of changed fields. |
-| `field updated` | Debug | One record per field included in an applied change, so the detail is available without making the Info line unbounded. |
+| `config change applied` | Info | A reconciled snapshot was accepted; logged once per flush, with the number of changed fields - this count includes any changed [derived](/docs/usage/derived-fields/) field, which gets no `field updated` record of its own (see below), so it is normal for this count to be higher than the number of `field updated` records that follow it. |
+| `field updated` | Debug | One record per non-derived field included in an applied change, so the detail is available without making the Info line unbounded. A derived (`WithDerive`-declared) field is skipped here: it carries no ref or version of its own, and printing one would mean logging a misleading empty `version=""`. |
 | `change event dropped, dispatch queue full; the OnChange handler is not keeping up` | Warn | The bounded `OnChange` dispatch queue was full and the oldest event was dropped. |
 | `provider has no native watch, polling` | Debug | A ref's provider does not implement `WatchableProvider`, so mamori falls back to polling it. |
 

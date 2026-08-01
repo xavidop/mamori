@@ -81,7 +81,7 @@ mamori.OnError(func(err error) {
 
 Diagnostics:
 
-- `mamori.Doctor[T](ctx, opts...)` resolves every field once and reports every failing ref at once, rather than stopping at the first, so you see the whole list of what is unreachable in a single run. Run it as a preflight check before you ever call `Watch` or `Load` for real.
+- `mamori.Doctor[T](ctx, opts...)` resolves every `source`-tagged field once and reports every failing ref at once, rather than stopping at the first, so you see the whole list of what is unreachable in a single run. Run it as a preflight check before you ever call `Watch` or `Load` for real. It does not run a [`WithDerive`](/docs/usage/derived-fields/) hook, so a derive that fails - which would also fail `Watch`/`Load` at startup - is invisible to `Doctor`; it checks whether the backends are reachable, not whether your derive logic is correct.
 - Look at the error kind. mamori splits resolve failures into terminal kinds (`not_found`, `permission_denied`, `unauthenticated`, `invalid`), which will not clear without a human fixing something, and transient kinds (`unavailable`, `rate_limited`), which are expected to self-heal on a later attempt. A terminal kind at startup usually means a wrong ref or a missing grant; a transient one usually means the backend was not up yet.
 - If a field legitimately should not block startup, say so explicitly: tag it `optional:"true"` if its absence is fine, or give it an `onfail:` tag (`onfail:"default"` to fall back to its `default:` value on error, or the reconciler's own `onfail:"keeplast"`/`onfail:"fail"` policies for the watch path) rather than letting an unrelated field's outage take down the whole process.
 

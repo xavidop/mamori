@@ -41,7 +41,7 @@ Build the DSN with `net/url`, as above, not `fmt.Sprintf`: `net/url` escapes a p
 
 ## Declare what it writes
 
-The second argument to `WithDerive`, `"DSN"` above, is the dotted field path the hook writes (the same shape a `source` tag's field path uses). Declaring it is what makes `DSN` show up in `ev.Changed("DSN")` and in `Status().Fields`, exactly like a field mamori resolved itself: mamori cannot inspect an opaque Go function to see what it assigns, so the hook states its own output.
+The second argument to `WithDerive`, `"DSN"` above, is the dotted field path the hook writes (the same shape a `source` tag's field path uses). Declaring it is what makes `DSN` show up in `ev.Changed("DSN")` and in `Status().Fields`: mamori cannot inspect an opaque Go function to see what it assigns, so the hook states its own output. `ev.Changed("DSN")` works exactly like it does for any other field, but the `Status().Fields` entry does not: it carries only a `Path` (and `Derived: true`), never a `Ref`, `Scheme`, or `Version`, since a derived field has none of those to report - see [Observability](/docs/observability/#report-and-fieldstatus) for the full shape.
 
 `WithDerive` can also be called with no path at all, `mamori.WithDerive(fn)`, and the hook still registers and runs; it simply writes a field nobody can see change. Declaring the path is the ordinary way to use this option, not an advanced one, because there is little reason to build a field mamori can never tell you rebuilt.
 

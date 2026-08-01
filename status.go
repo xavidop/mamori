@@ -31,6 +31,13 @@ type FieldStatus struct {
 	// there is no resolve that could fail. It is reported so an operator can
 	// see the field exists and is maintained, which is the whole reason a
 	// caller declares it.
+	//
+	// A Derived entry appears in Watcher.Status, never in a Doctor report:
+	// Doctor builds its Fields purely from the fieldSpecs a source tag
+	// produces, and a derived field has none, so there is nothing for a
+	// one-shot reachability probe to walk to in the first place - a derived
+	// field has no ref, so Doctor has nothing to resolve and nothing to
+	// report success or failure on.
 	Derived bool
 }
 
@@ -39,6 +46,14 @@ type FieldStatus struct {
 // declared WithDerive write paths (FieldStatus.Derived): a derived field has no
 // fieldSpec and therefore no spot in that order, so its entries are appended
 // after every sourced field instead, in WithDerive registration order.
+//
+// That Derived-append rule is a Watcher.Status rule, not a Doctor one: Doctor
+// resolves fieldSpecs directly (see Doctor, doctor.go) and never reads a
+// WithDerive hook's declared writes at all, so a Report a Doctor probe
+// returns never carries a Derived entry, regardless of what WithDerive hooks
+// were passed alongside it. A derived field has no ref for a reachability
+// preflight to probe, so there is nothing for Doctor to check and report on
+// for it either way.
 type Report struct {
 	Fields      []FieldStatus
 	Snapshot    uint64    // version of the snapshot Get currently returns (the pinned version, while Pinned)

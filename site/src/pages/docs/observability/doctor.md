@@ -11,9 +11,13 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error)
 
 `Doctor` resolves every field of `T` exactly once and returns a [`Report`](/docs/observability/#report-and-fieldstatus) describing what succeeded and what failed, without starting a watcher. It accepts the same `Option`s as `Load` and `Watch`, so it exercises your real provider wiring, middleware, and `Prefix` rewriting.
 
-Unlike `Load`, `Doctor` never aborts on the first failure: it walks every field and records each result, so one run reports every misconfigured ref instead of just the first. The returned `error` is non-nil only when `T` itself cannot be walked as a config struct (an unsupported field type, for example); individual field failures live in the `Report`, not the returned error. `Doctor` does not decode or validate values.
+Unlike `Load`, `Doctor` never aborts on the first failure: it walks every field a `source` tag declares and records each result, so one run reports every misconfigured ref instead of just the first. The returned `error` is non-nil only when `T` itself cannot be walked as a config struct (an unsupported field type, for example); individual field failures live in the `Report`, not the returned error. `Doctor` does not decode or validate values.
 
 `Report.Snapshot` and `Report.Live` are always `0` for a `Doctor` report (and `Report.Pinned` is always `false`), marking a one-shot probe rather than a running watcher's snapshot (whose version starts at 1).
+
+## Derived fields are not probed
+
+"Every field," above, means every field a `source` tag declares - the same walk `Load` and `Watch` share - not a field a [`WithDerive`](/docs/usage/derived-fields/) hook writes. `Doctor` builds its `Report` from `T`'s struct tags alone and never reads a registered `WithDerive` hook's declared writes at all, so a derived field never gets a [`FieldStatus`](/docs/observability/#report-and-fieldstatus) entry here - not even a `Derived: true` one - regardless of whether the same `WithDerive` options are also passed to `Doctor`. This is not an oversight: a derived field has no ref, so there is nothing for a reachability preflight to resolve or report success or failure on. A `Watcher`'s `Status()` is where a declared derived field appears (see [Observability](/docs/observability/#report-and-fieldstatus)); `Doctor` is a pre-`Watch` check for the fields mamori resolves from a backend, not a substitute for exercising a derive hook itself.
 
 ## Run it before a watcher starts
 
