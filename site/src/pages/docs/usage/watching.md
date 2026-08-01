@@ -73,6 +73,7 @@ These behaviors are guaranteed and covered by the conformance kit.
 - **Coalesced events.** Field changes within a debounce window (default 500ms, override per field with `?debounce=`) produce a single `Change`. A JSON secret with five keys rotating is one event, not five. See the [Options reference](/docs/usage/options/) for this and every other tuning knob's default.
 - **Last-good on failure.** On a runtime resolve failure the last-good value is retained, `OnError` receives a `*ProviderError`, and the ref keeps being retried - on the poll interval by default, or with per-ref exponential backoff if you opt into it with [`WithBackoff`](#retry-backoff). `WithStale(maxAge)` escalates prolonged staleness to a hard `*StaleError`.
 - **Clean shutdown.** `Close()` cancels provider watches, drains the callback queue, and returns.
+- **`OnChange` is type-checked against `Watch`'s own `T`.** `OnChange[T]` has to match the `T` passed to `Watch[T]`/`Load[T]`; a mismatch (a type alias, a renamed config struct, a generic helper passing the wrong type through) fails `Watch`/`Load` outright with an error wrapping `ErrInvalid` that names both types, rather than compiling clean and then never calling the callback.
 
 ## Retry backoff
 

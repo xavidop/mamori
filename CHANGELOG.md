@@ -2,6 +2,29 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.6.2](https://github.com/xavidop/mamori/compare/v1.6.1...v1.6.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **providers:** bound and drain HTTP error bodies, and pin the guards that were unpinned ([#115](https://github.com/xavidop/mamori/issues/115)) ([1790952](https://github.com/xavidop/mamori/commit/179095248b4ce39d254519883a18d135a96d7492)), closes [#103](https://github.com/xavidop/mamori/issues/103) [#104](https://github.com/xavidop/mamori/issues/104)
+
+## [1.6.1](https://github.com/xavidop/mamori/compare/v1.6.0...v1.6.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* fail Watch loudly on an OnChange hook typed for the wrong T ([#114](https://github.com/xavidop/mamori/issues/114)) ([e86491a](https://github.com/xavidop/mamori/commit/e86491af74bc333592cf9896926bae28533270fd))
+
+# [1.6.0](https://github.com/xavidop/mamori/compare/v1.5.1...v1.6.0) (2026-07-31)
+
+
+### Features
+
+* **cloudflare-kv:** Cloudflare Workers KV provider ([#104](https://github.com/xavidop/mamori/issues/104)) ([f51222a](https://github.com/xavidop/mamori/commit/f51222a499dc83d9902fb5a23fe93cb5e9aac509)), closes [#selector](https://github.com/xavidop/mamori/issues/selector) [#fields](https://github.com/xavidop/mamori/issues/fields)
+* **scaleway-sm:** Scaleway Secret Manager provider ([#106](https://github.com/xavidop/mamori/issues/106)) ([42053a0](https://github.com/xavidop/mamori/commit/42053a0d4f482876e2097d654841d727c25a5793))
+* **vercel-gc:** Vercel Global Config provider ([#103](https://github.com/xavidop/mamori/issues/103)) ([6891410](https://github.com/xavidop/mamori/commit/6891410c6d63926ddf103838a1d6cb6d44a4e256)), closes [#field](https://github.com/xavidop/mamori/issues/field) [/cfg#field](https://github.com//cfg/issues/field)
+
 ## [1.5.1](https://github.com/xavidop/mamori/compare/v1.5.0...v1.5.1) (2026-07-30)
 
 

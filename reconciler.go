@@ -40,7 +40,10 @@ func (c Change[T]) Changed(path string) bool {
 }
 
 // OnChange installs the callback invoked (on a single, serialized goroutine) for
-// each applied update. It is typed to the same T passed to Watch.
+// each applied update. It is typed to the same T passed to Watch, and Watch
+// enforces that: a hook installed via OnChange[T] for some other T fails
+// Watch outright, with an error wrapping ErrInvalid that names both types,
+// rather than compiling clean and then silently never firing.
 func OnChange[T any](fn func(Change[T])) Option {
 	return func(o *options) { o.onChange = fn }
 }
@@ -211,6 +214,33 @@ func typedPreApply[T any](o *options) (func(context.Context, Change[T]) error, e
 	return fn, nil
 }
 
+// typedOnChange asserts o.onChange back to a func(Change[T]), the concrete
+// type OnChange[T] actually stored (options is not generic, so the field is
+// held as any, exactly like preApply above). It returns (nil, nil) when no
+// hook was installed at all, which is the common case.
+//
+// A hook written against some other T used to make a bare comma-ok assertion
+// yield nil, silently: a nil onChange means the dispatch goroutine's `if
+// e.onChange != nil` guard (start, below) never calls it, so the callback
+// simply never fires - no error, no log, no Status signal that anything was
+// wrong. OnChange is the caller's one mechanism to react to a rotated
+// credential (rotate a database pool, rebuild a client, ...), so that silence
+// costs exactly the notification the caller installed the hook to receive,
+// with nothing anywhere saying so. This returns a loud error instead,
+// wrapping ErrInvalid and naming both types, the same contract typedPreApply
+// already established for the identical shape.
+func typedOnChange[T any](o *options) (func(Change[T]), error) {
+	if o.onChange == nil {
+		return nil, nil
+	}
+	fn, ok := o.onChange.(func(Change[T]))
+	if !ok {
+		var want func(Change[T])
+		return nil, fmt.Errorf("mamori: OnChange hook has type %T, want %T: %w", o.onChange, want, ErrInvalid)
+	}
+	return fn, nil
+}
+
 // typedDerive pairs a WithDerive hook, asserted back to its concrete type,
 // with the field paths it declares having written. See WithDerive for what
 // writes means and does not mean.
@@ -224,8 +254,9 @@ type typedDerive[T any] struct {
 // it is shared by every caller that can observe a mismatch, so none of them
 // can drift into tolerating it.
 //
-// A mismatch is a loud error, deliberately unlike onChange's silent discard
-// below. A derive whose type parameter does not match Watch's would otherwise
+// A mismatch is a loud error, matching typedPreApply and typedOnChange.
+// (OnChange used to discard the failed assertion silently and cost exactly
+// this; see issue #111, fixed separately.) A derive whose type parameter does not match Watch's would otherwise
 // present as "my derived field is empty and nothing told me why", with the
 // hook installed, never invoked, and no signal anywhere. The error names both
 // types so the mistake is findable by grep.
@@ -386,6 +417,18 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		return nil, err
 	}
 
+	// Checked here for the same reason preApply is checked above: a hook typed
+	// for the wrong T is a caller bug that should fail loudly and immediately,
+	// before any provider round trip is spent, rather than compile clean and
+	// silently install nothing (see typedOnChange's doc comment for what that
+	// used to cost). onChange, unlike preApply, is not fed into loadValue: it
+	// gates nothing on the initial resolve (OnChange fires only on subsequent
+	// changes, per Watch's own doc comment), so this is its only check.
+	onChange, err := typedOnChange[T](o)
+	if err != nil {
+		return nil, err
+	}
+
 	// Checked here for the identical reason preApply is checked just above:
 	// a mismatched hook is caught before any provider round trip is spent
 	// resolving fields, rather than surfacing only after loadValue's own
@@ -403,11 +446,6 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 	cfg, initial, err := loadValue[T](ctx, o)
 	if err != nil {
 		return nil, err
-	}
-
-	var onChange func(Change[T])
-	if o.onChange != nil {
-		onChange, _ = o.onChange.(func(Change[T]))
 	}
 
 	specs := make([]fieldSpec, len(initial))

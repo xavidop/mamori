@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -416,6 +418,37 @@ func TestResolveClassifiesRealStatus(t *testing.T) {
 	}
 	if got := mamori.ErrorKind(err); got != mamori.KindPermissionDenied {
 		t.Fatalf("ErrorKind(err) = %q, want %q; classifyDopplerStatus may not be wired into Resolve", got, mamori.KindPermissionDenied)
+	}
+}
+
+// TestResolveErrorBodyIsBounded pins errBodyLimit: the diagnostic read in
+// Resolve's default status branch must never let a hostile or broken
+// upstream put an unbounded response into an error string. Every other test
+// in this file uses response bodies far smaller than the bound, so none of
+// them would notice if io.LimitReader(resp.Body, errBodyLimit) were replaced
+// with resp.Body directly; this one sends a body far larger than the bound
+// with a distinctive trailing marker, so an unbounded read would carry the
+// marker straight into the returned error.
+func TestResolveErrorBodyIsBounded(t *testing.T) {
+	const marker = "TAIL_MARKER_MUST_NOT_SURVIVE"
+	oversized := strings.Repeat("A", 20000) + marker
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer srv.Close()
+
+	p := New(WithBaseURL(srv.URL), WithToken(testToken), WithHTTPClient(srv.Client()))
+	_, err := p.Resolve(context.Background(), mustRef(t, "doppler://"+testProject+"/"+testConfig+"#K"))
+	if err == nil {
+		t.Fatal("want an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("error body was not bounded: the trailing marker reached the error text: %v", err)
+	}
+	if len(err.Error()) > 10000 {
+		t.Fatalf("error message is %d bytes long; the diagnostic read must be bounded well below the %d-byte oversized body", len(err.Error()), len(oversized))
 	}
 }
 

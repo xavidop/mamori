@@ -173,3 +173,39 @@ func TestProviderIsNotWatchable(t *testing.T) {
 		t.Fatal("vercel-gc must not implement WatchableProvider: Vercel has no native change notification")
 	}
 }
+
+// TestResolveBatchSharedKeyNameAcrossStores pins that two stores in one
+// batch, each holding a key of the SAME name, resolve their own store's
+// value independently. TestResolveBatchIsOneRequestPerStore already covers
+// grouping-by-store, but its two stores use disjoint key names ("a","b","c"
+// vs "d"), so a bug merging the two stores' snapshot item maps together
+// would not be caught there: a wrong/merged map would simply be missing "d"
+// (or "a"/"b"/"c"), which already fails that test's key-count assertion for
+// an unrelated reason. Using the same key name in both stores here means a
+// merge bug instead returns the WRONG STORE'S VALUE for one of the two refs,
+// with the right number of keys - the specific failure mode a disjoint-key
+// test cannot distinguish from correct behavior.
+func TestResolveBatchSharedKeyNameAcrossStores(t *testing.T) {
+	f := newFake()
+	f.set(testStore, "shared", `"default-value"`)
+	f.set("ecfg_other", "shared", `"other-value"`)
+	p := f.provider()
+
+	refs := []mamori.Ref{
+		ref(t, "vercel-gc://shared"),
+		ref(t, "vercel-gc://ecfg_other/shared"),
+	}
+	got, err := p.ResolveBatch(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d values, want 2", len(got))
+	}
+	if s := string(got["vercel-gc://shared"].Bytes); s != "default-value" {
+		t.Errorf("default store's shared key: got %q, want %q", s, "default-value")
+	}
+	if s := string(got["vercel-gc://ecfg_other/shared"].Bytes); s != "other-value" {
+		t.Errorf("ecfg_other's shared key: got %q, want %q", s, "other-value")
+	}
+}

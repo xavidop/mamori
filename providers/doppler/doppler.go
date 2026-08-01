@@ -50,6 +50,18 @@ const defaultBaseURL = "https://api.doppler.com"
 // scheme is the URL scheme this provider handles.
 const scheme = "doppler"
 
+// errBodyLimit bounds how much of a non-200 response body Resolve reads for
+// diagnostics, so a hostile or broken upstream cannot put an unbounded
+// response into an error string. The 404 branch below reads nothing at all
+// rather than reading up to this bound and discarding it: the not-found
+// message is already the whole story, so there is no diagnostic worth
+// paying a read for. The 200 path explicitly drains any bytes its own
+// decode did not consume, within this same bound, so that path and the
+// error path share one connection-reuse discipline instead of two silently
+// different ones; see the decode call below for why that drain is
+// deliberate rather than a hedge against Decode misbehaving.
+const errBodyLimit = 4096
+
 // Provider resolves doppler:// refs against the Doppler REST API. It is safe for
 // concurrent use.
 type Provider struct {
@@ -162,7 +174,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, fmt.Errorf("mamori/doppler: secret %q not found in %s/%s: %w", name, project, config, mamori.ErrNotFound)
 	default:
 		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
 		statusErr := fmt.Errorf("mamori/doppler: unexpected status %d fetching secret %q: %s", resp.StatusCode, name, strings.TrimSpace(string(msg)))
 		return mamori.Value{}, classifyDopplerStatus(resp.StatusCode, statusErr)
 	}
@@ -171,6 +183,12 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
 		return mamori.Value{}, fmt.Errorf("mamori/doppler: decoding secret %q: %w", name, err)
 	}
+	// Decode consumes a well-formed single JSON value, so this is normally a
+	// no-op; draining explicitly, rather than relying on that, is what makes
+	// the 200 path's connection-reuse behavior a decision instead of an
+	// accident of Decode's internals, matching the bound this provider's
+	// error path already applies (see errBodyLimit).
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 
 	// Prefer the computed value (references resolved); fall back to raw.
 	val := sr.Value.Computed

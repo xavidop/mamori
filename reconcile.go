@@ -80,7 +80,11 @@ type options struct {
 	adminTLS  *tls.Config
 
 	// change/error callbacks are typed per T, stored as any and asserted by
-	// Watch[T]. onChange holds a func(Change[T]); onError holds a func(error).
+	// Watch[T]. onChange holds a func(Change[T]) and is asserted via the
+	// shared typedOnChange[T] helper (reconciler.go), the same shape and
+	// same loud-on-mismatch contract typedPreApply gives preApply above;
+	// onError holds a func(error) and needs no such assertion, since it is
+	// not generic in the first place.
 	onChange any
 	onError  func(error)
 }

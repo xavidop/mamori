@@ -3,7 +3,9 @@ package cloudflarekv
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -461,4 +463,65 @@ func TestResolveBatchMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
 		t.Fatal("want an error from a malformed base URL")
 	}
 	assertNoCredentialLeak(t, err)
+}
+
+// TestGetErrorBodyIsBounded pins errBodyLimit on get's single-key path: the
+// diagnostic read in its non-200, non-404 branch must never let a hostile or
+// broken upstream put an unbounded response into an error string. Every
+// other test in this file serves bodies far smaller than the bound, so none
+// of them would notice if io.LimitReader(resp.Body, errBodyLimit) were
+// replaced with resp.Body directly; this one sends a body far larger than
+// the bound with a distinctive trailing marker, so an unbounded read would
+// carry the marker straight into the returned error.
+func TestGetErrorBodyIsBounded(t *testing.T) {
+	const marker = "TAIL_MARKER_MUST_NOT_SURVIVE"
+	oversized := strings.Repeat("A", 20000) + marker
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer srv.Close()
+
+	p := New(WithAPIToken(testToken), WithAccountID(testAccount), WithNamespaceID(testNamespace), WithBaseURL(srv.URL))
+
+	_, err := p.Resolve(context.Background(), ref(t, "cloudflare-kv://k"))
+	if err == nil {
+		t.Fatal("want an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("error body was not bounded: the trailing marker reached the error text: %v", err)
+	}
+	if len(err.Error()) > 10000 {
+		t.Fatalf("error message is %d bytes long; the diagnostic read must be bounded well below the %d-byte oversized body", len(err.Error()), len(oversized))
+	}
+}
+
+// TestBulkGetErrorBodyIsBounded is TestGetErrorBodyIsBounded's counterpart
+// for bulkGet's own, separate errBodyLimit read: get and bulkGet each build
+// their own statusErr from their own LimitReader call, so a mutation
+// dropping the bound from one would not be caught by a test that only
+// exercises the other.
+func TestBulkGetErrorBodyIsBounded(t *testing.T) {
+	const marker = "TAIL_MARKER_MUST_NOT_SURVIVE"
+	oversized := strings.Repeat("A", 20000) + marker
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer srv.Close()
+
+	p := New(WithAPIToken(testToken), WithAccountID(testAccount), WithNamespaceID(testNamespace), WithBaseURL(srv.URL))
+
+	_, err := p.ResolveBatch(context.Background(), []mamori.Ref{ref(t, "cloudflare-kv://k")})
+	if err == nil {
+		t.Fatal("want an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("error body was not bounded: the trailing marker reached the error text: %v", err)
+	}
+	if len(err.Error()) > 10000 {
+		t.Fatalf("error message is %d bytes long; the diagnostic read must be bounded well below the %d-byte oversized body", len(err.Error()), len(oversized))
+	}
 }

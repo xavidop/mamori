@@ -31,3 +31,5 @@ site/.astro/
 *.screenshot.png
 
 cmd/mamori/mamori
+# Agent scratch: SDD ledgers, briefs, reports. Never part of a deliverable.
+.superpowers/

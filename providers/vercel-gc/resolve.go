@@ -12,6 +12,18 @@ import (
 	"github.com/xavidop/mamori"
 )
 
+// errBodyLimit bounds how much of a non-200 response body get reads, so a
+// hostile or broken upstream cannot put an unbounded response into an error
+// string. The 404 branch reads within this same bound and folds the result
+// into the returned not-found error (rather than building it and discarding
+// it, which is what this provider used to do), which doubles as the drain
+// that lets net/http reuse the connection - the same reason the other
+// branch below reads a bounded amount rather than none at all. The 200 path
+// needs no matching drain step: it already reads the whole body via
+// io.ReadAll, so the connection is already fully consumed by the time this
+// function returns.
+const errBodyLimit = 4096
+
 // Resolve fetches the value for ref.
 //
 // Every call requests the store digest, which Vercel replaces on any edit, and
@@ -167,13 +179,21 @@ func (p *Provider) get(ctx context.Context, c connection, store, endpoint string
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		statusErr := fmt.Errorf("mamori/vercel-gc: unexpected status %d from %s of store %s: %s",
-			resp.StatusCode, endpoint, store, strings.TrimSpace(string(msg)))
+		// Read a bounded amount of the error body for diagnostics (and, on the
+		// 404 branch below, fold it into the returned error instead of
+		// discarding it: this is the one place a store-not-found body such as
+		// "edge_config_not_found" would tell a caller what actually went
+		// wrong). Never log it.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
+		trimmed := strings.TrimSpace(string(msg))
 		if resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("mamori/vercel-gc: store %s not found: %w", store, mamori.ErrNotFound)
+			if trimmed == "" {
+				return nil, fmt.Errorf("mamori/vercel-gc: store %s not found: %w", store, mamori.ErrNotFound)
+			}
+			return nil, fmt.Errorf("mamori/vercel-gc: store %s not found: %w: %s", store, mamori.ErrNotFound, trimmed)
 		}
+		statusErr := fmt.Errorf("mamori/vercel-gc: unexpected status %d from %s of store %s: %s",
+			resp.StatusCode, endpoint, store, trimmed)
 		return nil, classifyStatus(resp.StatusCode, statusErr)
 	}
 	return io.ReadAll(resp.Body)

@@ -40,6 +40,8 @@ Causes:
 
 Diagnostics: `WithDebounce(d)` and `WithQueueDepth(n)` tune the two knobs above; see the [Options reference](/docs/usage/options/) for both. `Meter.RecordChangeDropped()` exists precisely so a dropped event is alertable rather than invisible: wire up a `Meter` and watch that counter.
 
+**If `OnChange` never fires even once, check the type parameter before anything above.** `OnChange[T]` has to match the `T` you passed to `Watch[T]`/`Load[T]` exactly - a type alias, a config struct renamed in a refactor, or a generic helper that passes `T` through are the easiest ways to get this wrong. `Watch`/`Load` now catches the mismatch and returns an error wrapping `ErrInvalid` that names both types, so check the error `Watch`/`Load` returned before assuming the callback is merely slow to fire. This is the one cause in this list you cannot diagnose from `Status`, `Meter`, or a log line, because with a mismatched type there is no watcher at all: `Watch` never returned one.
+
 This is the symptom worth taking seriously, because a dropped change is silent by default. mamori ships with a no-op meter and a logger that discards everything until you configure one, so with no `Meter` and no `WithLogger` installed, a dropped `OnChange` event produces neither a metric nor a log line. Install a `WithLogger`, and the same drop is logged at warning level instead. If your handler occasionally does slow I/O, install a `Meter` before you need it, not after you notice a field looks stuck.
 
 ## My update was rejected and Get() still returns the old config
