@@ -17,7 +17,7 @@ const features = [
   {
     k: "02",
     t: "Runtime reconciliation",
-    d: "Native watch where the backend supports it - Kubernetes informers, Consul blocking queries, fsnotify - polling with jitter everywhere else, and lease-aware refresh for Vault.",
+    d: "Native watch where the backend supports it - Kubernetes informers, Consul blocking queries, fsnotify - polling with jitter everywhere else, and lease-aware refresh for Vault. Values you assemble yourself keep up too: WithDerive rebuilds a DSN from its parts on every update, so a rotated password never leaves a stale connection string behind.",
   },
   {
     k: "03",
