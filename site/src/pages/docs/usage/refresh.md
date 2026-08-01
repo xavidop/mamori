@@ -35,12 +35,12 @@ for range sighup {
 
 ```mermaid
 flowchart TD
-  R["w.Refresh(ctx)"] --> Q{"Called from inside your own<br/>PreApply hook or OnError callback?"}
+  R["w.Refresh(ctx)"] --> Q{"Called from inside your own<br/>PreApply hook, WithDerive hook,<br/>or OnError callback?"}
   Q -->|yes| RE["ErrReentrantCall<br/>nothing re-resolved"]
   Q -->|no| W["Re-resolve every field"]
   W --> C{"Anything changed?"}
   C -->|no| NIL["nil - Get() was already current"]
-  C -->|yes| G{"Validation and PreApply"}
+  C -->|yes| G{"Derive, validation, and PreApply"}
   G -->|accepted| OK["nil - snapshot applied"]
   G -->|rejected| REJ["The rejection reason<br/>Get() keeps the previous config"]
   W --> X{"You cancelled ctx<br/>while waiting?"}

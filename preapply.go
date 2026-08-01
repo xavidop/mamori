@@ -178,11 +178,12 @@ func runPreApply[T any](parent context.Context, hook func(context.Context, Chang
 // mark is set, sendPinCtx (pin.go) refuses a control-channel command issued from
 // that same goroutine, which is the only caller that can never be answered.
 //
-// Two callbacks need this, and they are exactly the two that run there:
-// runPreApply's hook, and emitErr's OnError (reconciler.go). OnChange does not,
-// and must not have it - it runs on the dispatch goroutine, which receives from
-// a queue rather than occupying the reconciler, so a Pin or Refresh from inside
-// OnChange is an ordinary caller waiting its ordinary turn.
+// Three callbacks need this, and they are exactly the three that run there:
+// runPreApply's hook, buildCandidate's derive loop, and emitErr's OnError
+// (both in reconciler.go). OnChange does not, and must not have it - it runs
+// on the dispatch goroutine, which receives from a queue rather than
+// occupying the reconciler, so a Pin or Refresh from inside OnChange is an
+// ordinary caller waiting its ordinary turn.
 //
 // It restores the PREVIOUS value rather than storing 0, which is what makes it
 // safe to arm in more than one place. emitErr is reachable from inside flush's

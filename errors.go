@@ -29,16 +29,16 @@ var errWatcherClosed = errors.New("mamori: watcher closed")
 // ErrReentrantCall reports a control-channel command issued from the goroutine
 // that is currently running one of the watcher's own callbacks.
 //
-// Two callbacks run ON the reconciler goroutine, inline: a PreApply hook, and an
-// OnError callback (OnChange does not - it is delivered from the dispatch queue,
-// on its own goroutine, and is unaffected by any of this). Pin, PinCurrent,
-// Unpin and Refresh are commands SERVICED by the reconciler goroutine. Calling
-// one from inside either callback asks that goroutine to answer a message it
-// cannot reach until the callback it is running returns: before this was
-// detected, it blocked until Close, with no reconciliation, no OnChange and no
-// further OnError in the meantime. This sentinel converts that permanent, silent
-// wedge into an immediate, diagnosable refusal that leaves pin state, and the
-// configuration, untouched.
+// Three callbacks run ON the reconciler goroutine, inline: a PreApply hook, a
+// WithDerive hook, and an OnError callback (OnChange does not - it is delivered
+// from the dispatch queue, on its own goroutine, and is unaffected by any of
+// this). Pin, PinCurrent, Unpin and Refresh are commands SERVICED by the
+// reconciler goroutine. Calling one from inside any of the three asks that
+// goroutine to answer a message it cannot reach until the callback it is
+// running returns: before this was detected, it blocked until Close, with no
+// reconciliation, no OnChange and no further OnError in the meantime. This
+// sentinel converts that permanent, silent wedge into an immediate,
+// diagnosable refusal that leaves pin state, and the configuration, untouched.
 //
 // Three of the four commands take no context at all, so they had no way out to
 // begin with. Refresh does take one, and is refused just the same: a context
@@ -67,7 +67,7 @@ var errWatcherClosed = errors.New("mamori: watcher closed")
 // (pin.go). A future callback this package runs inline on that goroutine: arm
 // armReentrancy (preapply.go) around it, as emitErr does. Either one left out
 // is a wedge that this sentinel's own wording promises does not exist.
-var ErrReentrantCall = errors.New("mamori: Pin, PinCurrent, Unpin and Refresh cannot be called from the goroutine running a PreApply hook or an OnError callback, which occupies the reconciler goroutine that services them; Get is safe there, but these must be called from another goroutine")
+var ErrReentrantCall = errors.New("mamori: Pin, PinCurrent, Unpin and Refresh cannot be called from the goroutine running a PreApply hook, a WithDerive hook, or an OnError callback, which occupies the reconciler goroutine that services them; Get is safe there, but these must be called from another goroutine")
 
 // Kind is a coarse, provider-independent classification of a resolve failure.
 // It exists so diagnostics can distinguish conditions that need human action

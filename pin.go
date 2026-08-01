@@ -70,10 +70,11 @@ type pinReply struct {
 //
 // There is one way to block on control forever that ctx.Done cannot rescue, and
 // the guard below is it: one of the watcher's own inline callbacks calling back
-// into that watcher. Two of them run ON the reconciler goroutine - a PreApply
-// hook (see preapply.go) and an OnError callback (emitErr, reconciler.go) - so
-// while either runs there is no receiver for control at all, and the caller
-// waiting for one IS the goroutine that would have to become that receiver.
+// into that watcher. Three of them run ON the reconciler goroutine - a PreApply
+// hook (see preapply.go), a WithDerive hook (buildCandidate, reconciler.go) and
+// an OnError callback (emitErr, reconciler.go) - so while any of them runs
+// there is no receiver for control at all, and the caller waiting for one IS
+// the goroutine that would have to become that receiver.
 // Nothing short of Close ever resolves it, and until then the watcher does not
 // reconcile, does not deliver OnChange and does not report an error - a silent,
 // permanent wedge. So this refuses the command instead, and w.inCallback is what
@@ -86,9 +87,9 @@ type pinReply struct {
 // goroutine, so a command issued from it is an ordinary command.
 //
 // The check is one atomic load on the path that matters: inCallback is zero
-// whenever no such callback is running, which for a watcher with neither a
-// PreApply gate nor an OnError callback is always, and the goroutine-ID lookup
-// is reached only when a pin command truly overlaps one.
+// whenever no such callback is running, which for a watcher with no PreApply
+// gate, no derive hook, and no OnError callback is always, and the
+// goroutine-ID lookup is reached only when a pin command truly overlaps one.
 //
 // Pin, PinCurrent and Unpin take no context, so this is the whole of their
 // delivery. Refresh does take one, and goes through sendPinCtx below rather
@@ -125,13 +126,14 @@ func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
 // racing Close closely enough that the drain below finds nothing, and
 // errWatcherClosed is already the documented answer for a pin that raced Close.
 // The refresh case is the one that needs the branch to exist at all. It runs
-// providers, emitErr and the PreApply hook on the reconciler goroutine, inside
-// handlePin, so "the handler never returns" became reachable for the first time
-// - a hook (or an OnError callback) calling t.Fatal, or anything else reaching
-// runtime.Goexit, kills the reconciler goroutine mid-handler with the reply
-// unsent. Without this branch the caller then outlives Close: the watcher shuts
-// down cleanly, Close returns, and Refresh is still parked on a channel nobody
-// will ever write to. See TestRefreshOutlivesAReconcilerThatDiesMidHandler.
+// providers, emitErr, the PreApply hook and any derive hooks on the reconciler
+// goroutine, inside handlePin, so "the handler never returns" became reachable
+// for the first time - a hook (or an OnError callback) calling t.Fatal, or
+// anything else reaching runtime.Goexit, kills the reconciler goroutine
+// mid-handler with the reply unsent. Without this branch the caller then
+// outlives Close: the watcher shuts down cleanly, Close returns, and Refresh
+// is still parked on a channel nobody will ever write to. See
+// TestRefreshOutlivesAReconcilerThatDiesMidHandler.
 //
 // The drain is what keeps that branch from lying. cmd.reply and w.ctx.Done()
 // can both be ready at once - a refresh that completed in the same instant Close
@@ -174,8 +176,9 @@ func (w *Watcher[T]) sendPinCtx(ctx context.Context, cmd pinCmd) pinReply {
 // pin further back.
 //
 // It returns ErrReentrantCall, immediately and without pinning anything, when
-// called from inside a PreApply hook or an OnError callback: either one occupies
-// the goroutine that would service this command. Call it from another goroutine.
+// called from inside a PreApply hook, a WithDerive hook, or an OnError
+// callback: any of the three occupies the goroutine that would service this
+// command. Call it from another goroutine.
 func (w *Watcher[T]) Pin(version uint64) error {
 	return w.sendPin(pinCmd{kind: pinAt, version: version}).err
 }
@@ -186,10 +189,10 @@ func (w *Watcher[T]) Pin(version uint64) error {
 // one up in it.
 //
 // It returns 0, pinning nothing, in the two cases where it cannot succeed: the
-// watcher is closed, or it was called from inside a PreApply hook or an OnError
-// callback (see ErrReentrantCall - the signature has no room for one, and
-// widening it would break every caller). Zero is unambiguous rather than a
-// convenient lie:
+// watcher is closed, or it was called from inside a PreApply hook, a
+// WithDerive hook, or an OnError callback (see ErrReentrantCall - the
+// signature has no room for one, and widening it would break every caller).
+// Zero is unambiguous rather than a convenient lie:
 // versions start at 1, so it can never collide with a version this really
 // pinned, which is the same disambiguation Pinned relies on. Callers that need
 // to distinguish the two causes, or to be sure at all, can check Pinned.
@@ -203,12 +206,12 @@ func (w *Watcher[T]) PinCurrent() uint64 {
 // many updates were reconciled (and recorded to history) in the meantime. It
 // is a no-op if the watcher is not currently pinned.
 //
-// It is also a no-op when called from inside a PreApply hook or an OnError
-// callback (see ErrReentrantCall): it returns immediately and leaves the pin
-// exactly as it found it, so the watcher stays pinned and Pinned still says so.
-// It reports
-// nothing, because it has nothing to report it with. Giving it an error return
-// would be an incompatible change to a released API - it breaks every func()
+// It is also a no-op when called from inside a PreApply hook, a WithDerive
+// hook, or an OnError callback (see ErrReentrantCall): it returns immediately
+// and leaves the pin exactly as it found it, so the watcher stays pinned and
+// Pinned still says so. It reports nothing, because it has nothing to report
+// it with. Giving it an error return would be an incompatible change to a
+// released API - it breaks every func()
 // this method value is assigned to, t.Cleanup(w.Unpin) among them, and turns
 // every existing call site into an unchecked-error lint finding - which is too
 // much to charge every correct caller for a signal only an incorrect one can

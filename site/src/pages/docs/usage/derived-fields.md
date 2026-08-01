@@ -73,6 +73,45 @@ Rejecting rather than continuing is deliberate: a configuration whose derived fi
 
 A hook whose type parameter does not match `Watch[T]`'s fails `Watch` or `Load` outright, with an error wrapping `ErrInvalid` that names both types, the same way a mismatched `PreApply` does. This is deliberately unlike `OnChange`, which silently discards a mismatched callback and simply never calls it: a `WithDerive` hook installed for the wrong type is a caller bug, and left running as a silent no-op it would look exactly like "my derived field is empty and nothing told me why."
 
+## Do not call back into the same Watcher
+
+A derive hook runs on the reconciler goroutine - the same goroutine that
+services `Pin`, `PinCurrent`, `Unpin`, and `Refresh`. Calling any of those from
+inside the hook asks that goroutine to answer a command while it is busy being
+your hook, which would otherwise hang the watcher until `Close`. This is the
+identical hazard `PreApply` has (see [Rotation safety](/docs/usage/rotation/)),
+and it applies to `WithDerive` for the same reason: mamori refuses the call
+rather than hanging.
+
+| Called from inside a `WithDerive` hook | Result |
+| --- | --- |
+| `Get()` | Works. The supported way to read from a derive hook. |
+| `Pin(v)` | `ErrReentrantCall`. Nothing is pinned. |
+| `PinCurrent()` | Returns `0`, which never collides with a real version. Nothing is pinned. |
+| `Unpin()` | Does nothing. It has no error to return. |
+| `Refresh(ctx)` | `ErrReentrantCall`. Nothing is re-resolved. |
+
+It is worse here than for `PreApply`: a derive hook takes no
+`context.Context` at all (see above), so there is no deadline to escape on
+either - `PreApply` at least bounds the hang with `WithPreApplyTimeout` before
+this detection existed; a derive never had that fallback.
+
+```go
+mamori.WithDerive(func(c *Config) error {
+	c.DSN = assembleDSN(c)
+	// Wrong: asks the reconciler goroutine to service a command while it is
+	// busy running this very hook. Refused with ErrReentrantCall rather than
+	// hanging, but still a bug: refresh from another goroutine instead, or
+	// let the next reconciliation carry the change.
+	// _ = w.Refresh(context.Background())
+	return nil
+}),
+```
+
+A `Pin` from an unrelated goroutine that merely overlaps a running derive hook
+is unaffected: it waits and is serviced normally, exactly as it is for
+`PreApply`.
+
 ## What mamori cannot see
 
 A derive is opaque Go, not a declaration mamori can inspect, and that costs three things.

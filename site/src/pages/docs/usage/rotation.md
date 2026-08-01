@@ -103,17 +103,17 @@ swap. `Pin`, `PinCurrent`, `Unpin`, and `Refresh` are commands serviced by that
 same goroutine, so calling one from inside the hook asks it to answer while it
 is busy being your hook.
 
-**This applies to `OnError` too, and that is the one people hit**, because
-"the reload was rejected, retry it" is a natural thing to write there. mamori
-refuses the call rather than hanging:
+**This applies to `OnError` and `WithDerive` too, and `OnError` is the one
+people hit most often**, because "the reload was rejected, retry it" is a
+natural thing to write there. mamori refuses the call rather than hanging:
 
-| Called from inside `PreApply` or `OnError` | Result |
+| Called from inside `PreApply`, `WithDerive`, or `OnError` | Result |
 | --- | --- |
-| `Get()` | Works. The supported way to read from either. |
+| `Get()` | Works. The supported way to read from any of them. |
 | `Pin(v)` | `ErrReentrantCall`. Nothing is pinned. |
 | `PinCurrent()` | Returns `0`, which never collides with a real version. Nothing is pinned. |
 | `Unpin()` | Does nothing. It has no error to return. |
-| `Refresh(ctx)` | `ErrReentrantCall`. Nothing is re-resolved, whatever `ctx` you pass. |
+| `Refresh(ctx)` | `ErrReentrantCall`. Nothing is re-resolved, whatever `ctx` you pass. A `WithDerive` hook has no `ctx` argument at all, so it never had that escape to begin with. |
 
 `OnChange` is the exception and is safe: it runs on its own goroutine, so all
 of these work normally from there.

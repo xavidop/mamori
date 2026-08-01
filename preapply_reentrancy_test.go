@@ -545,6 +545,181 @@ func TestPinFromAnotherGoroutineDuringOnErrorIsUnaffected(t *testing.T) {
 	}
 }
 
+// TestDeriveRefreshFailsFast covers the THIRD callback this package runs
+// inline on the reconciler goroutine: a WithDerive hook, invoked from
+// buildCandidate in exactly the position a PreApply hook and an OnError
+// callback run. A derive hook that calls back into its own Watcher hits the
+// identical wedge - waiting for a receiver on w.control that cannot exist
+// until the hook returns - and it is worse here than for PreApply: a derive
+// takes no context.Context at all, so there is no timeout to escape on
+// either.
+func TestDeriveRefreshFailsFast(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rp10://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("rp10")
+	p.set("a", "first", "v1")
+
+	// self is how the hook reaches the Watcher that is running it. It has to
+	// tolerate nil because a derive hook also runs on the INITIAL load
+	// (loadValue, reconcile.go), on the caller's own goroutine, before Watch has
+	// returned anything to store here.
+	var self atomic.Pointer[Watcher[cfg]]
+	var once atomic.Bool
+	refreshErr := make(chan error, 1)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		WithDerive(func(c *cfg) error {
+			w := self.Load()
+			if w == nil || c.A != "second" || !once.CompareAndSwap(false, true) {
+				return nil
+			}
+			refreshErr <- w.Refresh(context.Background())
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	self.Store(w)
+
+	p.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	select {
+	case err := <-refreshErr:
+		if !errors.Is(err, ErrReentrantCall) {
+			t.Fatalf("Refresh from inside a derive hook returned %v, want ErrReentrantCall", err)
+		}
+	case <-time.After(reentrancyBudget):
+		t.Fatal("Refresh from inside a derive hook did not return: the watcher is wedged, which is the bug this detection exists to convert into an error")
+	}
+
+	// The refusal must be local to the offending call. The hook returned nil,
+	// so the candidate is good and the watcher has to carry on applying it.
+	waitFlushed(t, w, 2)
+	if got := w.Get().A; got != "second" {
+		t.Errorf("Get().A = %q, want second: a refused reentrant call must not disturb the flush that was already in flight", got)
+	}
+}
+
+// TestDerivePinFailsFast is the same hazard through Pin, mirroring
+// TestPreApplyPinFromHookFailsFast for the derive hook.
+func TestDerivePinFailsFast(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rp11://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("rp11")
+	p.set("a", "first", "v1")
+
+	var self atomic.Pointer[Watcher[cfg]]
+	var once atomic.Bool
+	pinErr := make(chan error, 1)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		WithDerive(func(c *cfg) error {
+			w := self.Load()
+			if w == nil || c.A != "second" || !once.CompareAndSwap(false, true) {
+				return nil
+			}
+			pinErr <- w.Pin(1)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	self.Store(w)
+
+	p.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	select {
+	case err := <-pinErr:
+		if !errors.Is(err, ErrReentrantCall) {
+			t.Fatalf("Pin from inside a derive hook returned %v, want ErrReentrantCall", err)
+		}
+	case <-time.After(reentrancyBudget):
+		t.Fatal("Pin from inside a derive hook did not return: the watcher is wedged")
+	}
+
+	waitFlushed(t, w, 2)
+	if got := w.Get().A; got != "second" {
+		t.Errorf("Get().A = %q, want second: a refused reentrant call must not disturb the flush that was already in flight", got)
+	}
+}
+
+// TestDeriveUnpinIsAnObservableNoOp covers Unpin, which cannot carry the error
+// (see TestPreApplyUnpinFromHookIsAnObservableNoOp for why): it returns
+// immediately and leaves the pin exactly as it found it.
+func TestDeriveUnpinIsAnObservableNoOp(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	type cfg struct {
+		A string `source:"rp12://a"`
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newWatchProvider("rp12")
+	p.set("a", "first", "v1")
+
+	var self atomic.Pointer[Watcher[cfg]]
+	var once atomic.Bool
+	returned := make(chan struct{}, 1)
+
+	w, err := Watch[cfg](context.Background(),
+		WithProvider(p), WithClock(clk),
+		WithDerive(func(c *cfg) error {
+			w := self.Load()
+			if w == nil || c.A != "second" || !once.CompareAndSwap(false, true) {
+				return nil
+			}
+			w.Unpin()
+			returned <- struct{}{}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	self.Store(w)
+
+	// Pin from here, where it is legal, so the hook's Unpin has a real pin to
+	// fail to release.
+	if v := w.PinCurrent(); v != 1 {
+		t.Fatalf("PinCurrent from the test goroutine returned %d, want 1", v)
+	}
+
+	p.push("a", "second", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+
+	select {
+	case <-returned:
+	case <-time.After(reentrancyBudget):
+		t.Fatal("Unpin from inside a derive hook did not return: the watcher is wedged")
+	}
+
+	if v, pinned := w.Pinned(); !pinned || v != 1 {
+		t.Errorf("Pinned() = (%d, %v) after a refused Unpin, want (1, true): a refused Unpin must leave the pin exactly as it was", v, pinned)
+	}
+	if got := w.Get().A; got != "first" {
+		t.Errorf("Get().A = %q, want first: a refused Unpin must not release the pin", got)
+	}
+}
+
 // TestArmReentrancyNests pins the shape that makes arming safe in two places at
 // once: restore the PREVIOUS value, never store 0.
 //

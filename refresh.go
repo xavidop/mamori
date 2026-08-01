@@ -7,9 +7,9 @@ import "context"
 // rejected.
 //
 // It returns nil when a snapshot was applied and when nothing changed, and the
-// rejection reason when the candidate failed validation or a PreApply gate. A
-// SIGHUP handler therefore learns whether the reload actually worked, which is
-// the whole reason this blocks rather than queueing:
+// rejection reason when the candidate failed a derive hook, validation, or a
+// PreApply gate. A SIGHUP handler therefore learns whether the reload actually
+// worked, which is the whole reason this blocks rather than queueing:
 //
 //	for range sighup {
 //	    switch err := w.Refresh(ctx); {
@@ -39,15 +39,17 @@ import "context"
 // Close for the same reason they do (see sendPin in pin.go).
 //
 // It returns ErrReentrantCall, having re-resolved nothing, when called from
-// inside a PreApply hook or an OnError callback: both run ON the goroutine which
-// would have to service this command, so the call would be waiting for itself.
-// Taking a context does not make that survivable - a callback calling
-// Refresh(context.Background()), the obvious thing to write, would block until
-// Close - so this is refused up front exactly as Pin is, rather than left to a
-// deadline the caller may not have set. OnError is the one to watch for: "the
-// reload was rejected, retry it" is a natural thing to write there, and this is
-// what it gets instead. OnChange is unaffected; it runs on the dispatch
-// goroutine, so a Refresh from it is an ordinary call.
+// inside a PreApply hook, a WithDerive hook, or an OnError callback: all three
+// run ON the goroutine which would have to service this command, so the call
+// would be waiting for itself. Taking a context does not make that survivable
+// - a callback calling Refresh(context.Background()), the obvious thing to
+// write, would block until Close - so this is refused up front exactly as Pin
+// is, rather than left to a deadline the caller may not have set. A derive
+// hook has no context at all, so it never had that escape to begin with.
+// OnError is the one to watch for: "the reload was rejected, retry it" is a
+// natural thing to write there, and this is what it gets instead. OnChange is
+// unaffected; it runs on the dispatch goroutine, so a Refresh from it is an
+// ordinary call.
 //
 // ctx bounds the wait, not the work. Cancelling it returns ctx.Err() and stops
 // this call from waiting; it does not recall a command already handed to the

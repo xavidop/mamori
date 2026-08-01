@@ -1101,15 +1101,37 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 	}
 	// Same position as the Load path: after decode, before validation, before
 	// the PreApply gate. See WithDerive.
-	for _, d := range e.derives {
-		if err := d(&cand); err != nil {
-			de := &DeriveError{Err: err}
-			e.o.meter.RecordApplyRejected(RejectDerive)
-			e.o.log().Error("candidate rejected by a derive hook; continuing to serve the previous config",
-				errAttrs(err)...)
-			e.emitErr(de)
-			return cand, nil, de
+	//
+	// A derive hook runs INLINE on the reconciler goroutine, the same position
+	// runPreApply's PreApply hook and emitErr's OnError callback occupy, so it
+	// needs the identical reentrancy guard: Refresh, Pin, PinCurrent or Unpin
+	// called from inside one would ask this very goroutine to service a command
+	// it cannot receive until the hook returns, which otherwise wedges until
+	// Close (see armReentrancy, preapply.go, and ErrReentrantCall). Unlike
+	// PreApply, a derive hook takes no context.Context at all, so there is no
+	// timeout to escape on either.
+	//
+	// Guarded on len(e.derives) > 0 so the goroutineID lookup (a runtime.Stack
+	// walk) is never paid by a watcher configured with no derive hooks, the same
+	// condition that already keeps runPreApply and emitErr free for a watcher
+	// with no PreApply hook or no OnError callback. Armed only around the loop
+	// itself, disarmed immediately after (on both the success and the failure
+	// path) rather than left set through validation below, so the mark's
+	// lifetime matches exactly the code it exists to guard.
+	if len(e.derives) > 0 {
+		disarm := armReentrancy(&e.w.inCallback)
+		for _, d := range e.derives {
+			if err := d(&cand); err != nil {
+				de := &DeriveError{Err: err}
+				e.o.meter.RecordApplyRejected(RejectDerive)
+				e.o.log().Error("candidate rejected by a derive hook; continuing to serve the previous config",
+					errAttrs(err)...)
+				disarm()
+				e.emitErr(de)
+				return cand, nil, de
+			}
 		}
+		disarm()
 	}
 	if err := e.o.validator.Validate(cand); err != nil {
 		ve := &ValidationError{Err: err}
