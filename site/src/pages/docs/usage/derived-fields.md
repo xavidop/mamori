@@ -117,10 +117,11 @@ mamori.WithDerive(func(c *Config) error {
 
 ## What mamori still cannot see
 
-A hook that writes a field it did not declare in `writes` behaves exactly as it did before declaring existed: mamori cannot inspect the hook's body, so an undeclared write is invisible to `ev.Changed()` and `Status()`, and mamori has no way to detect that it happened at all.
+A hook that writes a field it did not declare in `writes` behaves exactly as it did before declaring existed: mamori cannot inspect the hook's body, so an undeclared write is invisible to `ev.Changed()` and `Status()`, and mamori has no way to detect that it happened at all. Declaring a write does not extend to `mamori explain`, `schema`, or `diff` either way: all three read `source` struct tags statically, a derive has none, and `DSN` appears in none of their output no matter how many fields feed into it. Nor does declaring a write let mamori flag a field carrying both a `source` tag and a derive assignment as a conflict: the derive runs after decoding and its assignment simply wins, with nothing to detect or warn about the overlap.
 
 ## See also
 
 - [Rotation safety](/docs/usage/rotation/) - `WithDerive` and `PreApply` together, so a rebuilt value is also a proven one.
 - [Options reference](/docs/usage/options/) - `WithDerive` alongside every other option and its default.
 - [Watch for changes](/docs/usage/watching/) - `Change`, `Changed`, and `OnChange` in full.
+- [Observability](/docs/observability/) - `Status()` and the `Report`/`FieldStatus` shape a declared derived field joins.
