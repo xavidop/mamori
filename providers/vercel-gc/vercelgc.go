@@ -144,11 +144,7 @@ func (p *Provider) connection() (connection, error) {
 		return p.applyBaseURL(parseConnectionString(p.connStr))
 	}
 	if p.storeID != "" || p.token != "" {
-		host := defaultHost
-		if p.baseURL != "" {
-			host = p.baseURL
-		}
-		return connection{host: host, storeID: p.storeID, token: p.token}, nil
+		return p.applyBaseURL(connection{host: defaultHost, storeID: p.storeID, token: p.token}, nil)
 	}
 	if s := os.Getenv("GLOBAL_CONFIG"); s != "" {
 		return p.applyBaseURL(parseConnectionString(s))

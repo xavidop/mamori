@@ -32,10 +32,10 @@ go get github.com/xavidop/mamori
 `env:` and `file://` work out of the box. Cloud providers are separate modules so the core has **zero cloud-SDK dependencies**:
 
 ```bash
-go get github.com/xavidop/mamori/providers/aws     # aws-sm://  aws-ps://  aws-appconfig://
-go get github.com/xavidop/mamori/providers/vault   # vault://
-go get github.com/xavidop/mamori/providers/k8s     # k8s-secret://  k8s-cm://
-go get github.com/xavidop/mamori/providers/vercel-gc  # vercel-gc://
+go get github.com/xavidop/mamori/providers/aws            # aws-sm://  aws-ps://  aws-appconfig://
+go get github.com/xavidop/mamori/providers/vault          # vault://
+go get github.com/xavidop/mamori/providers/k8s            # k8s-secret://  k8s-cm://
+go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
 # ... gcp, azure, consul, doppler, onepassword, sops

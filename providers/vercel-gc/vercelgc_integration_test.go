@@ -1,6 +1,20 @@
 //go:build integration
 
-package vercelgc_test
+// Package vercelgc live integration test hits the real Vercel Global Config
+// read API and is excluded from the default build. Run it explicitly against
+// a store that already has the referenced key written to it:
+//
+//	export GLOBAL_CONFIG='https://global-config.vercel.com/ecfg_xxx?token=yyy'
+//	export VERCEL_GC_TEST_KEY=my-existing-key
+//	GOWORK=off go test -tags integration -run Integration ./...
+//
+// Both GLOBAL_CONFIG (or EDGE_CONFIG) and VERCEL_GC_TEST_KEY are required;
+// the test skips if either is unset. It is also the check on the one part of
+// the read API whose response shape Vercel documents only as "JSON": the
+// digest endpoint. parseDigest accepts both a bare string and an object with
+// a digest field, and this test is what proves which one production
+// actually returns.
+package vercelgc
 
 import (
 	"context"
@@ -8,21 +22,11 @@ import (
 	"testing"
 
 	"github.com/xavidop/mamori"
-	vercelgc "github.com/xavidop/mamori/providers/vercel-gc"
 )
 
 // TestIntegrationResolve exercises a real Vercel Global Config store. It is
 // guarded by a build tag and skips unless GLOBAL_CONFIG (or EDGE_CONFIG) and
 // VERCEL_GC_TEST_KEY name an existing store and key.
-//
-// It is also the check on the one part of the read API whose response shape
-// Vercel documents only as "JSON": the digest endpoint. parseDigest accepts
-// both a bare string and an object with a digest field, and this test is what
-// proves which one production actually returns.
-//
-//	export GLOBAL_CONFIG='https://global-config.vercel.com/ecfg_xxx?token=yyy'
-//	export VERCEL_GC_TEST_KEY=my-existing-key
-//	GOWORK=off go test -tags integration -run Integration ./...
 func TestIntegrationResolve(t *testing.T) {
 	if os.Getenv("GLOBAL_CONFIG") == "" && os.Getenv("EDGE_CONFIG") == "" {
 		t.Skip("set GLOBAL_CONFIG or EDGE_CONFIG to run the integration test")
@@ -32,7 +36,7 @@ func TestIntegrationResolve(t *testing.T) {
 		t.Skip("set VERCEL_GC_TEST_KEY to an existing Global Config key")
 	}
 
-	p := vercelgc.New()
+	p := New()
 	ref, err := mamori.ParseRef("vercel-gc://" + key)
 	if err != nil {
 		t.Fatalf("parsing ref: %v", err)
