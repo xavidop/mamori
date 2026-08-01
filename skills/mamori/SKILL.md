@@ -100,6 +100,8 @@ defer w.Close()
 cfg := w.Get() // latest fully-valid snapshot, safe to call anytime
 ```
 
+`OnChange[T]` must be typed to the same `T` passed to `Watch[T]`/`Load[T]`. If it is not - a type alias, a config struct renamed in a refactor, a generic helper passing the wrong type through - `Watch`/`Load` fails outright with an error wrapping `ErrInvalid` naming both types, rather than compiling clean and then silently never calling the callback.
+
 ## Verify a rotated credential before it goes live
 
 `OnChange` fires after `Get()` already serves the new value - too late to refuse a credential that turns out not to work. `mamori.PreApply` installs a gate that runs after validation and before the atomic swap; returning an error rejects the candidate (`Get()` keeps the last good config, `OnChange` does not fire, `OnError` gets a `*PreApplyError`) and the check runs on the initial load too, so a bad configured credential fails `Watch`/`Load` at startup rather than at the first rotation.
