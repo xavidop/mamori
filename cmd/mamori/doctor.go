@@ -133,10 +133,14 @@ func writeDoctorJSON(stdout io.Writer, res fetchResult) {
 // and `status` render an identical table for the same report.
 //
 // A Derived row (WithDerive declared it as a write path; see
-// mamori.FieldStatus.Derived) always renders SCHEME, REF, and VERSION blank:
-// it has no ref, so there is nothing there to show. The DERIVED column is
-// what tells a reader that is expected - a field mamori maintains but never
-// resolved from anywhere - rather than a row that looks like a
+// mamori.FieldStatus.Derived) always renders SCHEME and REF blank: it has no
+// ref, so there is nothing there to show. VERSION carries a content hash of
+// the computed value (see mamori.FieldStatus.Version, derivedVersion in
+// derivedversion.go); a blank VERSION on a derived row means the value was
+// never evaluated - a Doctor probe whose source field was unreachable, or
+// whose hook itself failed (LAST_KIND then reads invalid). The DERIVED
+// column is what tells a reader that is expected - a field mamori maintains
+// but never resolved from anywhere - rather than a row that looks like a
 // misconfigured or half-broken source field.
 func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)

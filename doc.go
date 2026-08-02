@@ -73,11 +73,10 @@
 // stale the moment just one of its inputs rotates. Declare which fields the
 // hook writes ("DSN") and that field joins [Change.Changed] the same way any
 // other field does, reported changed exactly when its rebuilt value differs
-// from before, and joins [Watcher.Status] too, though there only as a
-// Path-only entry - no ref, scheme, or version, since a derived field has none
-// of those to report; leave writes undeclared and mamori has no way to know it
-// exists, so it stays invisible to both, exactly as before this option could
-// name its own output.
+// from before, and joins [Watcher.Status] too, as an entry with a
+// content-hash version but no ref or scheme; leave writes undeclared and
+// mamori has no way to know it exists, so it stays invisible to both, exactly
+// as before this option could name its own output.
 //
 // [Watcher.Refresh] forces an immediate re-resolve of every field, bypassing
 // poll intervals, and blocks until the resulting snapshot has been applied or
