@@ -207,8 +207,22 @@ func fieldByName(st *types.Struct, name string) (types.Type, bool) {
 // calls naming the same path cannot produce two rows either.
 func derivedFields(pkg *types.Package, st *types.Struct, paths []string, walked []Field) []Field {
 	seen := make(map[string]struct{}, len(walked))
-	for _, f := range walked {
+	byPath := make(map[string]int, len(walked))
+	for i, f := range walked {
 		seen[f.Path] = struct{}{}
+		byPath[f.Path] = i
+	}
+
+	// A declared path that walkFields already emitted as validate-only is
+	// promoted in place to KindDerived, keeping every tag it carries. Leaving
+	// it KindValidate would hide it from explain (and so from diff), which
+	// drops that kind, even though it IS a declared derive path and explain
+	// prints those. A KindSource entry is deliberately NOT promoted: its ref is
+	// the more consequential fact, and policy still has to grant it.
+	for _, p := range paths {
+		if i, ok := byPath[p]; ok && walked[i].Kind == KindValidate {
+			walked[i].Kind = KindDerived
+		}
 	}
 
 	var fields []Field

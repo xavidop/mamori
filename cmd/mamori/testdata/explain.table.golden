@@ -39,4 +39,5 @@ note: this struct declares WithDerive write paths that could not be read
 example.com/fixture.DeriveOverlap
 FIELD    TYPE    CHAIN             DEFAULT  OPTIONAL  SENSITIVE
 Port     string  env:OVERLAP_PORT  8080     true      false
+DSN      string                    -        false     false
 Derived  string                    -        false     false

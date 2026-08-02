@@ -244,11 +244,17 @@ func TestExtractDerivedPathKeepsValidateRules(t *testing.T) {
 		t.Fatalf("Extract emitted %d entries for DeriveOverlap.DSN, want exactly 1: %+v", len(got), got)
 	}
 	f := got[0]
-	if f.Kind != KindValidate {
-		t.Errorf("DSN Kind = %q, want %q: the validate-tagged entry is the one that must survive", f.Kind, KindValidate)
+	// The point of this test is that the validate rules survive, which is what
+	// the duplicate used to destroy. The surviving entry's Kind is KindDerived,
+	// not KindValidate: it is a declared write path, and explain drops
+	// validate-only fields, so labelling it KindValidate would hide a genuine
+	// derive from explain and diff. See
+	// TestDerivedPathWithOnlyValidateTagStaysVisibleToExplain.
+	if f.Kind != KindDerived {
+		t.Errorf("DSN Kind = %q, want %q", f.Kind, KindDerived)
 	}
 	if f.Validate != "required,min=10" {
-		t.Errorf("DSN Validate = %q, want %q", f.Validate, "required,min=10")
+		t.Errorf("DSN Validate = %q, want %q: the rules the duplicate used to destroy", f.Validate, "required,min=10")
 	}
 }
 
@@ -306,5 +312,41 @@ func TestSchemaDerivedOverlapKeepsDefaultAndRules(t *testing.T) {
 	}
 	if !slices.Contains(doc.Required, "DSN") {
 		t.Errorf("DSN missing from required %v, want it listed: validate:\"required\"", doc.Required)
+	}
+}
+
+// TestDerivedPathWithOnlyValidateTagStaysVisibleToExplain pins that a declared
+// write path whose field carries only a validate: tag is reported as derived,
+// not as validate-only. explain drops validate-only fields, so leaving the Kind
+// alone would hide a genuine derive path from explain and from diff, which is
+// the opposite of what discovering derives was for. Its validate rules must
+// survive the promotion, since schema still needs them.
+func TestDerivedPathWithOnlyValidateTagStaysVisibleToExplain(t *testing.T) {
+	root := moduleRoot(t)
+	enterFixtureModule(t, filepath.Join(root, "testdata", "example"))
+
+	structs, err := Extract([]string{"./..."}, "DeriveOverlap", nil)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found *Field
+	for i := range structs {
+		for j := range structs[i].Fields {
+			if structs[i].Fields[j].Path == "DSN" {
+				if found != nil {
+					t.Fatalf("DSN appears more than once: %+v and %+v", *found, structs[i].Fields[j])
+				}
+				found = &structs[i].Fields[j]
+			}
+		}
+	}
+	if found == nil {
+		t.Fatal("no DSN field in DeriveOverlap")
+	}
+	if found.Kind != KindDerived {
+		t.Fatalf("DSN Kind = %q, want %q: explain drops validate-only fields, so a declared derive path must not stay KindValidate", found.Kind, KindDerived)
+	}
+	if found.Validate == "" {
+		t.Fatal("DSN lost its validate rules in the promotion; schema still needs them")
 	}
 }

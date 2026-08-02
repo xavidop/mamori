@@ -353,6 +353,19 @@
         "Validate": ""
       },
       {
+        "Path": "DSN",
+        "Kind": "derived",
+        "GoType": "string",
+        "Source": "",
+        "Refs": null,
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": "required,min=10"
+      },
+      {
         "Path": "Derived",
         "Kind": "derived",
         "GoType": "string",
