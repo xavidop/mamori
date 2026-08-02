@@ -28,7 +28,7 @@ Unlike `Load`, `Doctor` never aborts on the first failure: it walks every field 
 
 That blocking is all-or-nothing across every derived field, not only the ones whose own inputs failed: `Doctor` cannot inspect a hook's closure to learn which fields it reads, so a single unresolved sourced field blocks every derived row, not just the ones that depend on it.
 
-Running the hooks means `Doctor` executes your code during a preflight. `WithDerive` documents a hook as a pure transformation, but nothing enforces that: a hook with a side effect - a metric increment, a log line, a call to another service - runs for real every time `Doctor` runs, not only when a candidate config is actually about to ship.
+Note that `Doctor` executes your hook code. A hook with a side effect, such as a metric increment or a call to another service, runs for real on every `Doctor` run, not only when a config is about to ship.
 
 ## Run it before a watcher starts
 

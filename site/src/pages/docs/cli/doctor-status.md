@@ -31,7 +31,7 @@ compare: source vs. live field paths
   no drift: source and live field sets match
 ```
 
-A row with `DERIVED` `true` is a [`WithDerive`](/docs/usage/derived-fields/)-declared write path, not a field mamori resolved: `SCHEME` and `REF` are empty for it, since there is no ref behind it. `VERSION` is filled in, and always is for a row this command can show: it is a content hash of the value the hook produced, the same kind of version a provider without a native revision already reports. That is because `doctor` and `status` only ever render a running watcher's already-published config, and a hook that fails rejects the whole candidate before it is ever published, so a config this command can see never contains a derived field whose hook did not succeed. The library-side [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) preflight you run in CI is different: it evaluates hooks directly and can leave `VERSION` empty there, either because a hook failed or because a sourced field it depends on was unreachable. `--compare` excludes a derived row from the live side of the comparison entirely, so a declared derive never reports as drift against source, which has no `source:` tag for it to match in the first place.
+A row with `DERIVED` `true` is a [`WithDerive`](/docs/usage/derived-fields/) write path, not a field mamori resolved. `SCHEME` and `REF` are empty because there is no ref behind it; `VERSION` is a content hash of the value the hook produced. `--compare` ignores these rows, so a derive never reports as drift.
 
 ## status
 

@@ -92,9 +92,9 @@ type Report struct {
 
 A `FieldStatus` with `Derived: true` is a field a [`WithDerive`](/docs/usage/derived-fields/) hook declares writing, not one mamori resolved from a source: it never carries a `Scheme`, `Ref`, `LastOK`, `Age`, or `Stale`, since there is no ref behind it. It only appears at all if the hook that writes it names the field explicitly; an undeclared derive write has no entry here.
 
-`Version` is different: it is populated for a derived entry, as a content hash of the value the hook produced, whenever that value was actually computed. In a running `Watcher`'s `Status()`, it always is - a failing hook rejects the whole candidate configuration before it is ever published, so a live report never contains a derived field whose hook failed.
+`Version` is the exception: a derived entry does carry one, a content hash of the value the hook produced. In a running `Watcher`'s `Status()` it is always set, since a failing hook rejects the candidate before it is published.
 
-A [`Doctor`](/docs/observability/doctor/) report is where `Version` can instead come back blank, in one of three cases: every sourced field produced a value but the hook itself returned an error, which leaves `LastKind` reading `invalid` and makes the report unhealthy; a sourced field produced no value, so the hook never ran at all, which leaves the row carrying a `LastError` saying it was not evaluated, with no `LastKind`; or the hooks could not be typed to `T` at all - a hook written for another config, or one declaring an empty write path - which fails `Load` and `Watch` outright and is reported here as one `invalid` row per declared write path. That second case is all-or-nothing across every derived field, not only the ones whose own inputs failed: `Doctor` cannot inspect a hook's closure to learn which fields it reads. See [Doctor: pre-deploy check](/docs/observability/doctor/#derived-fields-are-probed) for the full detail.
+Only a [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) report can leave it blank, which happens when the hook errored, when a sourced field produced no value so the hook never ran, or when the hooks could not be typed to `T`.
 
 ## Health: one yes/no for a probe
 
