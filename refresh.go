@@ -24,14 +24,11 @@ import "context"
 //	    }
 //	}
 //
-// Distinguishing those two is the whole reason the example is written this way.
-// A cancelled ctx returns ctx.Err() while the reconciler goes on to apply the
-// reload anyway (see below), so treating every non-nil error as a rejection
-// reports "still serving the previous config" for a reload that in fact landed.
+// Treating every non-nil error as a rejection is the mistake to avoid: a
+// cancelled ctx returns ctx.Err() while the reload goes on to apply anyway.
 //
-// It does NOT bypass PreApply. A forced refresh is still gated; that is the
-// point of having a gate, and a refresh is what an operator reaches for exactly
-// when a credential has just rotated - the moment a gate matters most.
+// It does NOT bypass PreApply. A refresh is what an operator reaches for right
+// after a credential rotates, which is when a gate matters most.
 //
 // Refresh is delivered to the reconciler goroutine over the same control
 // channel Pin, PinCurrent, and Unpin use, so it serializes with normal
@@ -40,27 +37,19 @@ import "context"
 //
 // It returns ErrReentrantCall, having re-resolved nothing, when called from
 // inside a PreApply hook, a WithDerive hook, or an OnError callback: all three
-// run ON the goroutine which would have to service this command, so the call
-// would be waiting for itself. Taking a context does not make that survivable
-// - a callback calling Refresh(context.Background()), the obvious thing to
-// write, would block until Close - so this is refused up front exactly as Pin
-// is, rather than left to a deadline the caller may not have set. A derive
-// hook has no context at all, so it never had that escape to begin with.
-// OnError is the one to watch for: "the reload was rejected, retry it" is a
-// natural thing to write there, and this is what it gets instead. OnChange is
-// unaffected; it runs on the dispatch goroutine, so a Refresh from it is an
-// ordinary call.
+// run ON the goroutine that would service this command, so the call would wait
+// for itself. OnError is the one to watch for, since "the reload was rejected,
+// retry it" is a natural thing to write there. OnChange is unaffected: it runs
+// on the dispatch goroutine, so a Refresh from it is an ordinary call.
 //
 // ctx bounds the wait, not the work. Cancelling it returns ctx.Err() and stops
 // this call from waiting; it does not recall a command already handed to the
 // reconciler, which re-resolves and applies as usual. There is no half-applied
 // snapshot either way.
 //
-// While the watcher is pinned, a refresh still re-resolves, still runs the
-// gate, and still advances Live and history - it just does not move Get, which
-// is what the pin is for. It returns nil in that case: the snapshot was applied
-// as far as the pin allows, and Unpin will publish it. Refresh does not
-// silently unpin.
+// While pinned, a refresh still re-resolves, still runs the gate, and still
+// advances Live and history. It just does not move Get, and returns nil:
+// Unpin will publish the snapshot. Refresh does not silently unpin.
 //
 // For a field resolved through a mamori:// ref, Refresh re-reads the config
 // server's current value. It does not make the server re-resolve its own

@@ -44,10 +44,12 @@ const derivedVersionMaxDepth = 32
 //     reflect.DeepEqual: the reported version now churns exactly when
 //     ev.Changed does.
 //
-// Two other identity-carrying cases are deliberately flattened: a chan, func,
-// or unsafe.Pointer hashes as its kind name alone, since its address is
-// process-local noise no operator can act on. Map entries are sorted by their
-// encoded form, so Go's randomized map iteration order cannot change a version.
+// A chan, func, or unsafe.Pointer hashes as its kind name alone, since its
+// address is process-local noise no operator can act on. A uintptr is the one
+// address-shaped kind NOT flattened: it is an ordinary integer to reflect, and
+// a caller who stores one in a config struct chose a number, so it hashes as
+// its value. Map entries are sorted by their encoded form, so Go's randomized
+// iteration order cannot change a version.
 //
 // The hash is not the value and is never a way back to it; a Report still
 // carries no derived value at all (see TestReportJSONNeverCarriesDerivedValue).
