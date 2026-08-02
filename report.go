@@ -149,8 +149,14 @@ func (e *engine[T]) buildReport() *Report {
 // it cannot go unhealthy there: a hook that fails rejects the whole candidate
 // in buildCandidate, so a published config never contains a failed derive. A
 // Doctor probe is the case this matters for - it evaluates the hooks directly
-// (see doctorDerivedFields, doctor.go) and marks a failing one KindInvalid,
-// which must count.
+// (see doctorDerivedFields, doctor.go) and marks KindInvalid both a hook that
+// ran and failed and a set of hooks that cannot be typed to T at all (which
+// fails Load and Watch outright), either of which must count.
+//
+// A Doctor row for a derive the hooks never got to evaluate, because a sourced
+// field produced no value to feed them, deliberately carries no LastKind: it
+// reports that nothing was computed without double-counting the source field
+// that is already reporting its own failure.
 func fieldUnhealthy(fs FieldStatus) bool {
 	switch fs.LastKind {
 	case KindNotFound, KindPermissionDenied, KindUnauthenticated, KindInvalid:

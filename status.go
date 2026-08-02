@@ -32,14 +32,29 @@ type FieldStatus struct {
 	//
 	// A Derived entry appears in both Watcher.Status and a Doctor report.
 	// Version is a content hash of the computed value (see derivedVersion,
-	// derivedversion.go) when that value was actually computed. In
-	// Watcher.Status it always is: a failing hook rejects the whole
-	// candidate in buildCandidate, so a published config never contains one.
+	// derivedversion.go) when that value was actually computed, and it hashes
+	// the real content wherever it sits: a secret nested inside the derived
+	// value is revealed for hashing rather than redacted, and a pointer is
+	// hashed by what it points at. In Watcher.Status Version is always
+	// populated: a failing hook rejects the whole candidate in buildCandidate,
+	// so a published config never contains one.
+	//
 	// In a Doctor report (see doctorDerivedFields, doctor.go) Version can be
-	// blank instead, in two different cases: the hook ran and failed, which
-	// leaves the row LastKind KindInvalid and affects Healthy, or a sourced
-	// field was unreachable so the hook was never run at all, which leaves
-	// the row carrying a LastError but no LastKind.
+	// blank instead, in three different cases:
+	//
+	//   - The hook ran and returned an error: LastKind is KindInvalid,
+	//     LastError is the hook's own error, and the report is unhealthy.
+	//   - A sourced field produced no value for the hooks to read, so they
+	//     never ran: the row carries a LastError saying it was not evaluated
+	//     and no LastKind. This is not the same as the report being unhealthy
+	//     - a field failing with a self-healing kind (unavailable, rate
+	//     limited, unknown) leaves the report healthy and still has no value
+	//     to feed a hook.
+	//   - The hooks could not be typed to T at all, because one was written
+	//     for a different config or declares an empty write path. Load and
+	//     Watch reject those Options outright with ErrInvalid, so Doctor
+	//     reports one KindInvalid row per declared write path rather than
+	//     passing a config that cannot start as healthy.
 	Derived bool
 }
 
@@ -52,7 +67,11 @@ type FieldStatus struct {
 // Both Watcher.Status and Doctor append their derived entries this same way,
 // after every sourced field, in WithDerive registration order, gated through
 // the same hasSpecPath / fieldByPath checks (report.go, doctor.go), so the
-// two can never disagree about which paths produce a row.
+// two can never disagree about which paths produce a row. Doctor makes one
+// exception, for hooks it cannot type to its T at all: those Options fail
+// Load and Watch outright, so no Watcher.Status report exists to disagree
+// with, and Doctor reports every declared write path as invalid rather than
+// applying gates it has no typed config to evaluate.
 type Report struct {
 	Fields      []FieldStatus
 	Snapshot    uint64    // version of the snapshot Get currently returns (the pinned version, while Pinned)

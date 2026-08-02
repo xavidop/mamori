@@ -141,7 +141,7 @@ Rules to hold onto:
 - Use `net/url` to assemble the value, not `fmt.Sprintf` - a password containing `@` or `/` needs escaping, and `net/url` already does it correctly. Assign into a `secret.String`/`secret.Bytes` field, not a plain `string`, so the derived value stays redacted in `fmt`, JSON, and `slog`.
 - `WithDerive` can be given more than once; each call appends a hook, and hooks run in registration order, so a field derived from another derived field just works (the second hook sees the first hook's output). Each call keeps its own declared writes.
 - Returning an error rejects the whole candidate atomically, exactly like a validation failure: `Get()` keeps the last valid config, `OnChange` does not fire, and `OnError` receives a `*DeriveError`.
-- A hook typed for a different config than `Watch[T]`/`Load[T]` fails outright (`ErrInvalid`), the same as a mismatched `PreApply` hook - never a silent no-op.
+- A hook typed for a different config than `Watch[T]`/`Load[T]` fails outright (`ErrInvalid`), the same as a mismatched `PreApply` hook - never a silent no-op. `mamori.Doctor` reports the same mistake as an unhealthy row per declared write path (`KindInvalid`), so the preflight fails on it too rather than passing a config that cannot start.
 - **The same reentrancy rule covers `WithDerive`:** it too runs inline on the reconciler goroutine, so `w.Pin`, `w.PinCurrent`, `w.Unpin`, and `w.Refresh` called from inside a derive hook get the same refusal `PreApply` and `OnError` get - `Pin`/`Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0`, `Unpin` does nothing. Never call back into the same `Watcher` from a derive hook. It is worse here than for `PreApply`: a derive hook takes no `ctx` at all, so there is no `WithPreApplyTimeout` bound to lean on either.
 - **A declared write path appears in `ev.Changed()` and in `Status()`,** reported changed exactly when the rebuilt value differs from the one it replaced - the same `Changed()` semantics as any other field. Its `Status()` entry is not a full match, though: it never carries a `Ref`/`Scheme`, since a derived field has no ref to report. It does carry `Version` - a content hash of the rebuilt value, taken from the real content wherever it sits (a secret nested in a struct, slice, map, or behind a pointer is revealed for hashing, and a pointer hashes by its pointee, not its address) - and in `Watcher.Status()` that is always populated, since a failing hook rejects the whole candidate before it is ever published (see the `Doctor` note below for the one place `Version` can come back blank). Trigger on the derived field itself (`ev.Changed("DSN")`) now that it is visible, rather than on every input that feeds it.
 - **An undeclared write stays invisible.** A hook that assigns a field without naming it in `WithDerive`'s trailing arguments produces no entry in `ev.Changed()` or `Status()`, and mamori has no way to detect that the assignment happened at all - it cannot inspect the hook's body, only its declared paths.
@@ -206,13 +206,21 @@ Precedence chains: a `source:` tag may list several refs comma-separated
   `Load` for one-shot / CLI programs.
 - For CI, recommend `mamori.Doctor` (library) as a pre-deploy check. It also
   runs every registered `WithDerive` hook and reports one row per declared
-  write path, with exactly three outcomes: sources healthy and the hook
-  succeeded - `Version` is a content hash of the computed value; sources
-  healthy and the hook returned an error - `Version` blank, `LastKind`
-  `KindInvalid`, report unhealthy; a sourced field unreachable - the hook
-  never runs, `Version` blank, a `LastError`, no `LastKind`. That last case
-  is all-or-nothing across every derived field: `Doctor` cannot inspect a
-  hook's closure to know which fields it reads.
+  write path, with exactly four outcomes: every sourced field produced a value
+  and the hook succeeded - `Version` is a content hash of the computed value;
+  every sourced field produced a value and the hook returned an error -
+  `Version` blank, `LastKind` `KindInvalid`, report unhealthy; a sourced field
+  produced no value - the hook never runs, `Version` blank, a `LastError`, no
+  `LastKind`; the hooks cannot be typed to the config (a hook written for
+  another config, or an empty declared write path, both of which fail `Load`
+  and `Watch`) - `LastKind` `KindInvalid` on every declared write path, report
+  unhealthy. "Produced no value" means the field neither resolved nor fell back
+  to its `default` (including via `onfail:"default"`) nor is an absent
+  `optional`, which is a stricter bar than the report being healthy: a
+  self-healing kind (unavailable, rate-limited, unknown) leaves the report
+  healthy and still blocks the hooks. That case is all-or-nothing across every
+  derived field: `Doctor` cannot inspect a hook's closure to know which fields
+  it reads.
 - Suggest `mamori.WithLogger(slog.Default())` for a structured log trail of
   resolve failures, watch errors, and applied changes - it never logs a
   resolved value and is silent (discard logger) until opted in.

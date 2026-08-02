@@ -39,6 +39,17 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 	fields := make([]FieldStatus, 0, len(specs))
 	res := make([]resolved, 0, len(specs))
 	healthy := true
+	// sourcesComplete tracks whether every spec ended the probe loop holding
+	// the value Load would have built it from - a resolved value, its default,
+	// or (for an optional field) the zero value Load itself leaves behind. It
+	// is deliberately NOT the same question as healthy: fieldUnhealthy counts
+	// only the terminal kinds, so a field failing with KindUnavailable,
+	// KindRateLimited, or KindUnknown leaves healthy true while contributing
+	// no entry to res at all. Gating the derive hooks on healthy therefore fed
+	// them a zero value for such a field and published a hash of it; see
+	// doctorDerivedFields for why any hash computed from a stand-in value is
+	// worse than none.
+	sourcesComplete := true
 	for _, spec := range specs {
 		val, idx, rerr := probeField(ctx, spec, o)
 		fs := FieldStatus{
@@ -87,7 +98,7 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 		case rerr == nil:
 			res = append(res, resolved{spec: spec, value: val, found: true, set: true})
 		case errors.Is(rerr, ErrNotFound) && spec.HasDefault:
-			// Mirror resolveOne (resolve.go:286-290) exactly: an absent field
+			// Mirror applyDefault (resolve.go) exactly: an absent field
 			// covered by a default is reported healthy above, so the hooks must
 			// see the default rather than the zero value, or the version this
 			// publishes would not match what Load computes.
@@ -97,10 +108,32 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 				found: false,
 				set:   true,
 			})
+		case errors.Is(rerr, ErrNotFound) && spec.Optional:
+			// applyDefault's optional branch sets nothing, so Load leaves this
+			// field at its zero value too. The hooks seeing zero here is not a
+			// stand-in for a value that failed to arrive: it is exactly what
+			// production computes from, so this spec still counts as complete.
+		case spec.OnFail == onFailUseDefault:
+			// The error is terminal and not not-found (the branches above took
+			// every not-found case), which is precisely what applyOnFail
+			// (resolve.go) turns into the field's default for an explicit
+			// onfail:"default". Mirror it, or the hooks would derive from zero
+			// here while Load derives from the default and the two versions
+			// would disagree. walkSpecs rejects onfail:"default" without a
+			// default: tag, so spec.Default is always the real value.
+			res = append(res, resolved{
+				spec:  spec,
+				value: Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"},
+				found: false,
+				set:   true,
+			})
+		default:
+			// Nothing to build this field from that Load would agree with.
+			sourcesComplete = false
 		}
 	}
 
-	derivedFields, derivedHealthy := doctorDerivedFields[T](o, specs, res, healthy)
+	derivedFields, derivedHealthy := doctorDerivedFields[T](o, specs, res, sourcesComplete)
 	fields = append(fields, derivedFields...)
 	healthy = healthy && derivedHealthy
 
@@ -117,30 +150,37 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 // the probe loop already resolved and returns one FieldStatus per declared
 // write path. It is Doctor's counterpart to the Derived append in buildReport
 // (report.go), and uses the same hasSpecPath / fieldByPath / CanInterface gates
-// so the two can never disagree about which paths produce a row.
+// so the two can never disagree about which paths produce a row. The one
+// exception is a set of hooks that cannot be typed to T at all, where those
+// gates cannot be evaluated and would hide a config that fails at startup: see
+// deriveConfigErrorFields.
 //
-// The hooks run only when every sourced field probed healthy. A hook fed a zero
-// value because its input was unreachable would produce a version that looks
-// real, does not match what production computes, and is worse than no version:
-// those rows report blocked instead. mamori cannot inspect a closure to learn
-// which fields it reads, so blocked is all-or-nothing across derived fields
-// rather than per-input.
+// The hooks run only when every sourced field came out of the probe loop
+// holding the value Load would have built it from (sourcesComplete, above). A
+// hook fed a zero value because its input never resolved would produce a
+// version that looks real, does not match what production computes, and is
+// worse than no version: those rows report blocked instead. Note that this is
+// not the report's healthy flag: a field failing with a self-healing kind
+// (unavailable, rate-limited, unknown) leaves healthy true and still has no
+// value to feed a hook. mamori cannot inspect a closure to learn which fields
+// it reads, so blocked is all-or-nothing across derived fields rather than
+// per-input.
 //
 // Running the hooks means Doctor executes caller code during a preflight.
 // WithDerive documents a hook as a pure transformation and nothing enforces it,
 // so this is a deliberate, documented trade: probing a derived field is not
 // possible without evaluating the function that produces it.
-func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, sourcesHealthy bool) ([]FieldStatus, bool) {
+func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, sourcesComplete bool) ([]FieldStatus, bool) {
 	derives, err := typedDerives[T](o)
-	if err != nil || len(derives) == 0 {
-		// A mismatched hook type is Load's loud error, not a preflight's: it
-		// cannot produce a row here, and Doctor's contract is that the returned
-		// error covers only an unwalkable T.
+	if err != nil {
+		return deriveConfigErrorFields(o, err), false
+	}
+	if len(derives) == 0 {
 		return nil, true
 	}
 	var cfg T
 	var deriveErr error
-	if sourcesHealthy {
+	if sourcesComplete {
 		if err := buildInto(reflect.ValueOf(&cfg).Elem(), res, o.decodeHooks); err != nil {
 			deriveErr = err
 		} else {
@@ -175,7 +215,7 @@ func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, s
 				Sensitive: v.Type() == secretStringType || v.Type() == secretBytesType,
 			}
 			switch {
-			case !sourcesHealthy:
+			case !sourcesComplete:
 				fs.LastError = "not evaluated: a source field is unreachable"
 			case deriveErr != nil:
 				fs.LastError = deriveErr.Error()
@@ -190,6 +230,51 @@ func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, s
 		}
 	}
 	return out, healthy
+}
+
+// deriveConfigErrorFields turns a typedDerives rejection into one unhealthy
+// FieldStatus per declared write path, carrying KindInvalid and the rejection's
+// own text.
+//
+// The rejection means Load and Watch, given these same Options, fail outright
+// with ErrInvalid: a hook typed for another config, or one declaring an empty
+// write path. Doctor cannot return that as its error - its contract is that the
+// returned error covers only an unwalkable T - and returning nothing would make
+// the preflight whose entire purpose is catching a misconfiguration before it
+// ships report green on one that breaks at startup. Silent and healthy is the
+// one outcome a preflight must never produce, so the rows carry it instead.
+//
+// The rows are built from the raw registration (o.derives) rather than from T,
+// because the assertion that would give them a typed hook is the thing that
+// just failed. That is also why they skip the hasSpecPath and fieldByPath gates
+// the healthy path applies: those answer "does this path already have a row, or
+// name a real field on T", and neither question can hide a configuration that
+// cannot start. A write path that also carries a source tag therefore gets a
+// second, Derived row here, saying why the whole load is rejected.
+//
+// A hook registered with no write paths at all produces no row, since a row is
+// keyed by write path and it declared none. The report is still unhealthy: the
+// caller sees a failing preflight with nothing to point at, which is the same
+// invisibility WithDerive's declared writes exist to fix and is strictly better
+// than a green report on a config that cannot load.
+func deriveConfigErrorFields(o *options, err error) []FieldStatus {
+	seen := make(map[string]struct{})
+	var out []FieldStatus
+	for _, d := range o.derives {
+		for _, p := range d.writes {
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, FieldStatus{
+				Path:      p,
+				Derived:   true,
+				LastError: err.Error(),
+				LastKind:  KindInvalid,
+			})
+		}
+	}
+	return out
 }
 
 // probeField walks spec's precedence chain through resolveChain, returning

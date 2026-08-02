@@ -137,8 +137,9 @@ func writeDoctorJSON(stdout io.Writer, res fetchResult) {
 // ref, so there is nothing there to show. VERSION carries a content hash of
 // the computed value (see mamori.FieldStatus.Version, derivedVersion in
 // derivedversion.go); a blank VERSION on a derived row means the value was
-// never evaluated - a Doctor probe whose source field was unreachable, or
-// whose hook itself failed (LAST_KIND then reads invalid). The DERIVED
+// never evaluated - a Doctor probe whose source field produced no value to
+// feed the hooks, whose hook itself failed, or whose hooks could not be typed
+// to the config at all (LAST_KIND reads invalid for the latter two). The DERIVED
 // column is what tells a reader that is expected - a field mamori maintains
 // but never resolved from anywhere - rather than a row that looks like a
 // misconfigured or half-broken source field.
