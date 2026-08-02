@@ -143,7 +143,7 @@ Rules to hold onto:
 - Returning an error rejects the whole candidate atomically, exactly like a validation failure: `Get()` keeps the last valid config, `OnChange` does not fire, and `OnError` receives a `*DeriveError`.
 - A hook typed for a different config than `Watch[T]`/`Load[T]` fails outright (`ErrInvalid`), the same as a mismatched `PreApply` hook - never a silent no-op.
 - **The same reentrancy rule covers `WithDerive`:** it too runs inline on the reconciler goroutine, so `w.Pin`, `w.PinCurrent`, `w.Unpin`, and `w.Refresh` called from inside a derive hook get the same refusal `PreApply` and `OnError` get - `Pin`/`Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0`, `Unpin` does nothing. Never call back into the same `Watcher` from a derive hook. It is worse here than for `PreApply`: a derive hook takes no `ctx` at all, so there is no `WithPreApplyTimeout` bound to lean on either.
-- **A declared write path appears in `ev.Changed()` and in `Status()`,** reported changed exactly when the rebuilt value differs from the one it replaced - the same `Changed()` semantics as any other field. Its `Status()` entry is not a full match, though: it carries only `Path` and `Derived: true`, never a `Ref`/`Scheme`/`Version`, since a derived field has none of those to report. Trigger on the derived field itself (`ev.Changed("DSN")`) now that it is visible, rather than on every input that feeds it.
+- **A declared write path appears in `ev.Changed()` and in `Status()`,** reported changed exactly when the rebuilt value differs from the one it replaced - the same `Changed()` semantics as any other field. Its `Status()` entry is not a full match, though: it never carries a `Ref`/`Scheme`, since a derived field has no ref to report. It does carry `Version` - a content hash of the rebuilt value - and in `Watcher.Status()` that is always populated, since a failing hook rejects the whole candidate before it is ever published (see the `Doctor` note below for the one place `Version` can come back blank). Trigger on the derived field itself (`ev.Changed("DSN")`) now that it is visible, rather than on every input that feeds it.
 - **An undeclared write stays invisible.** A hook that assigns a field without naming it in `WithDerive`'s trailing arguments produces no entry in `ev.Changed()` or `Status()`, and mamori has no way to detect that the assignment happened at all - it cannot inspect the hook's body, only its declared paths.
 - `mamori explain`, `schema`, and `diff` never see a derived field, declared or not: all three are static analysis over `source:` struct tags in your Go source, and a derive is a runtime function call with no tag to read.
 
@@ -204,11 +204,15 @@ Precedence chains: a `source:` tag may list several refs comma-separated
 - Suggest `secret.String` for secrets and confirm `mamori vet` would pass.
 - Prefer `Watch` when the program is long-running and should pick up rotations;
   `Load` for one-shot / CLI programs.
-- For CI, recommend `mamori.Doctor` (library) as a pre-deploy check. It only
-  probes `source`-tagged fields; it never runs a `WithDerive` hook, so it
-  cannot catch a derive that would fail at `Watch`/`Load` time, and its
-  `Report` never carries a `Derived` entry (that only appears in a running
-  `Watcher`'s `Status()`).
+- For CI, recommend `mamori.Doctor` (library) as a pre-deploy check. It also
+  runs every registered `WithDerive` hook and reports one row per declared
+  write path, with exactly three outcomes: sources healthy and the hook
+  succeeded - `Version` is a content hash of the computed value; sources
+  healthy and the hook returned an error - `Version` blank, `LastKind`
+  `KindInvalid`, report unhealthy; a sourced field unreachable - the hook
+  never runs, `Version` blank, a `LastError`, no `LastKind`. That last case
+  is all-or-nothing across every derived field: `Doctor` cannot inspect a
+  hook's closure to know which fields it reads.
 - Suggest `mamori.WithLogger(slog.Default())` for a structured log trail of
   resolve failures, watch errors, and applied changes - it never logs a
   resolved value and is silent (discard logger) until opted in.
