@@ -1414,3 +1414,19 @@ func TestFieldByPath(t *testing.T) {
 		})
 	}
 }
+
+// TestWithDeriveCopiesWrites pins that WithDerive does not retain the caller's
+// slice. A variadic call spelled WithDerive(fn, paths...) hands over its own
+// backing array; storing it directly would let a later mutation change the
+// declared write paths, and would race the reconciler goroutine reading them.
+func TestWithDeriveCopiesWrites(t *testing.T) {
+	paths := []string{"DSN"}
+	o := defaultOptions()
+	WithDerive(func(*struct{}) error { return nil }, paths...)(o)
+
+	paths[0] = "MUTATED"
+
+	if got := o.derives[0].writes[0]; got != "DSN" {
+		t.Fatalf("stored write path = %q, want %q: WithDerive kept the caller's slice", got, "DSN")
+	}
+}

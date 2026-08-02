@@ -48,18 +48,26 @@ mamori.OnChange(func(ev mamori.Change[Config]) {
 
 ## Handle errors with OnError
 
-`OnError` receives runtime resolve and validation errors without stopping the watcher. Use it for metrics and alerting; `Get()` keeps serving the last good config.
+`OnError` receives every runtime failure without stopping the watcher. Use it for metrics and alerting; `Get()` keeps serving the last good config.
+
+Five typed errors reach it, and they mean different things, so classify rather than counting them together: `*ProviderError` (a ref failed to resolve), `*ValidationError` (the candidate failed `validate:` tags), `*DeriveError` (a [`WithDerive`](/docs/usage/derived-fields/) hook returned an error), `*PreApplyError` (a [`PreApply`](/docs/usage/rotation/) gate refused the candidate, including on timeout), and `*StaleError` (a ref went unrefreshed past `WithStale`).
 
 ```go
 mamori.OnError(func(err error) {
 	var verr *mamori.ValidationError
-	if errors.As(err, &verr) {
+	var derr *mamori.DeriveError
+	switch {
+	case errors.As(err, &verr):
 		metrics.Inc("config_validation_error")
-		return
+	case errors.As(err, &derr):
+		metrics.Inc("config_derive_error")
+	default:
+		metrics.Inc("config_error")
 	}
-	metrics.Inc("config_error")
 })
 ```
+
+The middle three all mean the same thing operationally: a candidate was built and rejected, so the config you are serving is older than the backend's. `*ProviderError` and `*StaleError` mean mamori could not read the backend at all.
 
 ## What you can rely on
 

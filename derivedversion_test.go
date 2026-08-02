@@ -232,3 +232,32 @@ func TestDerivedFieldChangeCarriesVersions(t *testing.T) {
 		t.Fatalf("NewVersion = %q, want the same hash Status reports (%q)", got[0].NewVersion, want)
 	}
 }
+
+// TestDerivedVersionDistinguishesDynamicTypes pins that an interface-typed
+// field's dynamic type is part of its version. Without it any(int(1)) and
+// any(uint(1)) hash alike, as do any("x") and any(secret.NewString("x")), while
+// reflect.DeepEqual (what ev.Changed uses) calls each pair different. The
+// version would then sit still for a change ev.Changed reports.
+func TestDerivedVersionDistinguishesDynamicTypes(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b any
+	}{
+		{"int vs uint", int(1), uint(1)},
+		{"string vs secret.String", "x", secret.NewString("x")},
+		{"int vs float", int(1), float64(1)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if reflect.DeepEqual(c.a, c.b) {
+				t.Fatalf("fixture is wrong: DeepEqual already calls these equal")
+			}
+			type holder struct{ V any }
+			av := derivedVersion(reflect.ValueOf(holder{V: c.a}))
+			bv := derivedVersion(reflect.ValueOf(holder{V: c.b}))
+			if av == bv {
+				t.Fatalf("both hashed to %q, but DeepEqual calls them different: ev.Changed would fire with no version move", av)
+			}
+		})
+	}
+}

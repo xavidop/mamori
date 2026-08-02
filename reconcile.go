@@ -300,7 +300,13 @@ func WithDerive[T any](fn func(*T) error, writes ...string) Option {
 		if fn == nil {
 			return
 		}
-		o.derives = append(o.derives, deriveEntry{fn: fn, writes: writes})
+		// Copy writes rather than storing the caller's slice. A variadic call
+		// site spelled WithDerive(fn, paths...) passes its own backing array, so
+		// storing it directly leaves the caller holding a live alias to the
+		// declared paths. Mutating it after Watch would change what the
+		// reconciler goroutine reads while it reads it, which is a data race as
+		// well as a silent change to what the hook claims to write.
+		o.derives = append(o.derives, deriveEntry{fn: fn, writes: append([]string(nil), writes...)})
 	}
 }
 

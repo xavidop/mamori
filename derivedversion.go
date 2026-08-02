@@ -114,11 +114,25 @@ func appendCanonical(dst []byte, v reflect.Value, depth int) []byte {
 		}
 	}
 	switch v.Kind() {
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return append(dst, "nil"...)
 		}
 		return appendCanonical(append(dst, '*'), v.Elem(), depth+1)
+
+	case reflect.Interface:
+		if v.IsNil() {
+			return append(dst, "nil"...)
+		}
+		// An interface is the one place two different types reach the same
+		// field, so its dynamic type is part of the value here. Without this,
+		// any(int(1)) and any(uint(1)) encode alike, as do any("x") and
+		// any(secret.NewString("x")), while reflect.DeepEqual calls each pair
+		// different: ev.Changed would report a change the Version did not move
+		// for. A concrete field needs no tag, since its type cannot vary.
+		e := v.Elem()
+		dst = appendLenBytes(append(dst, '*'), []byte(e.Type().String()))
+		return appendCanonical(dst, e, depth+1)
 
 	case reflect.Struct:
 		t := v.Type()
