@@ -145,7 +145,9 @@ mamori.WithDerive(func(c *Config) error {
   invisible. Trigger on the derived field, not on each input.
 - Returning an error rejects the whole candidate, reaching `OnError` as a
   `*DeriveError`. Multiple hooks run in registration order.
-- Static CLI commands never see a derived field, since it has no `source:` tag.
+- `explain`, `schema`, and `diff` do see a derived field (no ref, no scheme), by
+  reading this call site rather than a `source:` tag. `policy` still grants it
+  nothing, since it has no ref.
 
 ## Force an immediate refresh
 
@@ -250,15 +252,18 @@ for the full list and ref syntax.
   fields and chains added or removed, fields newly reading secret material, and
   the privilege delta. Built for PR CI: `--markdown` suits a comment, and
   `--exit-code=privilege` fails only when the permission surface grows.
-- `mamori vet ./...` - flag secret-bearing sources in a plain `string`/`[]byte`.
-  Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`.
+- `mamori vet ./...` - flag a secret-bearing source, or a `WithDerive` hook that
+  reveals one, stored in a plain `string`/`[]byte`. Also works as a `go vet`
+  tool: `go vet -vettool=$(which mamori) ./...`.
 - `mamori doctor --endpoint <ep>` / `mamori status` - probe a running process's
   admin endpoint; exit 0 healthy, 1 unhealthy, 2 admin off, 3 unreachable, 4 auth failed.
 - `--secret-schemes=mysecrets` - accepted by `explain`, `schema`, `policy`,
   `vet`, and `doctor --compare`, so every command agrees on what is a secret.
 
-The static commands read `source:` tags from Go source. They never see a derived
-field, and `mamori diff` inherits that since it reads `explain --json`.
+The static commands read Go source, never a running process. `explain`,
+`schema`, and `diff` do see a `WithDerive`-declared field (no ref, no scheme);
+`policy` still grants it nothing, since a derive carries no ref to turn into a
+permission.
 
 ## When helping a user
 

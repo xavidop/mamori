@@ -48,6 +48,10 @@ $ mamori schema ./... --type=Config
 
 A field is also `required` when it has no `default:` and is not `optional:"true"`. A `default:` tag becomes the schema's `default`, typed as a JSON number where the field is numeric.
 
+## What this describes
+
+`schema` describes the **validated config struct**, after every field is resolved and every `WithDerive` hook has run, not a document you would ever hand mamori. That is why a field with no `source:` tag can appear at all, and even end up `required`: mamori's validator runs against the whole struct, so a field carrying `validate:` rules is enforced whether or not it has a source, and `schema` emits it accordingly. That is also why this output can list a field [`mamori explain`](/docs/cli/explain/) does not: explain lists what mamori reads from a backend, schema lists everything mamori enforces. A `WithDerive`-declared field lands in `required` the same way, and that is correct, not a bug: mamori genuinely rejects a config whose derived field comes out empty after the hook runs.
+
 ## Custom provider schemes
 
 Sensitivity is computed from the same [built-in scheme set `mamori vet` uses](/docs/cli/vet/#what-it-flags), which only knows the providers mamori ships. If you [wrote your own provider](/docs/writing-a-provider/), name its scheme so its fields are treated as secrets here too:

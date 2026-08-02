@@ -5,7 +5,7 @@ title: vet
 
 # mamori vet
 
-`mamori vet` is a `go vet` analyzer that catches a specific, easy-to-make mistake: pulling a secret-bearing source into a plain `string` or `[]byte`. It flags any config field wired to a secret backend but typed as a plain value instead of the redacting `secret.String` / `secret.Bytes` types, so the plaintext cannot slip out through logs, `fmt`, or JSON.
+`mamori vet` is a `go vet` analyzer that catches two easy-to-make mistakes: pulling a secret-bearing source into a plain `string` or `[]byte`, and a [`WithDerive`](/docs/usage/derived-fields/) hook that reveals a secret and writes the plaintext into one. Both leave a config field holding secret material in a type that logs, `fmt`, and JSON print in full, instead of the redacting `secret.String` / `secret.Bytes` types.
 
 It ships inside the same `mamori` binary as the rest of the CLI, so there is nothing extra to install.
 
@@ -103,6 +103,23 @@ config.go:2:2: field "Token" has a secret-bearing source scheme "vault" but stor
 
 The chain is split the same way mamori splits it at runtime, so what the analyzer calls "the refs in this tag" matches what your program actually resolves.
 
+## A hook that reveals a secret
+
+A [`WithDerive`](/docs/usage/derived-fields/) hook can launder a secret past the rule above: it reads a `secret.String`/`secret.Bytes` field, calls `.Reveal()` or `.RevealBytes()`, and assigns the plaintext into one of its declared write paths. That path carries no `source:` tag of its own, so nothing above ever sees it. If the path names a plain `string` or `[]byte` field, `mamori vet` flags it:
+
+```go
+var _ = mamori.WithDerive(func(c *Config) error {
+	c.DSN = "postgres://" + c.Pass.Reveal() + "@" + c.Host + "/app" // flagged
+	return nil
+}, "DSN")
+```
+
+```text
+config.go:12:2: derive hook writes revealed secret material into "DSN", a plain string; use secret.String or secret.Bytes
+```
+
+Fix it the same way as any other finding: declare `DSN` as `secret.String` and wrap the assembled value with `secret.NewString` instead of assigning the plain result directly. A hook writing into a `secret.String`/`secret.Bytes` field is not flagged, and neither is a hook that never calls `Reveal`/`RevealBytes` at all, since no secret material moved. The check only looks inside a hook passed as an inline function literal; one passed by name (`mamori.WithDerive(buildDSN, "DSN")`) is not inspected.
+
 ## Fixing a finding
 
 Change the field type to the matching redacting wrapper: `secret.String` for a `string`, `secret.Bytes` for a `[]byte`. Import `github.com/xavidop/mamori/secret` and swap the type; the tag stays the same.
@@ -131,6 +148,8 @@ Both modes exit non-zero when a finding is reported, which fails the step.
 ## How it works
 
 The check is purely structural. `secret.String` and `secret.Bytes` are named struct types, so they never look like a plain `string` or a plain `[]byte`. The analyzer flags a field only when its type matches one of those two plain shapes, which is exactly what tells an unprotected field apart from a redacted one. Because the match is structural, it needs no name matching and does not import the mamori core, so the analyzer stays fast and dependency-light while shipping inside the `mamori` CLI.
+
+The `WithDerive` rule is structural the same way: it looks for a call to `Reveal` or `RevealBytes` on a value from the `secret` package, the one place a redacting wrapper ever gives up its plaintext, and needs nothing deeper than that to decide a write path is unsafe.
 
 The scheme list is declared rather than derived, and it has to be. A provider marks its values secret at resolve time, by returning `Value{Sensitive: true}`, which a static analyzer can never observe: `go vet` does not run your program, and the CLI deliberately imports no provider modules so that no cloud SDK reaches its dependency graph. That is why the built-in set is a fixed list, and why `--secret-schemes` exists for the schemes it cannot know about.
 

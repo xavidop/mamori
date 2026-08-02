@@ -55,7 +55,7 @@ mamori.OnChange(func(ev mamori.Change[Config]) {
 
 ## Worth knowing
 
-- **Use `secret.String` or `secret.Bytes`** for anything embedding a credential, so the rebuilt value stays redacted in `fmt`, JSON, and `slog`. mamori never reports a derived field's value, so this protects your own logs.
+- **Use `secret.String` or `secret.Bytes`** for anything embedding a credential, so the rebuilt value stays redacted in `fmt`, JSON, and `slog`. mamori never reports a derived field's value, so this protects your own logs. [`mamori vet`](/docs/cli/vet/) flags a hook that reveals a secret and writes the plaintext into a plain field, the same mistake it already flags on a `source:` tag.
 - **An error rejects the whole update.** `Get()` keeps returning the last valid config and `OnError` receives a `*DeriveError`. A config whose derived fields did not build is not one to serve, and half-applying it would leave a rotated credential beside a value still derived from the old one.
 - **Multiple hooks run in registration order**, each keeping its own declared writes. A field derived from another derived field works for free, since the second hook sees the first one's output.
 - **Do not call back into the same `Watcher`.** A hook runs on the reconciler goroutine, so `Pin` and `Refresh` from inside return `ErrReentrantCall`, `PinCurrent` returns `0`, and `Unpin` does nothing. `Get()` is fine, and a `Pin` from another goroutine is unaffected.
@@ -74,7 +74,7 @@ DSN                                   a3f9c1e2  false  -          -           tr
 
 The blank `SCHEME` and `REF` say mamori maintains this field but never fetched it from anywhere. `VERSION` is a content hash of the value your hook produced, so it moves the moment the credential rotates, even for a secret nested inside a struct.
 
-Static commands cannot see a derived field at all. `explain`, `schema`, `policy`, `vet`, and `diff` read `source` tags from your Go source, and a derive leaves nothing there to find. Ask a running process instead, or use the [`Doctor` preflight](/docs/observability/doctor/#derived-fields-are-probed) in CI, which runs your hooks and fails on one that errors.
+[`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), and [`diff`](/docs/cli/diff/) do see a derived field: they read the `WithDerive` call site itself, not a `source` tag, since a derive has none. It shows with no ref and no scheme, the same emptiness `status` reports above. [`policy`](/docs/cli/policy/) still grants it nothing, because no ref means no permission to grant. A write path built at runtime instead of written as a literal, a variable or `paths...` from a slice, can't be recovered this way; a struct with one prints a note that its derived listing may be incomplete. Ask a running process instead when you need the value itself, or use the [`Doctor` preflight](/docs/observability/doctor/#derived-fields-are-probed) in CI, which runs your hooks and fails on one that errors.
 
 ## What mamori cannot see
 

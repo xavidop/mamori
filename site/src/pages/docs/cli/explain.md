@@ -39,6 +39,10 @@ Timeout         int            env://TIMEOUT           30       false     false
 | `OPTIONAL` | Whether the field carries `optional:"true"` |
 | `SENSITIVE` | Whether the field is `secret.String`/`secret.Bytes`, or any ref in its chain uses a secret-bearing scheme |
 
+## Derived fields
+
+A [`WithDerive`](/docs/usage/derived-fields/)-declared field is listed too, found by reading the call site itself rather than a `source:` tag. `CHAIN` is blank, `DEFAULT` is always `-`, and `OPTIONAL` is always `false`, since none of that applies to a field mamori computes rather than resolves; `SENSITIVE` still reflects the Go type, true for `secret.String`/`secret.Bytes`. A write path built at runtime instead of written as a literal, a variable or `paths...` from a slice, can't be recovered this way: a struct with one gets a trailing note that its derived fields may be incomplete. [`mamori policy`](/docs/cli/policy/) grants a derived field nothing, since it has no ref.
+
 ## Custom provider schemes
 
 `SENSITIVE` is computed from the same [built-in scheme set `mamori vet` uses](/docs/cli/vet/#what-it-flags), which only knows the providers mamori ships. If you [wrote your own provider](/docs/writing-a-provider/), name its scheme so its fields report as sensitive:

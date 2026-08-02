@@ -86,6 +86,12 @@ scheme that only one side knew about reports a spurious `Sensitive: true` to
 `false` (or the reverse). Produce both operands with the same
 `--secret-schemes` value to avoid this.
 
+A [`WithDerive`](/docs/usage/derived-fields/)-declared field, now present in
+`explain --json`, is diffed like any other: added when newly declared,
+removed when dropped, modified if its Go type changes. It never adds a line
+to the privilege delta below, since it carries no ref for `diff` to compare
+in the first place.
+
 ## Privilege delta
 
 The privilege section lists the backend paths gained and lost, bucketed by
