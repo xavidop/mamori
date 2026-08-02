@@ -28,8 +28,6 @@ defer w.Close()
 cfg := w.Get() // lock-free atomic snapshot; always the last valid config
 ```
 
-If `Config` has a [derived](/docs/usage/derived-fields/) field - one a `WithDerive(fn, "DSN")` call declares writing - its `FieldChange` carries only `Path`; `OldVersion` and `NewVersion` are both empty, since a derived field has no ref or version to report. The `log.Printf` loop above still runs for it, printing `DSN changed:  -> ` with both sides blank; skip a path you know is derived, or guard on `f.OldVersion != "" || f.NewVersion != ""`, if that blank arrow would be noise in your logs.
-
 ## Read the current config with Get
 
 `Get()` returns a lock-free atomic snapshot of the last valid config. It is safe to call from any goroutine on every request; there is no need to cache the result.
@@ -38,7 +36,7 @@ If `Config` has a [derived](/docs/usage/derived-fields/) field - one a `WithDeri
 
 `OnChange` receives a `Change[T]` carrying `Old` and `New` full snapshots plus `Fields []FieldChange{Path, OldVersion, NewVersion}`. Use `Changed(path string) bool` to react to one field:
 
-`Fields` also carries an entry for any [`WithDerive`](/docs/usage/derived-fields/)-declared field whose rebuilt value changed, reported through `Changed()` exactly like any other field - but with only `Path` set on its `FieldChange`; `OldVersion` and `NewVersion` are both empty, since a derived field has no ref or version of its own.
+A [`WithDerive`](/docs/usage/derived-fields/)-declared field appears in `Fields` like any other when its rebuilt value changes. Its versions are content hashes of the value rather than provider revisions, since it has no ref.
 
 ```go
 mamori.OnChange(func(ev mamori.Change[Config]) {

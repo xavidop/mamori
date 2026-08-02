@@ -386,7 +386,18 @@ func derivedFieldChanges[T any](oldCfg, newCfg T, derives []typedDerive[T], spec
 			if reflect.DeepEqual(of.Interface(), nf.Interface()) {
 				continue
 			}
-			fields = append(fields, FieldChange{Path: p})
+			// Versions come from the values themselves (derivedVersion,
+			// derivedversion.go), the same content hash Status reports for a
+			// derived field, rather than being left blank. A derived field has
+			// no ref, so there is no provider revision to carry here, but the
+			// caller asked what changed and "" -> "" answers nothing. Both
+			// sides are non-empty and differ, since the DeepEqual above
+			// already established the values differ.
+			fields = append(fields, FieldChange{
+				Path:       p,
+				OldVersion: derivedVersion(of),
+				NewVersion: derivedVersion(nf),
+			})
 		}
 	}
 	return fields
@@ -1334,8 +1345,9 @@ func (e *engine[T]) buildCandidate() (cand T, fields []FieldChange, err error) {
 			e.applied[spec.Path] = v.Version
 		}
 	}
-	// A declared derive write path carries no ref and no Version, so it never
-	// shows up in the loop above; append its own diff here, comparing the
+	// A declared derive write path has no ref and so no fieldSpec, which is
+	// why it never shows up in the loop above; append its own diff here,
+	// comparing the
 	// value at each declared path in the previously-applied config against the
 	// same path in cand (already carrying whatever the derive loop above just
 	// wrote to it). See derivedFieldChanges for why this is the single
@@ -1501,12 +1513,13 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 	}
 	e.o.log().Info("config change applied", logAttrCount, len(fields))
 	for _, f := range fields {
-		// A derived FieldChange carries no ref and no Version (see
-		// derivedFieldChanges, above); logging it here would print a
-		// misleading empty version="" for a field that was never resolved
-		// from anything. isDerivedPath is the same check the metering loops
-		// above use, so this can never disagree with them about which
-		// fields in this same slice are derived.
+		// A derived FieldChange does carry a Version (derivedFieldChanges,
+		// above, hashes both sides), but it is a content hash of the value,
+		// not a backend revision, and this log line pairs with the refresh
+		// metering above: both describe a field mamori resolved from a
+		// provider, which a derived field never is. isDerivedPath is the same
+		// check the metering loops use, so the two can never disagree about
+		// which fields in this same slice are derived.
 		if e.isDerivedPath(f.Path) {
 			continue
 		}

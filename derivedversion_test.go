@@ -201,3 +201,34 @@ func TestDerivedVersionTerminatesOnCycle(t *testing.T) {
 		t.Fatal("derivedVersion did not terminate on a cyclic value")
 	}
 }
+
+// TestDerivedFieldChangeCarriesVersions pins that a derived FieldChange
+// reports the same content hash Status does on both sides, rather than the
+// blank "" -> "" a caller's log loop cannot read. The two sides must differ:
+// derivedFieldChanges only emits an entry when the values already differ.
+func TestDerivedFieldChangeCarriesVersions(t *testing.T) {
+	type cfg struct {
+		Pass secret.String
+		DSN  secret.String
+	}
+	derives := []typedDerive[cfg]{{
+		fn:     func(c *cfg) error { c.DSN = secret.NewString("dsn-" + c.Pass.Reveal()); return nil },
+		writes: []string{"DSN"},
+	}}
+	oldCfg := cfg{Pass: secret.NewString("old"), DSN: secret.NewString("dsn-old")}
+	newCfg := cfg{Pass: secret.NewString("new"), DSN: secret.NewString("dsn-new")}
+
+	got := derivedFieldChanges(oldCfg, newCfg, derives, nil)
+	if len(got) != 1 {
+		t.Fatalf("got %d FieldChange(s), want 1", len(got))
+	}
+	if got[0].OldVersion == "" || got[0].NewVersion == "" {
+		t.Fatalf("derived FieldChange has a blank version: old=%q new=%q", got[0].OldVersion, got[0].NewVersion)
+	}
+	if got[0].OldVersion == got[0].NewVersion {
+		t.Fatalf("both versions are %q, but the values differ", got[0].OldVersion)
+	}
+	if want := derivedVersion(reflect.ValueOf(newCfg.DSN)); got[0].NewVersion != want {
+		t.Fatalf("NewVersion = %q, want the same hash Status reports (%q)", got[0].NewVersion, want)
+	}
+}
