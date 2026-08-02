@@ -666,12 +666,15 @@ func TestReportJSONNeverCarriesDerivedValue(t *testing.T) {
 	}
 }
 
-// TestHealthyUnaffectedByDerivedField pins the brief's third constraint: a
-// derived field has no ref, so it can never be stale and can never carry a
-// resolve error, and Healthy must reflect that - not merely happen to stay
-// true because a fresh Derived entry's zero-valued LastKind/Stale coincide
-// with "healthy".
-func TestHealthyUnaffectedByDerivedField(t *testing.T) {
+// TestWatcherHealthyUnaffectedByDerivedField pins the brief's third
+// constraint, narrowed to the case that stays true after fieldUnhealthy
+// stopped short-circuiting on Derived: a Watcher.Status derived field still
+// has no ref, so it can never be stale and can never carry a resolve error - a
+// hook that fails rejects the whole candidate in buildCandidate, so a
+// published config never contains a failed derive. The Doctor case, where a
+// failing hook DOES make a report unhealthy, is covered separately by
+// TestDoctorFailingHookIsUnhealthy (doctor_derive_test.go).
+func TestWatcherHealthyUnaffectedByDerivedField(t *testing.T) {
 	clk := NewFakeClock(time.Time{})
 	wp := newWatchProvider("sderive-health")
 	wp.set("user", "alice", "v1")
@@ -1343,18 +1346,15 @@ func TestStatusReportsSensitiveOnDerivedSecretField(t *testing.T) {
 	}
 }
 
-// TestFieldUnhealthyDerivedGuardShortCircuits pins the Derived guard in
-// fieldUnhealthy directly, rather than relying on every Derived FieldStatus
-// this package happens to construct having a zero LastKind and Stale ==
-// false anyway (which is what let a review round notice the guard could be
-// deleted with the full suite staying green). This constructs a FieldStatus
-// that every rule BELOW the guard would call unhealthy - a terminal LastKind
-// and Stale both set - so only the early "if fs.Derived { return false }"
-// return can make this pass.
-func TestFieldUnhealthyDerivedGuardShortCircuits(t *testing.T) {
-	fs := FieldStatus{Derived: true, Stale: true, LastKind: KindNotFound}
-	if fieldUnhealthy(fs) {
-		t.Fatal("fieldUnhealthy(Derived: true, Stale: true, LastKind: KindNotFound) = true, want false: the Derived guard must short-circuit before the Stale/LastKind checks below it")
+// TestFieldUnhealthyDerivedCountsInvalidHook replaces the short-circuit test
+// this guard used to need. A derived row carrying KindInvalid from a failed
+// Doctor hook must count as unhealthy; a healthy derived row must not.
+func TestFieldUnhealthyDerivedCountsInvalidHook(t *testing.T) {
+	if !fieldUnhealthy(FieldStatus{Path: "DSN", Derived: true, LastKind: KindInvalid}) {
+		t.Fatal("a derived row with KindInvalid must be unhealthy")
+	}
+	if fieldUnhealthy(FieldStatus{Path: "DSN", Derived: true, Version: "abc"}) {
+		t.Fatal("a healthy derived row must not be unhealthy")
 	}
 }
 

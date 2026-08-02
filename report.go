@@ -141,15 +141,14 @@ func (e *engine[T]) buildReport() *Report {
 // judged only by staleness, since KindUnavailable and KindRateLimited are
 // expected to self-heal on the next successful resolve.
 //
-// A Derived field is never unhealthy, checked explicitly rather than left to
-// fall out of its zero-valued LastKind and Stale: it has no ref, so there is
-// no resolve that could fail and no staleness clock that could elapse, and the
-// explicit check is what keeps that true even if a future caller ever
-// constructed a Derived FieldStatus carrying stray state.
+// A Derived field is judged by the same rules. It has no ref and no staleness
+// clock, so LastKind and Stale are zero for it in a Watcher.Status report and
+// it cannot go unhealthy there: a hook that fails rejects the whole candidate
+// in buildCandidate, so a published config never contains a failed derive. A
+// Doctor probe is the case this matters for - it evaluates the hooks directly
+// (see doctorDerivedFields, doctor.go) and marks a failing one KindInvalid,
+// which must count.
 func fieldUnhealthy(fs FieldStatus) bool {
-	if fs.Derived {
-		return false
-	}
 	switch fs.LastKind {
 	case KindNotFound, KindPermissionDenied, KindUnauthenticated, KindInvalid:
 		return true

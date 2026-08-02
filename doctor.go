@@ -37,6 +37,7 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 
 	now := o.clock.Now()
 	fields := make([]FieldStatus, 0, len(specs))
+	res := make([]resolved, 0, len(specs))
 	healthy := true
 	for _, spec := range specs {
 		val, idx, rerr := probeField(ctx, spec, o)
@@ -81,7 +82,28 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 			healthy = false
 		}
 		fields = append(fields, fs)
+
+		switch {
+		case rerr == nil:
+			res = append(res, resolved{spec: spec, value: val, found: true, set: true})
+		case errors.Is(rerr, ErrNotFound) && spec.HasDefault:
+			// Mirror resolveOne (resolve.go:286-290) exactly: an absent field
+			// covered by a default is reported healthy above, so the hooks must
+			// see the default rather than the zero value, or the version this
+			// publishes would not match what Load computes.
+			res = append(res, resolved{
+				spec:  spec,
+				value: Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"},
+				found: false,
+				set:   true,
+			})
+		}
 	}
+
+	derivedFields, derivedHealthy := doctorDerivedFields[T](o, specs, res, healthy)
+	fields = append(fields, derivedFields...)
+	healthy = healthy && derivedHealthy
+
 	return Report{
 		Fields:      fields,
 		Snapshot:    0, // Doctor is a one-shot probe, not a running snapshot
@@ -89,6 +111,85 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 		Healthy:     healthy,
 		GeneratedAt: now,
 	}, nil
+}
+
+// doctorDerivedFields runs the registered WithDerive hooks against the values
+// the probe loop already resolved and returns one FieldStatus per declared
+// write path. It is Doctor's counterpart to the Derived append in buildReport
+// (report.go), and uses the same hasSpecPath / fieldByPath / CanInterface gates
+// so the two can never disagree about which paths produce a row.
+//
+// The hooks run only when every sourced field probed healthy. A hook fed a zero
+// value because its input was unreachable would produce a version that looks
+// real, does not match what production computes, and is worse than no version:
+// those rows report blocked instead. mamori cannot inspect a closure to learn
+// which fields it reads, so blocked is all-or-nothing across derived fields
+// rather than per-input.
+//
+// Running the hooks means Doctor executes caller code during a preflight.
+// WithDerive documents a hook as a pure transformation and nothing enforces it,
+// so this is a deliberate, documented trade: probing a derived field is not
+// possible without evaluating the function that produces it.
+func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, sourcesHealthy bool) ([]FieldStatus, bool) {
+	derives, err := typedDerives[T](o)
+	if err != nil || len(derives) == 0 {
+		// A mismatched hook type is Load's loud error, not a preflight's: it
+		// cannot produce a row here, and Doctor's contract is that the returned
+		// error covers only an unwalkable T.
+		return nil, true
+	}
+	var cfg T
+	var deriveErr error
+	if sourcesHealthy {
+		if err := buildInto(reflect.ValueOf(&cfg).Elem(), res, o.decodeHooks); err != nil {
+			deriveErr = err
+		} else {
+			for _, d := range derives {
+				if err := d.fn(&cfg); err != nil {
+					deriveErr = &DeriveError{Err: err}
+					break
+				}
+			}
+		}
+	}
+	cv := reflect.ValueOf(cfg)
+	seen := make(map[string]struct{})
+	healthy := true
+	var out []FieldStatus
+	for _, d := range derives {
+		for _, p := range d.writes {
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			if hasSpecPath(specs, p) {
+				continue
+			}
+			v, ok := fieldByPath(cv, p)
+			if !ok || !v.CanInterface() {
+				continue
+			}
+			fs := FieldStatus{
+				Path:      p,
+				Derived:   true,
+				Sensitive: v.Type() == secretStringType || v.Type() == secretBytesType,
+			}
+			switch {
+			case !sourcesHealthy:
+				fs.LastError = "not evaluated: a source field is unreachable"
+			case deriveErr != nil:
+				fs.LastError = deriveErr.Error()
+				fs.LastKind = KindInvalid
+			default:
+				fs.Version = derivedVersion(v)
+			}
+			if fieldUnhealthy(fs) {
+				healthy = false
+			}
+			out = append(out, fs)
+		}
+	}
+	return out, healthy
 }
 
 // probeField walks spec's precedence chain through resolveChain, returning
