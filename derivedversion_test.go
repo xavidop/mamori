@@ -3,6 +3,7 @@ package mamori
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/xavidop/mamori/secret"
 )
@@ -59,5 +60,144 @@ func TestDerivedVersionStableAcrossCalls(t *testing.T) {
 func TestDerivedVersionUnreadableIsEmpty(t *testing.T) {
 	if got := derivedVersion(reflect.Value{}); got != "" {
 		t.Fatalf("invalid reflect.Value gave %q, want empty", got)
+	}
+}
+
+// TestDerivedVersionRevealsNestedSecret is the top-level secret guard one level
+// down, and the one that matters in practice: the derived-fields guide tells
+// callers to assemble credentials into a secret.String, and nothing stops them
+// declaring the enclosing struct as the write path. Formatting that struct
+// hashes "[REDACTED]" for the secret inside it, so every rotation of the
+// credential would report an identical, rotation-proof version.
+func TestDerivedVersionRevealsNestedSecret(t *testing.T) {
+	type Creds struct {
+		User string
+		Pass secret.String
+	}
+	old := derivedVersion(reflect.ValueOf(Creds{User: "u", Pass: secret.NewString("old")}))
+	fresh := derivedVersion(reflect.ValueOf(Creds{User: "u", Pass: secret.NewString("new")}))
+	if old == "" || fresh == "" {
+		t.Fatalf("expected non-empty versions, got %q and %q", old, fresh)
+	}
+	if old == fresh {
+		t.Fatalf("a struct holding two different secrets hashed identically to %q: the nested secret was redacted, not revealed", old)
+	}
+}
+
+// TestDerivedVersionRevealsSecretAnywhere covers the rest of the shapes a
+// secret can hide in: a slice element, a map value, and behind a pointer or an
+// interface. Each pair differs only in the secret's plaintext.
+func TestDerivedVersionRevealsSecretAnywhere(t *testing.T) {
+	oldS, newS := secret.NewString("old"), secret.NewString("new")
+	cases := []struct {
+		name     string
+		old, new any
+	}{
+		{"slice element", []secret.String{oldS}, []secret.String{newS}},
+		{"map value", map[string]secret.String{"db": oldS}, map[string]secret.String{"db": newS}},
+		{"pointer", &oldS, &newS},
+		{"interface field", struct{ V any }{oldS}, struct{ V any }{newS}},
+		{"secret bytes in a struct", struct{ B secret.Bytes }{secret.NewBytes([]byte("old"))}, struct{ B secret.Bytes }{secret.NewBytes([]byte("new"))}},
+		{"unexported field", newUnexportedSecret("old"), newUnexportedSecret("new")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := derivedVersion(reflect.ValueOf(tc.old))
+			b := derivedVersion(reflect.ValueOf(tc.new))
+			if a == "" || b == "" {
+				t.Fatalf("expected non-empty versions, got %q and %q", a, b)
+			}
+			if a == b {
+				t.Fatalf("two different secrets hashed identically to %q", a)
+			}
+		})
+	}
+}
+
+// unexportedSecret holds a secret where reflect refuses to hand it back through
+// Interface, so the canonical walk has to reach the bytes structurally.
+type unexportedSecret struct {
+	pass secret.String
+}
+
+func newUnexportedSecret(s string) unexportedSecret {
+	return unexportedSecret{pass: secret.NewString(s)}
+}
+
+// TestDerivedVersionHashesPointeeNotAddress pins that a pointer field is hashed
+// by what it points at. Hashing the address instead reports a fresh Version on
+// every rebuild even when nothing changed, while ev.Changed (which compares
+// with reflect.DeepEqual) correctly reports no change: the two disagree.
+func TestDerivedVersionHashesPointeeNotAddress(t *testing.T) {
+	type Holder struct{ P *string }
+	p, q, r := "x", "x", "y"
+	first := derivedVersion(reflect.ValueOf(Holder{P: &p}))
+	second := derivedVersion(reflect.ValueOf(Holder{P: &q}))
+	if first != second {
+		t.Fatalf("two pointers to equal contents hashed differently (%q vs %q): the address was hashed, not the pointee", first, second)
+	}
+	if changed := derivedVersion(reflect.ValueOf(Holder{P: &r})); changed == first {
+		t.Fatalf("a pointer to different contents hashed identically to %q", changed)
+	}
+	if nilled := derivedVersion(reflect.ValueOf(Holder{})); nilled == first {
+		t.Fatal("a nil pointer hashed the same as a pointer to a value")
+	}
+}
+
+// TestDerivedVersionDistinguishesFieldBoundaries guards the framing the walk
+// adds: without it, two structs whose fields concatenate to the same text would
+// share a version, so a rotation that only moved a character between fields
+// would report as no change at all.
+func TestDerivedVersionDistinguishesFieldBoundaries(t *testing.T) {
+	type Pair struct{ A, B string }
+	if a, b := derivedVersion(reflect.ValueOf(Pair{"ab", ""})), derivedVersion(reflect.ValueOf(Pair{"a", "b"})); a == b {
+		t.Fatalf("Pair{\"ab\", \"\"} and Pair{\"a\", \"b\"} both hashed to %q", a)
+	}
+}
+
+// TestDerivedVersionStableForNestedValues pins determinism for the shapes the
+// walk has to normalize itself: map iteration order is randomized per range,
+// and a func value carries an address.
+func TestDerivedVersionStableForNestedValues(t *testing.T) {
+	type Nested struct {
+		M  map[string]int
+		Fn func()
+		S  []*string
+	}
+	s1, s2 := "a", "a"
+	first := derivedVersion(reflect.ValueOf(Nested{
+		M:  map[string]int{"a": 1, "b": 2, "c": 3, "d": 4},
+		Fn: func() {},
+		S:  []*string{&s1},
+	}))
+	second := derivedVersion(reflect.ValueOf(Nested{
+		M:  map[string]int{"d": 4, "c": 3, "b": 2, "a": 1},
+		Fn: func() {},
+		S:  []*string{&s2},
+	}))
+	if first != second {
+		t.Fatalf("equal nested values hashed differently: %q vs %q", first, second)
+	}
+}
+
+// TestDerivedVersionTerminatesOnCycle pins the depth bound: a config struct is
+// a tree, but a self-referential pointer would otherwise recurse forever now
+// that the walk follows pointers by value.
+func TestDerivedVersionTerminatesOnCycle(t *testing.T) {
+	type Node struct {
+		Name string
+		Next *Node
+	}
+	n := &Node{Name: "a"}
+	n.Next = n
+	done := make(chan string, 1)
+	go func() { done <- derivedVersion(reflect.ValueOf(n)) }()
+	select {
+	case got := <-done:
+		if got == "" {
+			t.Fatal("a cyclic value hashed to the empty string, want a real version")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("derivedVersion did not terminate on a cyclic value")
 	}
 }

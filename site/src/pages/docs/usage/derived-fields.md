@@ -63,6 +63,8 @@ mamori.OnChange(func(ev mamori.Change[Config]) {
 
 The assembled DSN embeds the password, so the target field should be a `secret.String` (or `secret.Bytes`), not a plain `string`. That is what keeps the rebuilt value redacted in `fmt`, JSON, and `slog`, the same as any other secret field. `Status()` never carries a derived field's value at all, so this matters for your own logging and error messages, not for what mamori reports.
 
+Redaction does not weaken the reported `Version`. mamori hashes the real content, walking into whatever the write path names: a secret is revealed for hashing wherever it sits, including one nested inside a struct, a slice, a map, or behind a pointer, so declaring the enclosing struct as the write path still reports a version that changes the moment the credential rotates. A pointer field is hashed by what it points at, not by its address, so a rebuild that changed nothing reports the same version rather than churning. The hash is never a way back to the value.
+
 ## A derive error rejects the whole update
 
 Returning an error from a derive rejects the whole candidate configuration, exactly as a validation failure does: `Get()` keeps returning the last valid config, and the error reaches `OnError` as a `*DeriveError`.
