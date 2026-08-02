@@ -13,8 +13,8 @@ Full docs: https://mamorigo.dev/docs . Core module: `github.com/xavidop/mamori`.
 
 ## The model in one minute
 
-- Each struct field carries a `source:` tag: a small ref to a value in a
-  provider (`env:LOG_LEVEL`, `aws-sm://prod/db#password`, `file:///etc/x`).
+- Each struct field carries a `source:` tag: a ref to a value in a provider
+  (`env:LOG_LEVEL`, `aws-sm://prod/db#password`, `file:///etc/x`).
 - A **provider** resolves one scheme. Providers register via a blank import (the
   `database/sql` pattern), so the core module has no cloud-SDK dependencies.
 - `Load` resolves and validates once. `Watch` resolves once (fail-fast) then keeps
@@ -28,7 +28,7 @@ Full docs: https://mamorigo.dev/docs . Core module: `github.com/xavidop/mamori`.
 import (
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/secret"
-	_ "github.com/xavidop/mamori/providers/aws" // registers aws-sm://, aws-ps://, and aws-appconfig://
+	_ "github.com/xavidop/mamori/providers/aws" // registers aws-sm://, aws-ps://, aws-appconfig://
 )
 
 type Config struct {
@@ -37,52 +37,45 @@ type Config struct {
 	DBPassword secret.String `source:"aws-sm://prod/db#password" validate:"required"`
 }
 
-cfg, err := mamori.Load[Config](ctx) // returns *Config, or an error and no partial struct
+cfg, err := mamori.Load[Config](ctx) // *Config, or an error and no partial struct
 ```
 
-Rules to hold onto:
-- Use `secret.String` / `secret.Bytes` for anything sensitive. Never a plain
-  `string` for a secret (`mamori vet` flags that).
+- Use `secret.String` / `secret.Bytes` for anything sensitive, never a plain
+  `string` (`mamori vet` flags that).
 - `default:` applies only to genuine absence (not-found), never to a real error.
+- `optional:"true"` leaves a missing field at its zero value instead of failing.
 - `validate:` uses go-playground/validator/v10 syntax and runs on load AND on
   every reconciled update; an invalid update is rejected atomically.
-- `#key` selects one field from a JSON payload. A fragment beginning with `/`
-  is an RFC 6901 JSON Pointer, addressing a value at any depth through objects
-  and array elements: `source:"aws-sm://prod/db#/credentials/password"`,
-  `source:"aws-sm://prod/db#/replicas/5/host"`. Any other fragment is a
-  literal top-level key, exactly as before: `source:"k8s-secret://prod/tls#ca.crt"`.
-  Do not restructure a secret or add application-code plumbing to reach a
-  nested field when a pointer fragment already reaches it directly.
-- `?decode=` declares a resolved value is encoded, so core decodes it before
-  the field is populated: `source:"aws-sm://prod/tls#key?decode=base64"`.
-  Codings are `base64`, `base64url`, `hex`, `gzip`, `trim` - a closed,
-  stdlib-only set - applied left to right, outermost wrapper first:
-  `?decode=base64,gzip` reads as "base64 of gzip", so it is base64-decoded
-  then gunzipped. Decode runs *after* `#key` selection, so it cannot reach
-  into a payload that only exists once decoded - drop the `#key`, decode the
-  whole payload, and use `flatten:"json"` for that case instead. A bad
-  payload is a loud `ErrInvalid`, never silently passed through; a field's
-  `default:` value is exempt - it is used as-is, undecoded. Decoding is done
-  by core in the process that loads the config, so `?decode=` belongs on the
-  `source` tag you write - including a `mamori://name` ref pointing at a
-  config server. A server-side binding may not carry it (`server.New`
-  rejects it), since that server never runs the pipeline.
-- `${VAR}` in a `source` tag is ref interpolation: it expands from the map
-  passed to `mamori.WithRefVars(map[string]string{...})`, once, before the
-  tag is parsed - `source:"aws-sm://${ENV}/db#password"`. **Variables come
-  only from `WithRefVars`, never `os.Getenv` or any other ambient source** -
-  the same opt-in posture as `exec:`/`WithExecProvider`, because a ref
-  decides which secret gets read and that must not be steerable by anything
-  able to set an environment variable. If a variable's value should come
-  from the environment, opt in explicitly and by name with
-  `mamori.WithRefVars(mamori.EnvVars("ENVIRONMENT", "REGION"))` - do not
-  suggest reading `os.Getenv` directly into a ref. A bare `$VAR` (no braces)
-  is untouched and `$$` is a literal `$`. An undefined variable, an
-  unterminated `${`, or an empty `${}` are all hard errors, not a silently
-  empty path segment. `WithRefVars` values must not be secrets: the
-  expanded ref is visible in `Status()`, the admin `Report`, and
-  `mamori doctor` output - use it for environment names, regions, and
-  similar identifiers, never for anything confidential.
+- `flatten:"json|yaml|env"` decodes one payload into a nested struct.
+
+## Ref syntax
+
+| Form | Meaning |
+| --- | --- |
+| `scheme://path` | resolve this ref |
+| `#key` | select one top-level key from a JSON payload |
+| `#/a/b/5` | RFC 6901 JSON Pointer, any depth, through objects and arrays |
+| `?decode=` | value is encoded: `base64`, `base64url`, `hex`, `gzip`, `trim` |
+| `${VAR}` | interpolated from `WithRefVars`, before the tag is parsed |
+| `a,b,c` | precedence chain: first ref that resolves wins |
+
+- Reach a nested field with a pointer fragment rather than restructuring the
+  secret or adding plumbing: `source:"aws-sm://prod/db#/credentials/password"`.
+- `?decode=` codings apply left to right, outermost wrapper first, so
+  `?decode=base64,gzip` is base64-decoded then gunzipped. It runs AFTER `#key`
+  selection, so it cannot reach into a payload that only exists once decoded:
+  drop the `#key`, decode the whole payload, and use `flatten:"json"`. A bad
+  payload is a loud `ErrInvalid`; a `default:` value is exempt and used as-is.
+- **`${VAR}` expands only from `WithRefVars`, never `os.Getenv` or any ambient
+  source.** A ref decides which secret gets read, so it must not be steerable by
+  anything able to set an environment variable. To source one from the
+  environment, opt in by name: `mamori.WithRefVars(mamori.EnvVars("ENV", "REGION"))`.
+  Never suggest reading `os.Getenv` into a ref. A bare `$VAR` is untouched, `$$`
+  is a literal `$`, and an undefined variable or unterminated `${` is a hard
+  error. Values must not be secrets: the expanded ref appears in `Status()`, the
+  admin `Report`, and CLI output.
+- On a chain, `onfail:"keeplast|default|fail"` governs what happens on a real
+  error, as opposed to a not-found.
 
 ## Watch for live changes
 
@@ -100,81 +93,143 @@ defer w.Close()
 cfg := w.Get() // latest fully-valid snapshot, safe to call anytime
 ```
 
-`OnChange[T]` must be typed to the same `T` passed to `Watch[T]`/`Load[T]`. If it is not - a type alias, a config struct renamed in a refactor, a generic helper passing the wrong type through - `Watch`/`Load` fails outright with an error wrapping `ErrInvalid` naming both types, rather than compiling clean and then silently never calling the callback.
+`OnChange[T]` must be typed to the same `T` passed to `Watch[T]`/`Load[T]`. A
+mismatch fails `Watch`/`Load` outright with an error wrapping `ErrInvalid`
+naming both types, rather than compiling clean and never firing.
 
 ## Verify a rotated credential before it goes live
 
-`OnChange` fires after `Get()` already serves the new value - too late to refuse a credential that turns out not to work. `mamori.PreApply` installs a gate that runs after validation and before the atomic swap; returning an error rejects the candidate (`Get()` keeps the last good config, `OnChange` does not fire, `OnError` gets a `*PreApplyError`) and the check runs on the initial load too, so a bad configured credential fails `Watch`/`Load` at startup rather than at the first rotation.
+`OnChange` fires after `Get()` already serves the new value, too late to refuse a
+credential that does not work. `PreApply` runs after validation and before the
+swap; returning an error rejects the candidate (`Get()` keeps the last good
+config, `OnChange` does not fire, `OnError` gets a `*PreApplyError`). It runs on
+the initial load too, so a bad credential fails at startup, not at first rotation.
 
 ```go
 mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
 	if !ev.Changed("DBPassword") {
-		return nil // guard: only re-verify the field that actually rotated
+		return nil // only re-verify the field that actually rotated
 	}
 	return pool.Ping(ctx, ev.New.DBPassword.Reveal())
 })
 ```
 
-Rules to hold onto:
-- `WithPreApplyTimeout` bounds the hook, defaulting to 10s. It cannot be disabled, and exceeding it is a **rejection**, not an acceptance - mamori does not know the candidate works, so it does not apply it.
-- The hook runs on the reconciler goroutine. `w.Get()` is lock-free and safe to call from inside it. `w.Pin`, `w.PinCurrent`, `w.Unpin`, and `w.Refresh` are commands serviced by that same goroutine, and the timeout does not rescue them - `Pin`/`PinCurrent`/`Unpin` take no `ctx` at all, and `Refresh` takes the caller's `ctx`, not the hook's. Never call back into the same `Watcher` from a `PreApply` hook. mamori detects it if you do, and refuses the call rather than hanging: `Pin` and `Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0` (versions start at 1), and `Unpin` does nothing and leaves the watcher pinned. Calls from any other goroutine are unaffected.
-- **The same rule covers `OnError`,** which is delivered inline on the reconciler goroutine rather than through the `OnChange` queue. Do not call `w.Refresh` from an `OnError` callback to retry a rejected reload - it returns `ErrReentrantCall`. Issue it from another goroutine, or let the next reconciliation carry it. `OnChange` is safe: it runs on its own dispatch goroutine.
-- A hook typed for a different config than the one passed to `Watch[T]`/`Load[T]` fails `Watch` and `Load` outright (an error wrapping `ErrInvalid`), rather than silently leaving the gate open.
+- `WithPreApplyTimeout` bounds the hook (default 10s) and cannot be disabled.
+  Exceeding it is a **rejection**: mamori does not know the candidate works.
+- **Never call back into the same `Watcher` from `PreApply`, `WithDerive`, or
+  `OnError`.** All three run inline on the reconciler goroutine, so `Pin` and
+  `Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0`, and `Unpin` does
+  nothing. `Get()` is safe. `OnChange` runs on its own goroutine and is exempt.
 
 ## Derive fields from already-resolved fields
 
-`mamori.WithDerive` computes a field from other already-resolved fields (a DSN from a host, a user, and a rotating password) so it is rebuilt on every applied update instead of going stale when one input rotates. It runs after decode, before validation, and before `PreApply`, so a rotation-safety gate proves the rebuilt value. Declare the dotted paths it writes as trailing arguments: that is what makes the field visible.
+`WithDerive` computes a field from other resolved fields, so a value assembled
+from several of them is rebuilt on every update instead of going stale when one
+input rotates. It runs after decode, before validation.
 
 ```go
 mamori.WithDerive(func(c *Config) error {
 	c.DSN = secret.NewString((&url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(c.User, c.DBPassword.Reveal()),
-		Host:   c.Host,
-		Path:   "/app",
+		Scheme: "postgres", User: url.UserPassword(c.User, c.Pass.Reveal()),
+		Host: c.Host, Path: "/app",
 	}).String())
 	return nil
 }, "DSN")
 ```
 
-Rules to hold onto:
-- Assemble with `net/url`, not `fmt.Sprintf`: a password containing `@` or `/` needs escaping. Assign into `secret.String`/`secret.Bytes` so the result stays redacted.
-- Multiple calls append rather than replace and run in registration order, each keeping its own writes, so deriving from a derived field just works.
-- Returning an error rejects the whole candidate: `Get()` keeps the last valid config, `OnChange` does not fire, `OnError` gets a `*DeriveError`.
-- A hook typed for the wrong config fails with `ErrInvalid`, never silently, like a mismatched `PreApply`. `Doctor` reports it as a `KindInvalid` row per declared path.
-- **Never call back into the same `Watcher`.** A derive runs inline on the reconciler goroutine: `Pin`/`Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0`, `Unpin` does nothing. Worse than `PreApply`, since a derive takes no `ctx` and so has no timeout bound either.
-- **A declared path behaves like any other field** in `ev.Changed()` and `Status()`, so trigger on the derived field, not on each input feeding it. Its `Status()` entry carries `Version`, a content hash that reveals secrets wherever they sit (nested in a struct, slice, map, or behind a pointer) and hashes a pointee rather than an address. It never carries `Ref`/`Scheme`. In `Watcher.Status()` `Version` is always set; see `Doctor` below for when it is blank.
-- **An undeclared write is invisible** to `ev.Changed()`, to `Status()`, and to mamori's own detection: it reads declared paths, never the hook body.
-- Static commands never see a derived field: `explain`, `schema`, `policy`, `vet`, and `diff` (which reads `explain --json`) all walk `source:` tags. Use `mamori status`, `mamori doctor`, or the `mamori.Doctor` preflight.
+- Assemble with `net/url`, not `fmt.Sprintf`: a password containing `@` or `/`
+  needs escaping. Assign into `secret.String` so the result stays redacted.
+- The trailing paths declare what the hook writes. Declaring them is what makes
+  the field visible to `ev.Changed()` and `Status()`; an undeclared write is
+  invisible. Trigger on the derived field, not on each input.
+- Returning an error rejects the whole candidate, reaching `OnError` as a
+  `*DeriveError`. Multiple hooks run in registration order.
+- Static CLI commands never see a derived field, since it has no `source:` tag.
 
 ## Force an immediate refresh
 
-`w.Refresh(ctx)` re-resolves every field right now, bypassing poll intervals, and **blocks until the result is applied or rejected** - which is the point: a SIGHUP handler wants to know whether the reload it triggered actually worked, not just that it was requested.
+`w.Refresh(ctx)` re-resolves every field now, bypassing poll intervals, and
+blocks until the result is applied or rejected, so a SIGHUP handler learns
+whether the reload worked.
 
 ```go
-for range sighupCh {
-	switch err := w.Refresh(ctx); {
-	case err == nil:
-		log.Println("reload applied")
-	case ctx.Err() != nil:
-		// You stopped waiting; the reload still proceeds. Not a rejection.
-		log.Printf("stopped waiting for the reload: %v", err)
-	default:
-		log.Printf("reload rejected: %v", err) // derive, validation, PreApply, or onfail:"fail"
-	}
+switch err := w.Refresh(ctx); {
+case err == nil:
+	log.Println("reload applied") // also returned when nothing changed
+case ctx.Err() != nil:
+	log.Printf("stopped waiting; the reload still proceeds: %v", err)
+default:
+	log.Printf("reload rejected: %v", err) // derive, validation, PreApply, onfail:"fail"
 }
 ```
 
-- It returns `nil` when a snapshot was applied *and* when nothing had changed; both mean `Get()` is current.
-- It still runs `PreApply` - a forced refresh is gated exactly like any other one, never bypassed.
-- Cancelling `ctx` stops the wait and returns `ctx.Err()`, but the reconciler still finishes re-resolving and applying (or rejecting) what it already started; there is no half-applied snapshot.
-- It runs on the reconciler goroutine, so for its duration `Pin`/`Unpin` wait, watch updates queue up, and no new `Report` is published - reach for it from an operator trigger (SIGHUP, an authorized admin route), not a hot path.
-- For a `mamori://` field, `Refresh` re-reads the config server's current value; it does not force that server to re-fetch its own upstream (see the [config server docs](https://mamorigo.dev/docs/server) for why that stays gated).
+- It still runs `PreApply`. A forced refresh is gated like any other.
+- Cancelling `ctx` stops the wait, not the work. There is no half-applied snapshot.
+- It occupies the reconciler goroutine, so use it from an operator trigger
+  (SIGHUP, an authorized admin route), not a hot path.
+
+## Pin a snapshot
+
+`w.Pin(version)` freezes what `Get()` returns while sources keep being watched
+underneath: `Status` reports `Live` advancing while `Snapshot` stays put. Use it
+to hold a known-good config during an incident. It returns `ErrNoSuchSnapshot`
+if that version is no longer retained, so raise `WithHistory` to pin further
+back. `w.PinCurrent()` pins what is being served right now and returns its
+version, `w.Unpin()` releases, and `w.Pinned()` reports the state.
+
+`WithHistory(n)` keeps the last `n` snapshots reachable through `w.History()`,
+each with its `Version`, `At`, `Config`, and changed `Fields`. It extends the
+in-memory lifetime of old secrets, so enable it deliberately.
+
+## Watch one ref without a struct
+
+`mamori.WatchRef(ctx, provider, ref, opts...) <-chan Update` streams changes for
+a single ref, for cases that do not warrant a config struct. It uses the
+provider's native watch when there is one and polls otherwise.
+
+## Options reference
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `OnChange(fn)` | none | called after an update is applied, on its own goroutine |
+| `OnError(fn)` | none | called inline on the reconciler goroutine |
+| `PreApply(fn)` | none | gate a candidate before the swap |
+| `WithDerive(fn, paths...)` | none | compute fields from resolved fields |
+| `WithProvider(p)` | registry | register a provider for this call only |
+| `WithValidator(v)` | go-playground | replace the validator |
+| `WithDecodeHook(h)` | none | mapstructure hook for `flatten:` payloads |
+| `WithRefVars(m)` | none | values for `${VAR}` in refs |
+| `WithExecProvider()` | off | opt in to the `exec:` scheme |
+| `WithPollInterval(d)` | 30s | poll cadence for providers without native watch |
+| `WithJitter(f)` | 0.2 | fraction of the interval to randomize |
+| `WithDebounce(d)` | 500ms | coalesce bursts of updates |
+| `WithQueueDepth(n)` | 16 | `OnChange` queue; drops oldest when full |
+| `WithBackoff(base, max)` | provider default | retry pacing after failures |
+| `WithStale(maxAge)` | off | a ref unrefreshed this long sends `OnError` a `*StaleError` |
+| `WithPreApplyTimeout(d)` | 10s | bound the `PreApply` hook |
+| `WithHistory(n)` | 0 | keep the last `n` snapshots |
+| `WithLogger(l)` | discard | structured trail; never logs a resolved value |
+| `WithMeter(m)` | noop | metrics; see `x/otel`, `x/prom` |
+| `WithTracer(t)` | noop | spans around resolves |
+| `WithClock(c)` | system | inject time in tests |
+| `WithAdminHTTP(addr, ...)` | off | serve `Report` over HTTP |
+| `WithAdminTLS(cfg)` | off | TLS for the admin endpoint |
+| `WithAuth(a)` | none | a `HandlerOption` for `WithAdminHTTP`, not an `Option` |
+
+## Error kinds
+
+`mamori.ErrorKind(err)` classifies a failure as `not_found`,
+`permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`,
+`invalid`, or `unknown`. The first four and `invalid` are terminal and will not
+clear without human action; `unavailable` and `rate_limited` are expected to
+self-heal. Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrReentrantCall`,
+`ErrNoSuchSnapshot`. Typed errors: `*ProviderError`, `*PreApplyError`,
+`*DeriveError`, `*StaleError`.
 
 ## Choosing a provider
 
-Pick the scheme, add its module, blank-import it. Common ones (see
-`references/providers.md` for the full list and ref syntax):
+Pick the scheme, add its module, blank-import it. See `references/providers.md`
+for the full list and ref syntax.
 
 - `env:NAME`, `file:///path`, `dotenv://...`, `exec:...` (core, no extra module)
 - `aws-sm://` / `aws-ps://`, `vault://`, `gcp-sm://`, `azure-kv://`, `doppler://`,
@@ -183,50 +238,40 @@ Pick the scheme, add its module, blank-import it. Common ones (see
   (`postgres://`, `mysql://`, `redis://`, `mongodb://`, ...), object stores,
   and feature-flag backends.
 
-Precedence chains: a `source:` tag may list several refs comma-separated
-(`env:PORT,aws-ps://svc/port`); the first that resolves wins, and `onfail`
-(keeplast / default / fail) governs what happens on a real error.
-
 ## The mamori CLI
 
 `brew install xavidop/tap/mamori` or `go install github.com/xavidop/mamori/cmd/mamori@latest`.
 
 - `mamori explain ./...` - list every `source:` ref in a package's config structs.
 - `mamori schema ./...` - emit JSON Schema from field types and `validate:` tags.
-- `mamori policy ./... --format=aws-iam|gcp|external-secret` - least-privilege access artifact.
-- `mamori diff <base.json> <head.json>` - compare two `mamori explain --json` outputs: fields and chains added, removed, or modified, fields that newly read secret material, and the privilege delta (backend paths gained and lost). Built for pull request CI: `--markdown` suits a PR comment, and `--exit-code=privilege` fails the build only when the permission surface grows.
-- `mamori vet ./...` - flag secret-bearing sources stored in a plain `string`/`[]byte`. Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`.
-- `--secret-schemes=mysecrets` - accepted by `explain`, `schema`, `policy`, `vet`, and `doctor --compare`; adds a custom provider's scheme to the built-in secret-bearing set so every command agrees on what is a secret.
-- `mamori doctor --endpoint <ep>` / `mamori status` - probe a running process's admin endpoint; exit codes 0 healthy, 1 unhealthy, 2 admin off, 3 unreachable, 4 auth failed.
+- `mamori policy ./... --format=aws-iam|gcp|external-secret` - least-privilege artifact.
+- `mamori diff <base.json> <head.json>` - compare two `explain --json` outputs:
+  fields and chains added or removed, fields newly reading secret material, and
+  the privilege delta. Built for PR CI: `--markdown` suits a comment, and
+  `--exit-code=privilege` fails only when the permission surface grows.
+- `mamori vet ./...` - flag secret-bearing sources in a plain `string`/`[]byte`.
+  Also works as a `go vet` tool: `go vet -vettool=$(which mamori) ./...`.
+- `mamori doctor --endpoint <ep>` / `mamori status` - probe a running process's
+  admin endpoint; exit 0 healthy, 1 unhealthy, 2 admin off, 3 unreachable, 4 auth failed.
+- `--secret-schemes=mysecrets` - accepted by `explain`, `schema`, `policy`,
+  `vet`, and `doctor --compare`, so every command agrees on what is a secret.
+
+The static commands read `source:` tags from Go source. They never see a derived
+field, and `mamori diff` inherits that since it reads `explain --json`.
 
 ## When helping a user
 
 - Suggest `secret.String` for secrets and confirm `mamori vet` would pass.
-- Prefer `Watch` when the program is long-running and should pick up rotations;
-  `Load` for one-shot / CLI programs.
-- For CI, recommend `mamori.Doctor` (library) as a pre-deploy check. It runs
-  every registered `WithDerive` hook and reports one row per declared write
-  path, with four outcomes:
-  - sources complete, hook succeeded: `Version` is a content hash
-  - sources complete, hook errored: `Version` blank, `KindInvalid`, unhealthy
-  - a source produced no value: hook never runs, `Version` blank, a
-    `LastError`, no `LastKind`
-  - hooks cannot be typed to the config: `KindInvalid` on every declared path,
-    unhealthy
-
-  "Produced no value" means the field neither resolved, nor fell back to
-  `default` (including via `onfail:"default"`), nor is an absent `optional`.
-  That is stricter than the report being healthy: a self-healing kind
-  (unavailable, rate-limited, unknown) leaves the report healthy and still
-  blocks the hooks. Blocking is all-or-nothing across derived fields, since
-  `Doctor` cannot inspect a closure to know which fields it reads.
-- Suggest `mamori.WithLogger(slog.Default())` for a structured log trail of
-  resolve failures, watch errors, and applied changes - it never logs a
-  resolved value and is silent (discard logger) until opted in.
-- Suggest `mamori.WithMeter` (see `x/otel` for an OpenTelemetry adapter, or
-  `x/prom` for a direct `prometheus/client_golang` implementation if the shop
-  has not adopted OpenTelemetry) to make failures alertable, not just
-  loggable - `RecordChangeDropped()` in particular is the signal that an
-  `OnChange` handler is too slow to keep up.
-- Point to https://mamorigo.dev/docs for provider auth details and the config
-  server (a separate fan-out module, `github.com/xavidop/mamori/server`).
+- Prefer `Watch` for long-running programs, `Load` for one-shot and CLI programs.
+- For CI, recommend the `mamori.Doctor` library call as a pre-deploy check. It
+  resolves every field once, reporting all failures rather than the first, and
+  runs every `WithDerive` hook, so a hook that errors or is typed for the wrong
+  config fails the preflight. A derived row carries a content-hash `Version` when
+  the hook ran; it is blank when the hook failed, when an input produced no
+  value, or when the hooks could not be typed. Note it executes hook code, so a
+  hook with side effects runs for real.
+- Suggest `WithLogger(slog.Default())` for a resolve-failure trail, and
+  `WithMeter` to make failures alertable. `RecordChangeDropped()` is the signal
+  that an `OnChange` handler is too slow to keep up.
+- Point to https://mamorigo.dev/docs for provider auth and the config server
+  (a separate fan-out module, `github.com/xavidop/mamori/server`).
