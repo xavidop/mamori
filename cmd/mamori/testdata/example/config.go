@@ -4,8 +4,8 @@
 // module (see go.mod) with a local stub of github.com/xavidop/mamori/secret
 // (see stub/secret), rather than depending on the real core module and its
 // full dependency graph: hermetic and fast, with no real-core dependency
-// tree in this fixture's go.sum. See cmd/mamori's task report for why this
-// approach was chosen over pointing the replace at the real core module.
+// tree in this fixture's go.sum, rather than pointing the replace at the
+// real core module.
 package example
 
 import "github.com/xavidop/mamori/secret"

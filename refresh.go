@@ -27,8 +27,7 @@ import "context"
 // Treating every non-nil error as a rejection is the mistake to avoid: a
 // cancelled ctx returns ctx.Err() while the reload goes on to apply anyway.
 //
-// It does NOT bypass PreApply. A refresh is what an operator reaches for right
-// after a credential rotates, which is when a gate matters most.
+// It does NOT bypass PreApply.
 //
 // Refresh is delivered to the reconciler goroutine over the same control
 // channel Pin, PinCurrent, and Unpin use, so it serializes with normal
@@ -52,10 +51,8 @@ import "context"
 // Unpin will publish the snapshot. Refresh does not silently unpin.
 //
 // For a field resolved through a mamori:// ref, Refresh re-reads the config
-// server's current value. It does not make the server re-resolve its own
-// upstream: the server exists so that N consumers cost one upstream watch
-// rather than N, and letting any client force an upstream fetch would invert
-// exactly that property.
+// server's current value; it does not make the server re-resolve its own
+// upstream.
 func (w *Watcher[T]) Refresh(ctx context.Context) error {
 	return w.sendPinCtx(ctx, pinCmd{kind: refresh}).err
 }

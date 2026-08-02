@@ -70,11 +70,8 @@ const (
 	attrScheme = "scheme"
 	attrStatus = "status"
 	// attrReason carries the mamori.RejectReason of a rejected apply
-	// ("validation", "preapply", or "derive"), a closed, bounded set - now
-	// three values, not two, since WithDerive added RejectDerive - so it stays
-	// a safe metric label regardless of exactly how many reasons mamori
-	// defines: the safety comes from the set being closed and small, not from
-	// its size being fixed at two.
+	// ("validation", "preapply", or "derive"), a closed, bounded set, so it
+	// stays a safe metric label regardless of how many reasons mamori defines.
 	attrReason = "reason"
 
 	statusOK    = "ok"

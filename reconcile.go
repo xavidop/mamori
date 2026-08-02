@@ -92,10 +92,9 @@ type options struct {
 // defaultOptions returns the option set every Load and Watch starts from.
 //
 // backoffBase/backoffMax are deliberately absent, leaving the retry backoff
-// window at zero: backoff is opt-in via WithBackoff. This used to name 1s/1m
-// here while nothing in the engine read either field, so those numbers never
-// described real behavior; adopting them once the option was implemented would
-// have changed the retry cadence of every existing caller. See WithBackoff.
+// window at zero: backoff is opt-in via WithBackoff. Giving them a nonzero
+// default here would silently turn backoff on for every existing caller and
+// change their retry cadence without them asking for it. See WithBackoff.
 func defaultOptions() *options {
 	return &options{
 		providers:       map[string]Provider{},
@@ -178,12 +177,9 @@ func WithHistory(n int) Option {
 // that delay, held at max once it gets there. Any successful round trip with
 // the backend resets it, and the ref returns to the normal poll interval.
 //
-// Backoff is OFF by default. Without this option a failing ref is retried on
-// the WithPollInterval cadence, exactly as it always has been - which is the
-// point: this option set two fields nothing read until it was implemented, so
-// no existing caller can have been relying on backoff, and switching it on for
-// everyone would have made a just-failed backend get retried far sooner than
-// its operators had ever seen. Choose the window deliberately.
+// Backoff is OFF by default: without this option a failing ref is retried on
+// the plain WithPollInterval cadence. Choose the window deliberately, since
+// turning it on changes how soon a just-failed backend gets retried.
 //
 // Normalization: a base of zero or less disables backoff, so WithBackoff(0, 0)
 // turns it back off. A max below base is raised to base, which gives
@@ -352,11 +348,10 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	}
 	// Checked here too, for the identical reason: a mismatched WithDerive hook
 	// is the same kind of caller bug as a mismatched PreApply one, and must
-	// fail before resolveAll spends a round trip, not after. Asserting the
-	// type back here, ahead of decode, is what the derives loop below needs -
-	// it used to run this same check after resolveAll and buildInto, which let
-	// a failing resolve mask the mismatch entirely and cost a full round of
-	// provider round trips first. See typedDerives's doc comment.
+	// fail before resolveAll spends a round trip, not after. Running this check
+	// only after resolveAll and buildInto would let a failing resolve mask the
+	// mismatch entirely and cost a full round of provider round trips first.
+	// See typedDerives's doc comment.
 	derives, err := typedDerives[T](o)
 	if err != nil {
 		return cfg, nil, err
@@ -394,30 +389,23 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// first rotation. Old is the zero value of T here, since nothing was
 	// serving yet.
 	//
-	// Fields is populated, not left nil, and it is populated by applying the
-	// engine's own diff rule (buildCandidate, reconciler.go) against the true
-	// prior state at this point in time: e.applied does not exist yet (Watch
-	// only seeds it after loadValue returns), so the prior version for every
-	// field is the empty string, and buildCandidate already treats a missing
-	// applied entry and an explicit "" identically (see flush's own comment on
-	// that equivalence). Applying that same rule here yields one FieldChange
-	// per resolved field, each with OldVersion "" - exactly what buildCandidate
-	// would compute one instant later, were e.applied queried before Watch
-	// seeds it. This is what makes ev.Changed(path) true for every field set on
-	// this load, which is what lets a hook written the documented way (guard on
-	// ev.Changed before doing the I/O) verify the initial configuration at all
-	// - the entire point of D7. See TestPreApplyInitialLoadPopulatesFields.
+	// Fields is populated, not left nil, using the same diff rule buildCandidate
+	// applies (reconciler.go) against the true prior state at this point: no
+	// field has an applied version yet, and buildCandidate already treats a
+	// missing applied entry the same as an explicit "". That yields one
+	// FieldChange per resolved field, each with OldVersion "" - exactly what
+	// buildCandidate would compute an instant later - which is what makes
+	// ev.Changed(path) true for every field on this load, the property a
+	// PreApply hook needs to verify the initial configuration at all.
 	//
 	// This is the only place either Load or Watch's initial resolve runs the
 	// gate: Watch stores this call's result directly into the engine's
-	// lastGood/cfg without a further gate of its own (see Watch in
-	// reconciler.go), so gating here costs exactly one hook invocation for the
-	// initial configuration, not two.
-	// Guarded on the hook, because nothing else ever reads this slice: it exists
-	// solely to populate the Change handed to the gate. Without the guard every
-	// Load and every Watch allocates one FieldChange per resolved field for a
-	// hook that is not there - which is the common case, since PreApply is
-	// opt-in.
+	// lastGood/cfg without a further gate of its own, so gating here costs
+	// exactly one hook invocation for the initial configuration, not two.
+	// Guarded on the hook being non-nil, since nothing else reads this slice:
+	// without the guard every Load and every Watch would allocate one
+	// FieldChange per resolved field for a hook that is not there, the common
+	// case since PreApply is opt-in.
 	var fields []FieldChange
 	if hook != nil {
 		for _, r := range res {
@@ -428,12 +416,10 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 		// A declared derive write path carries no ref and no Version, so the
 		// loop above never sees it; append its own diff here, comparing the
 		// zero value of T (nothing was serving before this load) against cfg,
-		// which already carries whatever the derive loop just above just wrote
-		// to it. See derivedFieldChanges for why this is the identical
-		// comparison buildCandidate and diffApplied perform for a reconciled
-		// update, not a second implementation of it - the property
-		// TestDerivedFieldAgreesOnInitialLoadAndReconcile (derive_test.go)
-		// pins directly.
+		// which already carries whatever the derive loop just above wrote to
+		// it. See derivedFieldChanges for why this is the identical comparison
+		// buildCandidate and diffApplied perform for a reconciled update, not a
+		// second implementation of it.
 		var zero T
 		fields = append(fields, derivedFieldChanges(zero, cfg, derives, specs)...)
 	}

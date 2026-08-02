@@ -46,8 +46,9 @@ type ErrorCapture struct {
 }
 
 // CaptureErrors returns an Option installing an OnError sink plus the capture it
-// feeds. Pass the Option to Watch (or Load) and assert against the capture
-// with WaitForError.
+// feeds. Pass the Option to Watch and assert against the capture with
+// WaitForError. Load never invokes OnError; its returned error is the only
+// source of failure information there.
 func CaptureErrors() (mamori.Option, *ErrorCapture) {
 	c := &ErrorCapture{}
 	opt := mamori.OnError(func(err error) {

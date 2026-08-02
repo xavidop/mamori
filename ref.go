@@ -27,7 +27,7 @@ type Ref struct {
 	// i.e. the part after '#'). It is empty when no key is requested.
 	Key string
 	// Opts holds provider-specific options parsed from the query string, plus a
-	// small set of core-recognized options (debounce, optional, version).
+	// small set of core-recognized options (decode, debounce).
 	Opts url.Values
 	// Raw is the original, unparsed tag value, retained for error messages.
 	Raw string

@@ -19,16 +19,10 @@ type resolved struct {
 // fast on any non-not-found error.
 //
 // Batch grouping (spec 10.6) only covers single-ref specs: it groups
-// spec.Refs[0] by scheme exactly as it did before chains existed. A fully
-// correct implementation would group by (scheme, chain position) - batching
-// all position-0 refs of a scheme together, then feeding the not-found
-// remainder into a second round for position-1 refs, and so on - but that
-// turns resolveBatchScheme into a multi-round process for comparatively rare
-// input. Single-ref fields are the overwhelming common case and keep the
-// existing batch optimization byte-for-byte; a field with more than one ref
-// (an opt-in chain) is instead resolved ref-by-ref through resolveChain,
-// paying one extra round trip per provider call instead of joining a batch.
-// Correct now beats clever later.
+// spec.Refs[0] by scheme, exactly as it did before chains existed. A field
+// with more than one ref (an opt-in chain) is instead resolved ref-by-ref
+// through resolveChain, paying one extra round trip per provider call
+// instead of joining a batch.
 func resolveAll(ctx context.Context, specs []fieldSpec, o *options) ([]resolved, error) {
 	out := make([]resolved, len(specs))
 	for i := range specs {

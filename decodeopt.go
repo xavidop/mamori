@@ -61,15 +61,13 @@ var decodeCodings = map[string]func([]byte) ([]byte, error){
 // denial-of-service reachable by whoever can write the stored value.
 //
 // 16 MiB is chosen to sit far above every realistic payload and far below
-// anything that threatens a process. The backends mamori reads from impose
-// their own, much tighter ceilings on a single value: 64 KiB for AWS Secrets
-// Manager and GCP Secret Manager, 25 KiB for Azure Key Vault, 512 KiB for
-// Consul KV, 1 MiB for a Kubernetes Secret, ~1.5 MiB for an etcd value. The
-// unbounded sources are the local ones (file:, exec:, dotenv:), and a 16 MiB
-// decompressed application config or secret bundle from those is already well
-// past anything this library is meant to carry. That leaves roughly a 16x
-// margin over the most permissive remote backend while capping a bomb's
-// expansion at a single, recoverable allocation.
+// anything that threatens a process. Every remote backend mamori resolves
+// from imposes its own tighter ceiling on a single value, well under 2 MiB
+// even for the most permissive of them, so this leaves a comfortable margin
+// while still capping a bomb's expansion at a single, recoverable allocation.
+// The unbounded sources are the local ones (file:, exec:, dotenv:), and a 16
+// MiB decompressed payload from those is already well past anything this
+// library is meant to carry.
 //
 // Exceeding it is an error, never a truncation. Handing an application 16 MiB
 // of a longer secret would be worse than failing: a silently truncated key or

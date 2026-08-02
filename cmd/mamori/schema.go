@@ -42,7 +42,7 @@ the output is a JSON array of such documents, each carrying a "title" of
 `
 
 // jsonSchemaDialect is the $schema value every emitted document declares:
-// draft 2020-12, the dialect the task brief specifies.
+// draft 2020-12.
 const jsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
 
 // schemaCmd is the mamori schema subcommand. Like explainCmd, it writes to
@@ -113,8 +113,8 @@ func parseSchemaArgs(args []string) (patterns []string, typeName string, schemes
 // writeSchema builds one schemaDoc per struct and writes them to stdout: a
 // single bare document if exactly one struct qualifies, or a JSON array of
 // documents (each tagged with a "title") if more than one does -- see
-// schemaUsage's "Output shape" paragraph and the task report for why this
-// shape was chosen over unconditionally wrapping in an array (matching how
+// schemaUsage's "Output shape" paragraph for why this shape was chosen over
+// unconditionally wrapping in an array (matching how
 // "mamori explain" never requires --type, it just lists everything found).
 // It returns 1 only on an encoding failure, which should not happen in
 // practice since schemaDoc/property are plain marshalable data.

@@ -20,14 +20,13 @@ import (
 //
 // .goreleaser.yaml's mamori build also passes -X main.commit=... and
 // -X main.date=..., but neither commit nor date has a matching package-level
-// var here, so both -X flags are silently no-ops (confirmed: `go build
-// -ldflags "-X main.commit=..."` against a package with no such var succeeds
-// with no warning). They were deliberately not added as unused vars:
-// cmd/mamori is linted by golangci-lint's "unused" check (.golangci.yml,
-// standard linter set), which flags an unexported package-level var with no
-// reader, so `var commit, date string` with nothing printing them would fail
-// CI lint. Wire them up together with whatever future command first has a
-// real use for them (e.g. printing build provenance).
+// var here, so both -X flags are silently no-ops. They were deliberately not
+// added as unused vars: cmd/mamori is linted by golangci-lint's "unused"
+// check (.golangci.yml, standard linter set), which flags an unexported
+// package-level var with no reader, so `var commit, date string` with
+// nothing printing them would fail CI lint. Wire them up together with
+// whatever future command first has a real use for them (e.g. printing
+// build provenance).
 var version = "dev"
 
 func main() {

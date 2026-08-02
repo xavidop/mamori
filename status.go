@@ -17,7 +17,7 @@ type FieldStatus struct {
 	Path      string        // dotted field path, e.g. "Redis.Password"
 	Scheme    string        // provider scheme of the ref
 	Ref       string        // the ref, with sensitive query options redacted
-	Version   string        // provider version of the currently observed value
+	Version   string        // provider version of the currently observed value; a content hash when Derived is true
 	LastOK    time.Time     // last successful resolve, zero if never
 	Age       time.Duration // GeneratedAt minus LastOK, recomputed at read time
 	Stale     bool          // Age exceeds the configured WithStale threshold

@@ -1,7 +1,7 @@
 // Package authjwt is a JWT [mamori.Authenticator] for mamori's admin HTTP
-// endpoint and the config server. It lives outside the core mamori module
-// because it depends on a JWT library (github.com/golang-jwt/jwt/v5), and the
-// core module takes no non-stdlib dependencies.
+// endpoint and the config server. It lives outside the core mamori module so
+// that depending on a JWT library (github.com/golang-jwt/jwt/v5) is optional,
+// not a cost every caller of the core module pays.
 //
 // Usage:
 //

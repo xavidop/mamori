@@ -2,13 +2,11 @@
 // outputs and reports what changed about a service's configuration surface,
 // including the delta in backend permissions that surface implies.
 //
-// It is the fourth static command (decision D1: the CLI's static commands read
-// source and never resolve anything), and the only one that does not even read
-// Go source: its inputs are two JSON files, so it needs no build, no module
-// graph, and no network. That is deliberate. The rejected alternative was
-// taking git revisions and running packages.Load against a historical tree,
-// whose failure mode is "your base commit no longer builds" - worse than no
-// tool at all for something meant to run on every pull request.
+// It is a static command (decision D1: the CLI's static commands read source
+// and never resolve anything), but the only one that does not even read Go
+// source: its inputs are two JSON files, so it needs no build, no module
+// graph, and no network, which is what lets it run against a base commit
+// that no longer builds.
 package main
 
 import (

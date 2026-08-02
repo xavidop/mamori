@@ -1,9 +1,9 @@
 // This file implements the `mamori vet` subcommand and the dual-mode seam
 // that lets the same binary act as a `go vet` tool. Both run the vetcheck
-// analyzer (internal/vetcheck), which flags struct fields that pull a
-// secret-bearing source (aws-sm, gcp-sm, azure-kv, vault, op, sops,
-// k8s-secret) into a plain string or []byte instead of the redacting
-// secret.String / secret.Bytes types.
+// analyzer (internal/vetcheck), which flags struct fields that pull one of
+// the built-in secret-bearing schemes (sourcetag.DefaultSecretSchemes) into
+// a plain string or []byte instead of the redacting secret.String /
+// secret.Bytes types.
 //
 // vetCmd is the standalone driver: it loads packages with
 // golang.org/x/tools/go/packages and runs the analyzer in-process via

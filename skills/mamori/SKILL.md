@@ -56,6 +56,7 @@ cfg, err := mamori.Load[Config](ctx) // *Config, or an error and no partial stru
 | `#key` | select one top-level key from a JSON payload |
 | `#/a/b/5` | RFC 6901 JSON Pointer, any depth, through objects and arrays |
 | `?decode=` | value is encoded: `base64`, `base64url`, `hex`, `gzip`, `trim` |
+| `?debounce=` | per-field coalescing window, overriding `WithDebounce` |
 | `${VAR}` | interpolated from `WithRefVars`, before the tag is parsed |
 | `a,b,c` | precedence chain: first ref that resolves wins |
 

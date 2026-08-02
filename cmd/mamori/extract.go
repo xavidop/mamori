@@ -60,8 +60,6 @@ type StructInfo struct {
 //
 // When typeName is non-empty, only the struct named typeName is returned
 // (still recursing into any nested, source-less struct fields it has).
-// Extract loads the packages matching patterns and returns every struct with
-// at least one source-tagged field (or just typeName, when non-empty).
 //
 // schemes is the set of source schemes to treat as secret-bearing when
 // deciding a field's Sensitive flag. Pass nil for mamori's built-in set;

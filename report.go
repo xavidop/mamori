@@ -53,11 +53,9 @@ func (e *engine[T]) buildReport() *Report {
 	// struct - so nothing in the loop above ever visits them. Append one per
 	// declared write path here instead, after every sourced field; see
 	// Report's own doc comment for what this does to the "struct declaration
-	// order" property. A Watcher.Status derived entry still cannot be
-	// unhealthy, because a failing hook rejects the candidate in
-	// buildCandidate so a published config never contains one - fieldUnhealthy
-	// itself no longer short-circuits on Derived, and a Doctor row (see
-	// doctorDerivedFields, doctor.go) can be unhealthy when its hook fails.
+	// order" property, and fieldUnhealthy's doc comment below for why a
+	// Watcher.Status derived entry can never be unhealthy while a Doctor row
+	// for the same path can be.
 	//
 	// Three gates below, each preventing a specific bad row:
 	//
@@ -120,7 +118,7 @@ func (e *engine[T]) buildReport() *Report {
 }
 
 // fieldUnhealthy is the single source of truth for what makes one field
-// unhealthy, shared by buildReport, Status, and Health (and Doctor, later).
+// unhealthy, shared by buildReport, Status, Health, and Doctor.
 // KindNotFound, KindPermissionDenied, KindUnauthenticated, and KindInvalid are
 // terminal: they will not clear without human action, so a field carrying one
 // is unhealthy immediately. Everything else (including no error at all) is

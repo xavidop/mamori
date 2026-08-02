@@ -31,16 +31,13 @@ func WatchRef(ctx context.Context, p Provider, ref Ref, opts ...Option) <-chan U
 	return watchRef(ctx, p, ref, o)
 }
 
-// watchRef is the extracted native-watch-or-poll selection engine.start's
-// per-position loop used to inline directly (see reconciler.go's per-ref
-// loop in start): a WatchableProvider is watched natively, falling back to
-// pollWatch if the native watch fails to start; every other Provider is
-// polled outright. Moving it here, unexported and taking the already-built
-// *options start already has (e.o), lets start call it with the exact
-// options it always used, with nothing rebuilt or re-derived - the single
-// behavior-preservation requirement this extraction exists to satisfy.
-// WatchRef (above) is the public, ...Option-taking wrapper for a caller that
-// does not already have an *options of its own.
+// watchRef is the shared native-watch-or-poll selection: a WatchableProvider
+// is watched natively, falling back to pollWatch if the native watch fails to
+// start; every other Provider is polled outright. engine.start (reconciler.go)
+// calls this directly with the *options it already built (e.o) for every ref
+// in a Watch[T]'s field specs. WatchRef (above) is the public,
+// ...Option-taking wrapper for a caller that does not already have an
+// *options of its own.
 func watchRef(ctx context.Context, p Provider, ref Ref, o *options) <-chan Update {
 	if wp, isW := p.(WatchableProvider); isW {
 		ch, werr := wp.Watch(ctx, ref)

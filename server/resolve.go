@@ -137,7 +137,7 @@ func errNoProvider(scheme string) error {
 var errPendingResolve = fmt.Errorf("mamori/server: binding not yet resolved")
 
 // errAlreadyStarted is start's answer to being called a second time. start
-// is meant to run once, when a later task's Serve begins serving; calling it
+// is meant to run once, when Serve (transport.go) begins serving; calling it
 // twice would launch a second set of per-binding watch goroutines racing the
 // first to publish into the same resolverStates; refusing the second call
 // outright is cheaper and clearer than trying to make that race safe.
@@ -161,11 +161,10 @@ var errClosed = fmt.Errorf("mamori/server: server is closed")
 // goroutines is an action with a lifecycle (Close, below, must stop them),
 // which does not belong inside a constructor that a caller may invoke
 // speculatively, discard the error and result of, or call from a context
-// with no natural place to hold a *Server for a Close later. The later
-// transports task (Serve, coordinate with Task 5) is expected to be start's
-// one caller, running it before accepting any connection, so that every
-// binding has at least a pending-resolve snapshot (see errPendingResolve)
-// by the time a request could possibly arrive.
+// with no natural place to hold a *Server for a Close later. Serve
+// (transport.go) is start's one caller, running it before accepting any
+// connection, so that every binding has at least a pending-resolve snapshot
+// (see errPendingResolve) by the time a request could possibly arrive.
 //
 // A binding whose scheme has no registered provider is not treated as a
 // construction-time error: it gets a snapshot fixed at errNoProvider and no

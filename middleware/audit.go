@@ -9,8 +9,10 @@ import (
 )
 
 // Audit logs every Resolve - scheme, ref, latency, and outcome - WITHOUT the
-// resolved value, so an audit trail never leaks secrets. The ref path is
-// considered non-sensitive metadata; the payload is never logged.
+// resolved value, so an audit trail never leaks a value fetched from a
+// backend. The ref is logged as ref.Raw and is not redacted the way Report
+// and Status redact it, so a ref carrying an inline credential in a query
+// option appears in the log unredacted.
 func Audit(logger *slog.Logger, inner mamori.Provider) mamori.Provider {
 	if logger == nil {
 		logger = slog.Default()

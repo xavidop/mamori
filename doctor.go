@@ -289,15 +289,14 @@ func deriveConfigErrorFields(o *options, err error) []FieldStatus {
 //
 // probeField (via resolveChain -> resolveRef) always resolves one ref at a
 // time and never groups refs by scheme through BatchProvider.ResolveBatch.
-// Every in-repo BatchProvider (aws-sm, aws-ps) also implements a fully
-// working single Resolve that hits the same underlying per-item API;
-// ResolveBatch exists purely to cut round trips when many refs of the same
-// scheme are resolved together, not to change what a single ref resolves to.
-// The middleware wrapper in package middleware goes further and implements
-// ResolveBatch by looping over single Resolve calls itself. Single-resolve is
-// therefore semantically faithful to how Load resolves the same ref, and it
-// keeps Doctor's per-field bookkeeping (one FieldStatus per spec)
-// straightforward, so grouping by scheme is unnecessary complexity here.
+// BatchProvider embeds Provider, so every provider implementing it also
+// implements a fully working single Resolve against the same underlying
+// data; ResolveBatch exists purely to cut round trips when many refs of the
+// same scheme are resolved together, not to change what a single ref
+// resolves to. Single-resolve is therefore semantically faithful to how Load
+// resolves the same ref, and it keeps Doctor's per-field bookkeeping (one
+// FieldStatus per spec) straightforward, so grouping by scheme is
+// unnecessary complexity here.
 func probeField(ctx context.Context, spec fieldSpec, o *options) (Value, int, error) {
 	return resolveChain(ctx, spec.Refs, o)
 }

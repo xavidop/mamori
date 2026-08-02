@@ -86,15 +86,12 @@ type Server struct {
 	// hasTCP records whether the option list requested a TCP listener. It is
 	// read by New's NoAuth+TCP gate below.
 	//
-	// Listeners themselves are not wired up until Task 5 (server/transport.go),
-	// but the NoAuth+TCP validation is a construction-time policy decision (a
+	// The NoAuth+TCP validation is a construction-time policy decision (a
 	// caller should learn "this combination is refused" from New returning an
 	// error, not by waiting until Serve, or worse, after the plaintext,
-	// unauthenticated port is already live). Task 5's TCP(...) Option sets this
-	// field (directly, or via withTCPListener below) alongside recording the
-	// real listener configuration on Server; it does not need to touch this
-	// gate to plug in correctly. Unix(...) never sets it: a Unix listener never
-	// trips this check.
+	// unauthenticated port is already live). TCP (transport.go) sets this
+	// field directly, alongside recording the real listener configuration on
+	// Server. Unix(...) never sets it: a Unix listener never trips this check.
 	hasTCP bool
 
 	// rawBindings and bindFiles accumulate Bind and BindFile declarations, in
@@ -265,9 +262,9 @@ type Option func(*Server)
 // the opts list AllowExec/AllowChaining happen to appear.
 //
 // Bind is the ONLY way a binding comes into existence: the wire protocol
-// (added in a later task) takes a binding name from the client, never a ref,
-// so a client can never cause the server to resolve a ref of its own
-// choosing (e.g. file:///etc/shadow, or an exec: command it supplies).
+// (handler.go) takes a binding name from the client, never a ref, so a
+// client can never cause the server to resolve a ref of its own choosing
+// (e.g. file:///etc/shadow, or an exec: command it supplies).
 func Bind(name, ref string) Option {
 	return func(s *Server) {
 		s.rawBindings = append(s.rawBindings, rawBinding{name: name, ref: ref})
@@ -413,11 +410,9 @@ func DrainGrace(d time.Duration) Option {
 }
 
 // withTCPListener marks that the option list requested a TCP listener, for
-// New's NoAuth+TCP gate. It is unexported and unused outside this package's
-// own tests in Task 2, which need to exercise that gate before Task 5 adds
-// the real TCP(...) Option. Task 5's TCP(...) Option should set the same
-// Server.hasTCP field (by calling this helper, or with the one-line
-// assignment directly); either way, New's validation below does not change.
+// New's NoAuth+TCP gate. It is unexported and exists only so this package's
+// own tests can exercise that gate without a real listener; TCP
+// (transport.go) sets the same Server.hasTCP field directly.
 func withTCPListener() Option {
 	return func(s *Server) { s.hasTCP = true }
 }
@@ -430,9 +425,9 @@ func withTCPListener() Option {
 // allow-opt is set) as part of this same call.
 //
 // New does not start serving anything: no listener is created, no upstream
-// watch is started - that is start's job (resolve.go), called by a later
-// task's Serve. It returns a *Server ready for start and, once transports
-// exist, Serve to be called on.
+// watch is started - that is Serve's job (transport.go), which calls the
+// unexported start in resolve.go. It returns a *Server ready for Serve to be
+// called on.
 func New(opts ...Option) (*Server, error) {
 	s := &Server{}
 	for _, opt := range opts {

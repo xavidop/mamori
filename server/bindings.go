@@ -12,11 +12,11 @@ import (
 
 // Binding is one operator-declared name-to-ref mapping the server resolves
 // and serves under that name. Bindings are the ONLY unit a client can
-// request over the wire protocol (a later task): a client sends a name, never
-// a ref, so it can never make the server resolve a ref of the client's own
-// choosing. Without that boundary a client could ask for file:///etc/shadow
-// or its own exec: command and the server, holding every backend credential,
-// would happily comply.
+// request over the wire protocol: a client sends a name, never a ref, so it
+// can never make the server resolve a ref of the client's own choosing.
+// Without that boundary a client could ask for file:///etc/shadow or its own
+// exec: command and the server, holding every backend credential, would
+// happily comply.
 type Binding struct {
 	// Name is what a client requests.
 	Name string

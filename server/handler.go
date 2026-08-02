@@ -13,14 +13,15 @@
 // A denied caller gets 403 for the requested name whether or not it is a
 // real binding: step 2 runs, and fails closed, before step 3 ever touches
 // the binding table, so Policy is never a way to enumerate what is
-// configured (see policy.go's Policy doc comment, and TestPolicyDenialTakesPriorityOverExistence
-// in handler_test.go, which pins exactly this ordering).
+// configured (see policy.go's Policy doc comment, and
+// TestPolicyDeniedTakesPriorityOverExistence in handler_test.go, which pins
+// exactly this ordering).
 //
-// GET /v1/healthz is the one exception to all of the above: it never calls
-// Authenticate or Policy.Allow, and its response never names a binding (see
-// handleHealthz). A liveness probe has to work with no credential at all,
-// and must never become a way to learn what this server is configured to
-// serve.
+// GET /v1/healthz and GET /v1/readyz are the exceptions to all of the above:
+// neither calls Authenticate or Policy.Allow, and neither response ever
+// names a binding (see handleHealthz and handleReadyz). A liveness or
+// readiness probe has to work with no credential at all, and must never
+// become a way to learn what this server is configured to serve.
 //
 // Audit logging (see requestOutcome and logAudit) runs alongside every
 // decision above, recording identity, name, allow/deny, resulting kind, and
@@ -172,11 +173,11 @@ func (s *Server) authorize(w http.ResponseWriter, id mamori.Identity, name strin
 }
 
 // Handler returns the v1 wire protocol http.Handler: GET /v1/values/{name},
-// POST /v1/values, GET /v1/watch, and GET /v1/healthz. Every route except
-// /v1/healthz runs authenticate-then-authorize-then-read, in that order (see
-// this file's package doc comment). Mount the result under whatever
-// listener a later task's transports wire up (Unix socket, TLS TCP); it
-// does not bind or serve anything itself.
+// POST /v1/values, GET /v1/watch, GET /v1/healthz, and GET /v1/readyz. Every
+// route except /v1/healthz and /v1/readyz runs
+// authenticate-then-authorize-then-read, in that order (see this file's
+// package doc comment). Serve (transport.go) mounts it on every configured
+// Unix/TCP listener; it does not bind or serve anything itself.
 //
 // Every pattern registered below is an EXACT path - no trailing "/", no "..."
 // wildcard - which under Go 1.22+ ServeMux semantics means each one matches
@@ -245,14 +246,14 @@ func (s *Server) handleValue(w http.ResponseWriter, r *http.Request) {
 // Semantics chosen: each name is authorized and resolved independently, so
 // one denied or missing name in a batch of many becomes that ONE entry's
 // Error, never a whole-request 403 or 404. This is deliberately the more
-// useful of the two options the spec allows (see this package's task brief):
-// a caller asking for 50 names should not have to retry 49 of them one at a
-// time just because it lacked access to the 50th, and a per-name error is no
-// more revealing than the SAME caller making 50 individual GET
-// /v1/values/{name} calls would already be - this endpoint is a convenience
-// over that, not a different trust boundary. Authentication is still
-// whole-request: one 401/403 ends the entire batch before any name is even
-// looked at, since there is only one Identity for the whole connection.
+// useful of the two options the wire spec allows: a caller asking for 50
+// names should not have to retry 49 of them one at a time just because it
+// lacked access to the 50th, and a per-name error is no more revealing than
+// the SAME caller making 50 individual GET /v1/values/{name} calls would
+// already be - this endpoint is a convenience over that, not a different
+// trust boundary. Authentication is still whole-request: one 401/403 ends
+// the entire batch before any name is even looked at, since there is only
+// one Identity for the whole connection.
 //
 // Every name is audited exactly like a standalone GET would be - one record
 // per name (see authorize's call site below) - so the audit trail reads the
@@ -440,14 +441,15 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleHealthz answers GET /v1/healthz: liveness only. It is the one route
-// exempt from both authenticate and authorize (see this file's package doc
-// comment) - a readiness/liveness probe has to succeed with no credential at
-// all - and its response is a fixed, unconditional 200 {"status":"ok"} that
-// never names a binding, never reports per-binding health, and never
-// branches on anything about the request. Do not extend this handler with
-// binding detail of any kind: doing so would turn an intentionally
-// unauthenticated endpoint into a way to enumerate what this server serves.
+// handleHealthz answers GET /v1/healthz: liveness only. It is one of the two
+// routes exempt from both authenticate and authorize (see this file's
+// package doc comment) - a readiness/liveness probe has to succeed with no
+// credential at all - and its response is a fixed, unconditional 200
+// {"status":"ok"} that never names a binding, never reports per-binding
+// health, and never branches on anything about the request. Do not extend
+// this handler with binding detail of any kind: doing so would turn an
+// intentionally unauthenticated endpoint into a way to enumerate what this
+// server serves.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthzBody{Status: "ok"})
 }

@@ -77,10 +77,10 @@ type pinReply struct {
 // overlapping a running callback, still queues and is serviced normally.
 // OnChange is not covered and need not be: it runs on the dispatch goroutine.
 //
-// The check is one atomic load on the path that matters. inCallback is zero
-// whenever no such callback is running, which for a watcher with no PreApply
-// gate, derive hook, or OnError callback is always, and the goroutine-ID lookup
-// is reached only when a command truly overlaps one.
+// The check is one atomic load in the common case: inCallback is zero whenever
+// no such callback is running, which for a watcher with no PreApply gate,
+// derive hook, or OnError callback is always. See goroutineID (preapply.go)
+// for the cost of the rarer path, where a command does overlap one.
 //
 // Pin, PinCurrent, and Unpin take no context, so this is the whole of their
 // delivery. Refresh takes one and goes through sendPinCtx below rather than
@@ -109,10 +109,9 @@ func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
 // The reply wait needs w.ctx.Done() as well, and needs it BECAUSE of Refresh.
 // For the three pin commands a reply is guaranteed once the command is
 // delivered - handlePin's other cases run no user code, they are a handful of
-// map writes - which is why the wait was an unconditional receive for as long as
-// those were the only commands. They can still take this branch, but only by
-// racing Close closely enough that the drain below finds nothing, and
-// errWatcherClosed is already the documented answer for a pin that raced Close.
+// map writes. They can still take this branch, but only by racing Close
+// closely enough that the drain below finds nothing, and errWatcherClosed is
+// already the documented answer for a pin that raced Close.
 // The refresh case is the one that needs the branch to exist at all. It runs
 // providers, emitErr, the PreApply hook and any derive hooks on the reconciler
 // goroutine, inside handlePin, so "the handler never returns" became reachable

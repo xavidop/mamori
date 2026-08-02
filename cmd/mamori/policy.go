@@ -7,8 +7,7 @@
 //
 // Every IAM action, GCP role, and ExternalSecrets CRD field name this file
 // emits was verified against the relevant service's own documentation
-// before being hardcoded here (see the task report); none of it is
-// guessed.
+// before being hardcoded here; none of it is guessed.
 package main
 
 import (
@@ -53,7 +52,7 @@ clearly-marked placeholders (see below) for the operator to fill in.
                                   the real project is used; "PROJECT" is
                                   only a placeholder for a malformed ref
                                   missing that segment.
-               external-secret    an external-secrets.io/v1beta1
+               external-secret    an external-secrets.io/v1
                                   ExternalSecret manifest with one
                                   spec.data entry per aws-sm://, aws-ps://,
                                   or gcp-sm:// ref. spec.secretStoreRef.name
@@ -225,21 +224,16 @@ func collectPolicyRefs(structs []StructInfo) policyRefs {
 
 // refPath extracts the path component of a hierarchical source ref
 // (scheme://path[#key][?opts]) -- the same slice mamori's ref.go ParseRef
-// would assign to Ref.Path. This is duplicated here by hand (rather than
-// importing github.com/xavidop/mamori's Ref/ParseRef, which cmd/mamori is
-// allowed to depend on per the CLI plan's import constraint) for the same
-// reason internal/sourcetag's own SplitChain/SchemeOf duplicate ref.go's
-// chain-split/scheme rules instead of importing core: extracting one path
-// substring needs none of core's decode/validate machinery, so taking on
-// core's dependency graph (mapstructure, go-playground/validator,
-// yaml.v3, ...) here, purely for this, would cost more than it saves --
-// especially two tasks before doctor/status actually need mamori.Report,
-// the dependency this module's import allowance exists for. Every scheme
-// this file routes on (aws-sm, aws-ps, gcp-sm) is hierarchical
-// (scheme://...); refPath is never called on an opaque ref (env:, exec:),
-// since collectPolicyRefs buckets by scheme first and only aws-iam/gcp/
-// external-secret's writers (which only ever read the aws-sm/aws-ps/gcp-sm
-// buckets) ever call it.
+// would assign to Ref.Path. This is duplicated here by hand rather than
+// calling mamori's Ref/ParseRef, for the same reason internal/sourcetag's
+// own SplitChain/SchemeOf duplicate ref.go's chain-split/scheme rules
+// instead of calling core: extracting one path substring needs none of
+// core's decode/validate machinery, so there is nothing to gain by routing
+// through it here. Every scheme this file routes on (aws-sm, aws-ps, gcp-sm)
+// is hierarchical (scheme://...); refPath is never called on an opaque ref
+// (env:, exec:), since collectPolicyRefs buckets by scheme first and only
+// aws-iam/gcp/external-secret's writers (which only ever read the
+// aws-sm/aws-ps/gcp-sm buckets) ever call it.
 func refPath(ref string) string {
 	scheme, ok := sourcetag.SchemeOf(ref)
 	if !ok {
@@ -272,8 +266,8 @@ func sortedUniqueStrings(in []string) []string {
 
 // --- aws-iam ---
 //
-// Action names verified against the AWS Service Authorization Reference
-// (see task report for the exact pages): secretsmanager:GetSecretValue is
+// Action names verified against the AWS Service Authorization Reference:
+// secretsmanager:GetSecretValue is
 // the action that reads a secret's value; ssm:GetParameter and
 // ssm:GetParameters are the actions that read one or more SSM Parameter
 // Store parameters, respectively. None of the three is invented.
@@ -371,7 +365,7 @@ func writeAWSIAMPolicy(stdout, stderr io.Writer, refs policyRefs) int {
 // --- gcp ---
 //
 // gcpSecretAccessorRole was verified against Google Cloud's Secret Manager
-// access control documentation (see task report): roles/secretmanager.
+// access control documentation: roles/secretmanager.
 // secretAccessor is the predefined role that grants
 // secretmanager.versions.access, the permission that reads a secret
 // version's payload. It is not invented.
@@ -541,8 +535,8 @@ func sanitizeSecretKey(s string) string {
 }
 
 // renderExternalSecretYAML hand-writes the ExternalSecret manifest as YAML.
-// cmd/mamori's allowed dependency set (see this file's own top comment and
-// the task report) does not include a YAML library, so this is a small,
+// cmd/mamori's allowed dependency set (see this file's own top comment) does
+// not include a YAML library, so this is a small,
 // deliberately narrow writer: fixed 2-space indentation, a fixed key order
 // matching the struct this mirrors, and yamlScalar (below) for the only two
 // values that come from ref-derived text (secretKey, remoteRef.key) rather

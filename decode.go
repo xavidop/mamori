@@ -182,9 +182,9 @@ func setField(root reflect.Value, spec fieldSpec, raw []byte, hooks []mapstructu
 // spec.Index (precomputed by walkSpecs from the struct's own field layout), but
 // a WithDerive write path has no fieldSpec at all - the field it names is
 // never source-tagged, so fieldSpecs never discovers it - which means there is
-// no Index to reuse and the dotted string has to be walked directly instead,
-// exactly the way walkSpecs built it in the first place: split on ".", stepping
-// into a nested struct field by name at each segment.
+// no Index to reuse and the dotted string has to be walked directly instead:
+// split on ".", stepping into a nested struct field by name at each segment,
+// the reverse of how walkSpecs built the same path one nested struct at a time.
 //
 // A path that does not resolve (an unknown field name, or a segment that is
 // not itself a struct) reports false rather than panicking: a WithDerive write

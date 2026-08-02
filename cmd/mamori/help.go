@@ -1,14 +1,9 @@
 // This file holds the one definition of per-subcommand help, so that
-// `mamori <command> --help` behaves the same everywhere.
-//
-// It exists because asking for help is not an error. Before this, the static
-// commands parsed their own arguments and rejected --help as an unknown flag
-// (usage on stderr, exit 1), while the live commands let flag.FlagSet turn it
-// into a parse failure (exit 2). Both are wrong in the same two ways: help
-// text is the output the user asked for, so it belongs on stdout, and a
-// successful request exits 0. A script doing `mamori vet --help` to check the
-// binary works should not see a failure, and a user piping help to a pager
-// should not have to redirect stderr.
+// `mamori <command> --help` behaves the same everywhere: help text goes to
+// stdout, and a successful request exits 0. Asking for help is not an error,
+// so a script doing `mamori vet --help` to check the binary works should not
+// see a failure, and a user piping help to a pager should not have to
+// redirect stderr.
 package main
 
 import (

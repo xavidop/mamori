@@ -88,8 +88,8 @@ func PreApply[T any](fn func(ctx context.Context, ev Change[T]) error) Option {
 // literally is worse still: context.WithTimeout(parent, 0) returns a context
 // that is ALREADY expired, so every candidate would be refused on the deadline
 // check - including the initial load, which would make Watch and Load fail at
-// startup with a DeadlineExceeded a caller writing WithPreApplyTimeout(0) is
-// unlikely to read as "you disabled the gate". Elsewhere in this package a zero
+// startup with a DeadlineExceeded that a caller writing WithPreApplyTimeout(0)
+// is unlikely to read as "you disabled the gate". Elsewhere in this package a zero
 // duration disables a feature (WithStale), so the one reading a caller is most
 // likely to have in mind is the one meaning this option cannot express at all.
 func WithPreApplyTimeout(d time.Duration) Option {
@@ -196,40 +196,25 @@ const goroutineIDPrefix = "goroutine "
 //
 // Go deliberately does not expose goroutine identity, so this reads it back out
 // of the one place the runtime does print it: the header line of the
-// goroutine's own stack trace. That is a real cost in taste, and it is paid
-// here rather than in the alternative because the alternative is worse. A mark
-// that recorded only THAT a callback is running would refuse a Pin from any
-// unrelated caller goroutine that merely overlapped one - once per rotation and
-// once per error delivery, for as long as the callback runs, with an error
-// telling the caller to do the thing it was already doing. Identity is what
-// makes the refusal apply to exactly the caller that is actually deadlocking
-// itself.
+// goroutine's own stack trace. Identity is what the check needs: a mark that
+// recorded only THAT a callback is running, rather than which goroutine, would
+// refuse a Pin from any unrelated caller that merely overlapped one, with an
+// error telling it to do the thing it was already doing.
 //
 // runtime.Stack(buf, false) walks only the calling goroutine, so it does not
-// stop the world. A small buffer truncates the OUTPUT, not the walk: the runtime
-// still traverses every frame, so the cost stays proportional to the caller's
-// stack depth rather than being fixed - measured at a couple of microseconds a
-// few frames down, and ~40us at depth 200. That is affordable where this is
-// reached from, and it is worth knowing where that is:
+// stop the world, and a small buffer truncates the OUTPUT rather than the walk,
+// so cost stays proportional to stack depth - a couple of microseconds a few
+// frames down, ~40us at depth 200. Arming (once per PreApply hook invocation
+// and once per OnError delivery) runs near the bottom of the reconciler
+// goroutine's own shallow stack, where that figure holds; checking, in
+// sendPinCtx (pin.go), runs on the caller's own stack, which can be arbitrarily
+// deep, but is reached only when a command actually overlaps a running
+// callback - zero cost otherwise.
 //
-//   - Arming, once per PreApply hook invocation (armReentrancy, called from
-//     runPreApply) and once per OnError delivery (emitErr, reconciler.go). Both
-//     run near the bottom of the reconciler goroutine's own shallow stack, where
-//     the microsecond figure holds, and neither is on a per-flush path: a
-//     watcher with no hook and no OnError callback reaches this never.
-//   - Checking, in sendPinCtx (pin.go), once per control-channel command that
-//     actually overlaps one of those callbacks. That caller's stack is the
-//     application's own and can be arbitrarily deep, so the microsecond figure
-//     does NOT hold there. It is bounded instead by how rare the overlap is:
-//     zero cost when no callback is running, which for a watcher without either
-//     is always.
-//
-// Every failure path returns 0, and 0 is the same value the mark holds when no
-// callback is running, so a parse that ever stopped matching the runtime's format
-// would silently disable the detection and restore the previous behavior. It
-// can never manufacture a false match, which is the direction that matters: a
-// missed detection is the bug this package documented for a release, while a
-// false one would break correct code.
+// Every failure path returns 0, the same value the mark holds when no callback
+// is running, so a parse that stopped matching the runtime's format would
+// silently disable the detection rather than manufacture a false match: a
+// missed detection is a bug, a false one would break correct code.
 func goroutineID() uint64 {
 	var buf [40]byte
 	n := runtime.Stack(buf[:], false)
