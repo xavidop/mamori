@@ -1085,12 +1085,10 @@ func (e *engine[T]) recomputeWinner(specIdx int) (val Value, pos int, err error)
 // letting the lower one win.
 //
 // It is called only for a genuine chain (len(spec.Refs) > 1): a single-ref
-// field has no lower position to race against, so it is left fully
-// unseeded, with no extra provider round trip, matching today's behavior
-// exactly. This costs one additional resolve per position up to whichever
-// one stops the walk, paid once at Watch startup, only for chains - the same
-// documented tradeoff resolveAll already accepts for chain resolution
-// generally (see its doc comment: "correct now beats clever later").
+// field has no lower position to race against and is left unseeded, with no
+// extra round trip. This costs one resolve per position up to whichever stops
+// the walk, paid once at Watch startup, the same tradeoff resolveAll already
+// accepts for chains.
 //
 // Errors are stored raw, via the provider's own Resolve rather than
 // resolveRef, so they carry no extra wrapping here: recomputeWinner's

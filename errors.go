@@ -75,30 +75,23 @@ func joinCallbackList(items []string) string {
 // reentrantCallbacks above (OnChange does not join them - it is delivered from
 // the dispatch queue, on its own goroutine, and is unaffected by any of this).
 // Pin, PinCurrent, Unpin and Refresh are commands SERVICED by the reconciler
-// goroutine. Calling one from inside any of the inline callbacks asks that
-// goroutine to answer a message it cannot reach until the callback it is
-// running returns: before this was detected, it blocked until Close, with no
-// reconciliation, no OnChange and no further OnError in the meantime. This
-// sentinel converts that permanent, silent wedge into an immediate,
-// diagnosable refusal that leaves pin state, and the configuration, untouched.
+// goroutine. Calling one from inside an inline callback asks that goroutine to
+// answer a message it cannot reach until the callback returns, which would
+// wedge the watcher silently until Close. This sentinel makes that an immediate,
+// diagnosable refusal that leaves pin state and the configuration untouched.
 //
-// Three of the four commands take no context at all, so they had no way out to
-// begin with. Refresh does take one, and is refused just the same: a context
-// makes the wedge escapable, not absent, and the obvious call to write inside a
-// callback is Refresh(context.Background()), which has no deadline to escape on
-// either.
+// Refresh is refused too, despite taking a context: a context makes the wedge
+// escapable, not absent, and the obvious call to write inside a callback is
+// Refresh(context.Background()), which has no deadline anyway.
 //
 // The refusal is keyed on WHICH goroutine is inside the callback, not merely
-// that one is, so a command issued from any other goroutine - including one that
-// happens to overlap a running callback - queues on the control channel and is
-// serviced normally, exactly as it always was.
+// that one is, so a command from any other goroutine, including one overlapping
+// a running callback, queues and is serviced normally.
 //
-// Unlike errWatcherClosed it is exported, because the two errors sit at
-// opposite ends of what a caller can do about them: a closed watcher is an
-// expected lifecycle race with Close and needs no test, while this one is a
-// programming mistake in the caller's own callback, and a test that wants to
-// prove the mistake is caught (or a wrapper that wants to translate it) needs
-// errors.Is to reach it.
+// It is exported, unlike errWatcherClosed, because a closed watcher is an
+// expected lifecycle race while this is a programming mistake in the caller's
+// own callback: a test proving the mistake is caught, or a wrapper translating
+// it, needs errors.Is to reach it.
 //
 // Pin and Refresh return it directly. PinCurrent returns version 0 and Unpin
 // does nothing; see their doc comments for why, and for what each leaves

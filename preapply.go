@@ -35,44 +35,30 @@ const defaultPreApplyTimeout = 10 * time.Second
 //	    }),
 //	)
 //
-// The hook runs on the reconciler goroutine, because it has to complete before
-// the swap and the OnChange dispatch queue is asynchronous and lossy by design
-// (WithQueueDepth drops the oldest event when full); a gate cannot be delivered
-// on a channel that is allowed to drop. Two consequences follow, and both
-// matter:
+// The hook runs on the reconciler goroutine: it must complete before the swap,
+// and the OnChange dispatch queue is asynchronous and lossy by design, so a
+// gate cannot ride on it. Two consequences follow.
 //
 // It is bounded by WithPreApplyTimeout, and the bound cannot be removed.
 //
-// It must not call back into the same Watcher, and mamori now catches it when
-// it does. Get is lock-free and safe here - it Loads a pointer the reconciler
-// already published, so it returns whatever Get returns anywhere else at this
-// instant: the snapshot this candidate would supersede, unless the watcher is
-// pinned, in which case it is the pinned one and the candidate supersedes
-// something else. Pin, PinCurrent, Unpin and Refresh are not safe: they are
-// serviced by the very goroutine the hook is occupying, so sendPin (pin.go)
-// would be waiting for a receiver that cannot exist until this hook returns.
-// That used to block until Close - no reconciliation, no OnChange, no OnError,
-// no diagnostic of any kind, and the hook's own timeout does not rescue it,
-// because the hook is parked inside sendPin, which never looks at the context
-// this hook was given.
-//
-// It is now detected instead, per call, and the hook keeps running:
+// It must not call back into the same Watcher. Get is safe: it Loads a pointer
+// the reconciler already published, returning the snapshot this candidate would
+// supersede, or the pinned one while pinned. Pin, PinCurrent, Unpin, and
+// Refresh are not, since they are serviced by the very goroutine the hook
+// occupies. Each is refused per call and the hook keeps running:
 //
 //   - Pin returns ErrReentrantCall, having pinned nothing.
 //   - PinCurrent returns 0, which no real version ever is.
 //   - Unpin does nothing and leaves the watcher pinned exactly as it was.
-//   - Refresh returns ErrReentrantCall, having re-resolved nothing. Its own
-//     context does not save it: the hook would have to outlive the refresh it
-//     is waiting for, and Refresh(context.Background()) has no deadline at all.
+//   - Refresh returns ErrReentrantCall, having re-resolved nothing.
 //
-// The detection is keyed on which goroutine is inside the hook, not merely that
-// one is, so a Pin issued from an unrelated goroutine that happens to overlap a
-// hook is untouched: it waits its turn and is serviced normally, as before.
+// Detection is keyed on which goroutine is inside the hook, not merely that one
+// is, so a Pin from an unrelated goroutine that happens to overlap a hook waits
+// its turn and is serviced normally.
 //
-// An OnError callback is in the same position and gets the same treatment - it
-// too runs inline on the reconciler goroutine. See ErrReentrantCall for the
-// whole of that rule; OnChange, which is delivered from the dispatch queue on
-// its own goroutine, is not affected by any of it.
+// An OnError callback runs inline on the same goroutine and gets the same
+// treatment. See ErrReentrantCall for the whole rule. OnChange is delivered
+// from the dispatch queue on its own goroutine and is unaffected.
 //
 // It is typed to the same T passed to Watch, and runs on the initial load as
 // well as on every subsequent update, so a credential that does not work is

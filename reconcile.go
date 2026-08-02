@@ -264,23 +264,19 @@ func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn }
 //	    return nil
 //	})
 //
-// Escaping and secret hygiene are the caller's, deliberately: net/url already
-// escapes a password containing '@' or '/' correctly, and assigning into a
-// secret.String is what keeps the assembled value redacted in fmt, JSON, and
-// slog. A tag-based derivation would have had to reinvent both.
+// Escaping and secret hygiene are the caller's: net/url escapes a password
+// containing '@' or '/' correctly, and assigning into a secret.String keeps the
+// assembled value redacted in fmt, JSON, and slog.
 //
 // Unlike PreApply, the hook takes no context.Context. PreApply does I/O to
-// prove a credential; a derive is a pure transformation of a struct that has
-// already been resolved, and the missing parameter is how the API says so.
+// prove a credential; a derive is a pure transformation of an already-resolved
+// struct, and the missing parameter is how the API says so.
 //
-// It must not call back into the same Watcher. Get is safe (it is a
-// lock-free atomic load), but Pin, PinCurrent, Unpin and Refresh are commands
-// serviced by the very goroutine this hook is occupying, so they would wait
-// for themselves; mamori detects that and refuses the call instead - see
-// [ErrReentrantCall], which spells out what each one returns. It is worse
-// here than for PreApply: this hook carries no context.Context at all (see
-// above), so unlike a PreApply hook bounded by WithPreApplyTimeout, there is
-// no deadline of its own to escape on either. Issue the call from another
+// It must not call back into the same Watcher. Get is safe (a lock-free atomic
+// load), but Pin, PinCurrent, Unpin, and Refresh are serviced by the very
+// goroutine this hook occupies, so they would wait for themselves; mamori
+// refuses them instead - see [ErrReentrantCall] for what each returns. There is
+// no context here to bound the wait either. Issue the call from another
 // goroutine, or let the next reconciliation carry it.
 //
 // Multiple calls run in registration order. Returning an error rejects the
@@ -288,32 +284,21 @@ func OnError(fn func(error)) Option { return func(o *options) { o.onError = fn }
 // serving the last valid config and the error reaches OnError as a *DeriveError.
 //
 // writes declares the dotted field paths the hook writes (the same shape
-// spec.Path uses, e.g. "Redis.DSN"), in any order. mamori cannot infer which
-// fields an opaque Go function writes, so the caller states them; declaring
-// them is what lets a derived field appear in ev.Changed and in Status()'s
-// per-field report, rather than being invisible to both the way an
-// undeclared derived field always has been.
+// spec.Path uses, e.g. "Redis.DSN"), in any order. mamori cannot infer what an
+// opaque Go function assigns, so the caller states it, and declaring it is what
+// lets a derived field appear in ev.Changed and in Status()'s per-field report.
+// It is variadic and optional: WithDerive(fn) still registers and runs the
+// hook, it simply reports no writes.
 //
-// writes is variadic and optional: WithDerive(fn), with no paths at all,
-// keeps compiling and behaves exactly as it always has - the hook still
-// registers and runs, it simply reports no writes, matching the original,
-// undeclared form of this option.
+// A declared path is validated for shape, not existence. An empty or
+// whitespace-only path is rejected at Load/Watch time (see typedDerives), since
+// silently ignoring one reintroduces the invisible-field problem writes exists
+// to fix. A path that names no field on T is NOT rejected: mamori has no
+// resolver for it outside the decode machinery this hook's opaqueness keeps it
+// from running, so such a path simply never reports as written.
 //
-// A declared path is validated for shape only, not existence, and that is
-// deliberate. An empty or whitespace-only path is rejected at Load/Watch time
-// (see typedDerives): silently ignoring one would reintroduce exactly the
-// invisible-field problem writes exists to fix. A non-empty path that names
-// no field on T is, by contrast, NOT rejected - it is tempting to check, but
-// wrong: the path is a dotted field path into a possibly nested struct, the
-// same shape spec.Path uses, and no resolver for it exists outside the
-// decode machinery (fieldSpecs, setField) that this hook's own opaqueness
-// keeps mamori from running against it. A path that matches nothing simply
-// never reports as written, degrading to today's behavior rather than
-// misbehaving.
-//
-// A nil fn installs nothing and is silently dropped rather than reported: a
-// deliberate clamp on bad input, the same posture WithHistory and
-// WithPreApplyTimeout already take, not an oversight.
+// A nil fn installs nothing and is silently dropped, the same clamp WithHistory
+// and WithPreApplyTimeout apply.
 func WithDerive[T any](fn func(*T) error, writes ...string) Option {
 	return func(o *options) {
 		if fn == nil {

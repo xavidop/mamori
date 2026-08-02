@@ -57,47 +57,35 @@ type pinReply struct {
 // sendPin delivers cmd to the reconciler goroutine and blocks for its reply.
 // It never blocks forever, even when the reconciler goroutine has already
 // exited or is mid-shutdown by the time this call is made, because it also
-// selects on <-w.ctx.Done(): the reconciler goroutine's loop (see
-// engine.loop) returns as soon as w.ctx is done, whether that is because
-// Close cancelled it or because the PARENT context passed to Watch was
-// cancelled independently of Close. w.ctx.Done() closes synchronously as
-// part of the cancel call itself (a context.CancelFunc does not return
-// until its Done channel is already closed), so a sendPin call blocked on
-// control, or one made after the fact, unblocks here in both shutdown paths,
-// not just the Close one, and returns errWatcherClosed: from the caller's
-// perspective, "the reconciler is gone" reads the same regardless of which
-// path caused it.
+// selects on <-w.ctx.Done(). The reconciler's loop returns as soon as w.ctx is
+// done, whether Close cancelled it or the PARENT context passed to Watch was
+// cancelled independently, and Done closes synchronously as part of the cancel.
+// So a sendPin blocked on control, or made after the fact, unblocks in both
+// shutdown paths and returns errWatcherClosed.
 //
-// There is one way to block on control forever that ctx.Done cannot rescue, and
-// the guard below is it: one of the watcher's own inline callbacks calling back
-// into that watcher. Three of them run ON the reconciler goroutine - a PreApply
-// hook (see preapply.go), a WithDerive hook (buildCandidate, reconciler.go) and
-// an OnError callback (emitErr, reconciler.go) - so while any of them runs
-// there is no receiver for control at all, and the caller waiting for one IS
-// the goroutine that would have to become that receiver.
-// Nothing short of Close ever resolves it, and until then the watcher does not
-// reconcile, does not deliver OnChange and does not report an error - a silent,
-// permanent wedge. So this refuses the command instead, and w.inCallback is what
-// makes the refusal precise: it holds the ID of the goroutine currently inside
-// such a callback, so only a caller that is genuinely waiting on itself is
-// turned away. A pin command from any other goroutine, including one issued
-// while a callback happens to be running, still queues on control and is
-// serviced when the reconciler comes back to its select, exactly as it always
-// was. OnChange is not covered, and needs not to be: it runs on the dispatch
-// goroutine, so a command issued from it is an ordinary command.
+// One way to block forever ctx.Done cannot rescue, and the guard below is it:
+// one of the watcher's own inline callbacks calling back into that watcher.
+// Three run ON the reconciler goroutine - a PreApply hook (preapply.go), a
+// WithDerive hook (buildCandidate, reconciler.go), and an OnError callback
+// (emitErr, reconciler.go) - so while any runs there is no receiver for control
+// at all, and the caller waiting for one IS the goroutine that would become it.
+// Nothing short of Close resolves that, so this refuses the command instead.
 //
-// The check is one atomic load on the path that matters: inCallback is zero
+// w.inCallback makes the refusal precise: it holds the ID of the goroutine
+// currently inside such a callback, so only a caller genuinely waiting on
+// itself is turned away. A command from any other goroutine, including one
+// overlapping a running callback, still queues and is serviced normally.
+// OnChange is not covered and need not be: it runs on the dispatch goroutine.
+//
+// The check is one atomic load on the path that matters. inCallback is zero
 // whenever no such callback is running, which for a watcher with no PreApply
-// gate, no derive hook, and no OnError callback is always, and the
-// goroutine-ID lookup is reached only when a pin command truly overlaps one.
+// gate, derive hook, or OnError callback is always, and the goroutine-ID lookup
+// is reached only when a command truly overlaps one.
 //
-// Pin, PinCurrent and Unpin take no context, so this is the whole of their
-// delivery. Refresh does take one, and goes through sendPinCtx below rather
-// than around it: the guard above, the errWatcherClosed answer and the
-// single-control-channel discipline are exactly what it needs too, and a second
-// send path would have had to re-derive all three (and, on the evidence of the
-// reentrancy bug this guard exists for, would have re-derived one of them
-// wrong).
+// Pin, PinCurrent, and Unpin take no context, so this is the whole of their
+// delivery. Refresh takes one and goes through sendPinCtx below rather than
+// around it, since the guard, the errWatcherClosed answer, and the
+// single-control-channel discipline are exactly what it needs too.
 func (w *Watcher[T]) sendPin(cmd pinCmd) pinReply {
 	// context.Background() is never cancelled, so both ctx.Done() branches
 	// below are receives on a nil channel, which select can never choose. This
