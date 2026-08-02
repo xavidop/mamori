@@ -5,7 +5,7 @@ title: Derived fields
 
 # Derived fields
 
-A DSN assembled from a host, a user, and a password in application code, after `Get()`, is a plain local built **once**, at wiring time:
+A DSN you assemble yourself, after `Get()`, is built **once**:
 
 ```go
 cfg := w.Get()
@@ -13,13 +13,11 @@ dsn := fmt.Sprintf("postgres://%s:%s@%s/app", cfg.User, cfg.Pass.Reveal(), cfg.H
 pool := connect(dsn)
 ```
 
-Three weeks later the password rotates. mamori does its job perfectly: `w.Get().Pass` returns the new password the instant it lands. The `dsn` variable above does not, because nothing ever asked it to. It was computed once, and mamori has no way to know that value depended on `Pass` at all. The pool keeps using a credential that is about to be revoked, and `w.Status()` reports every field perfectly healthy, because mamori's reconciliation reached every field it knows about and stopped exactly where you assembled the DSN yourself.
-
-Building the DSN with `fmt.Sprintf` also breaks silently the moment a rotated password contains an `@` or a `/`: neither is escaped, so the resulting DSN parses into the wrong host or the wrong path.
+Three weeks later the password rotates. `w.Get().Pass` returns the new one immediately, but `dsn` still holds the old one, because nothing ever asked it to rebuild. Your pool keeps using a credential that is about to be revoked, and `w.Status()` reports every field healthy, because mamori reconciled everything it knows about and stopped where you took over.
 
 ## The fix
 
-`WithDerive` moves that assembly inside mamori, so it happens again on every applied update instead of once, and declares which field it writes so mamori can track it like any other:
+`WithDerive` moves the assembly inside mamori, so it reruns on every update:
 
 ```go
 w, err := mamori.Watch[Config](ctx,
@@ -35,19 +33,15 @@ w, err := mamori.Watch[Config](ctx,
 )
 ```
 
-`WithDerive` installs a hook that runs on every `Load` and every reconciled update, after fields are decoded and before validation, so `DSN` above is rebuilt from whatever `User`, `Pass`, and `Host` currently hold, not from what they held when the process started.
+The hook runs on every `Load` and every reconciled update, after fields are decoded and before validation. `DSN` is rebuilt from whatever `User`, `Pass`, and `Host` hold right now.
 
-Build the DSN with `net/url`, as above, not `fmt.Sprintf`: `net/url` escapes a password containing `@` or `/` correctly, so a rotated password containing either still produces a valid DSN instead of a silently broken one.
+Use `net/url` rather than `fmt.Sprintf`. A rotated password containing `@` or `/` silently breaks a `Sprintf`-built DSN, parsing into the wrong host or path. `net/url` escapes it correctly.
 
 ## Declare what it writes
 
-The second argument to `WithDerive`, `"DSN"` above, is the dotted field path the hook writes (the same shape a `source` tag's field path uses). Declaring it is what makes `DSN` show up in `ev.Changed("DSN")` and in `Status().Fields`: mamori cannot inspect an opaque Go function to see what it assigns, so the hook states its own output. `ev.Changed("DSN")` works exactly like it does for any other field, but the `Status().Fields` entry does not: it carries a `Path`, `Derived: true`, and a `Version` - a content hash of the value the hook produced - but never a `Ref` or `Scheme`, since a derived field has no ref for either of those to describe - see [Observability](/docs/observability/#report-and-fieldstatus) for the full shape.
-
-`WithDerive` can also be called with no path at all, `mamori.WithDerive(fn)`, and the hook still registers and runs; it simply writes a field nobody can see change. Declaring the path is the ordinary way to use this option, not an advanced one, because there is little reason to build a field mamori can never tell you rebuilt.
+`"DSN"`, the trailing argument, is the field path the hook writes. mamori cannot read your function to see what it assigns, so the hook says so itself. Declaring it is what makes the field visible to `ev.Changed()` and `Status()`, and it is the ordinary way to call this option.
 
 ## React to it
-
-With the write declared, `DSN` is a normal trigger in `OnChange`:
 
 ```go
 mamori.OnChange(func(ev mamori.Change[Config]) {
@@ -57,69 +51,18 @@ mamori.OnChange(func(ev mamori.Change[Config]) {
 })
 ```
 
-`ev.Changed("DSN")` is true whenever the rebuilt value differs from the one it replaced, whether that is because `Pass` rotated, `Host` moved, or any other input the hook reads changed. There is no need to separately guard on `ev.Changed("Pass")`: the derived field's own change is the signal.
+`ev.Changed("DSN")` is true whenever the rebuilt value differs from the one it replaced, whatever input caused it. Trigger on `DSN` itself; there is no need to also watch `Pass`.
 
-## Secret hygiene
+## Worth knowing
 
-The assembled DSN embeds the password, so the target field should be a `secret.String` (or `secret.Bytes`), not a plain `string`. That is what keeps the rebuilt value redacted in `fmt`, JSON, and `slog`, the same as any other secret field. `Status()` never carries a derived field's value at all, so this matters for your own logging and error messages, not for what mamori reports.
+- **Use `secret.String` or `secret.Bytes`** for anything embedding a credential, so the rebuilt value stays redacted in `fmt`, JSON, and `slog`. mamori never reports a derived field's value, so this protects your own logs.
+- **An error rejects the whole update.** `Get()` keeps returning the last valid config and `OnError` receives a `*DeriveError`. A config whose derived fields did not build is not one to serve, and half-applying it would leave a rotated credential beside a value still derived from the old one.
+- **Multiple hooks run in registration order**, each keeping its own declared writes. A field derived from another derived field works for free, since the second hook sees the first one's output.
+- **Do not call back into the same `Watcher`.** A hook runs on the reconciler goroutine, so `Pin` and `Refresh` from inside return `ErrReentrantCall`, `PinCurrent` returns `0`, and `Unpin` does nothing. `Get()` is fine, and a `Pin` from another goroutine is unaffected.
 
-Redaction does not weaken the reported `Version`. mamori hashes the real content, walking into whatever the write path names: a secret is revealed for hashing wherever it sits, including one nested inside a struct, a slice, a map, or behind a pointer, so declaring the enclosing struct as the write path still reports a version that changes the moment the credential rotates. A pointer field is hashed by what it points at, not by its address, so a rebuild that changed nothing reports the same version rather than churning. The hash is never a way back to the value.
+## Where it shows up
 
-## A derive error rejects the whole update
-
-Returning an error from a derive rejects the whole candidate configuration, exactly as a validation failure does: `Get()` keeps returning the last valid config, and the error reaches `OnError` as a `*DeriveError`.
-
-```go
-mamori.OnError(func(err error) {
-	var de *mamori.DeriveError
-	if errors.As(err, &de) {
-		metrics.Inc("config_derive_error")
-	}
-})
-```
-
-Rejecting rather than continuing is deliberate: a configuration whose derived fields did not build is not one anyone should serve, and half-applying it would produce a snapshot where some fields reflect a rotated credential and a value derived from them still reflects the old one.
-
-## Multiple hooks run in registration order
-
-`WithDerive` can be given more than once. Each call appends a hook rather than replacing the last one, and they run in the order you registered them, each keeping its own declared writes:
-
-```go
-w, err := mamori.Watch[Config](ctx,
-	mamori.WithDerive(func(c *Config) error {
-		c.FullName = c.First + " " + c.Last
-		return nil
-	}, "FullName"),
-	mamori.WithDerive(func(c *Config) error {
-		c.Greeting = "Hello, " + c.FullName
-		return nil
-	}, "Greeting"),
-)
-```
-
-This is what makes a field derived from another derived field work, with no separate concept: the second hook sees the first hook's output, because it runs after it, and both `FullName` and `Greeting` are independently reported changed.
-
-## Do not call back into the same Watcher
-
-A derive hook runs on the reconciler goroutine, the same goroutine that services `Pin`, `PinCurrent`, `Unpin`, and `Refresh`. Calling any of those from inside the hook asks that goroutine to answer a command while it is busy being your hook, and mamori refuses rather than hanging: `Pin` and `Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0` (a version that never collides with a real one), and `Unpin` does nothing.
-
-```go
-mamori.WithDerive(func(c *Config) error {
-	c.DSN = assembleDSN(c)
-	// Wrong: asks the reconciler goroutine to service a command while it is
-	// busy running this very hook. Refused with ErrReentrantCall rather than
-	// hanging, but still a bug: refresh from another goroutine instead, or
-	// let the next reconciliation carry the change.
-	// _ = w.Refresh(context.Background())
-	return nil
-}, "DSN"),
-```
-
-`Get()` is the exception and always works from inside a derive hook: it is a lock-free read, not a command the reconciler goroutine has to service. A `Pin` from an unrelated goroutine that merely overlaps a running derive hook is unaffected too: it waits and is serviced normally.
-
-## Seeing a derived field from the CLI
-
-A declared derived field appears in [`mamori status` and `mamori doctor`](/docs/cli/doctor-status/), which render the same table from a live process's report. It gets a `DERIVED` column, and `SCHEME` and `REF` are blank for it:
+`mamori status` and `mamori doctor` give a derived field its own `DERIVED` column:
 
 ```bash
 $ mamori status --endpoint unix:///run/app-admin.sock
@@ -129,19 +72,17 @@ Pass  aws-sm  aws-sm://prod/db-pw     3         false  -          -           tr
 DSN                                   a3f9c1e2  false  -          -           true       true
 ```
 
-The empty `SCHEME` and `REF` are the point: they say mamori maintains this field but never resolved it from anywhere, rather than leaving a row that reads as a half-broken source field. `VERSION` is filled in, though: it is a content hash of the value the hook produced, the same kind of version a provider without a native revision already reports. `mamori status` and `mamori doctor` only ever show a running watcher's already-published config, and a hook that fails rejects the whole candidate before it is published, so a `DSN` row this command shows never comes from a hook that failed. (An empty `VERSION` column is possible in the library-side [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) preflight you run in CI, which evaluates hooks directly - not here.)
+The blank `SCHEME` and `REF` say mamori maintains this field but never fetched it from anywhere. `VERSION` is a content hash of the value your hook produced, so it moves the moment the credential rotates, even for a secret nested inside a struct.
 
-The CLI's static commands are the other half. `mamori explain`, `schema`, `policy`, and `vet` read `source` tags out of a source tree with no process running, and `mamori diff` compares two `explain --json` outputs, so it inherits the same view. `WithDerive(fn, "DSN")` puts nothing on the struct field, so none of them has anything to find, and `DSN` appears in no static output no matter how many fields feed into it. To see a derived field, ask a running process with `status`, not the source tree with `explain`.
+Static commands cannot see a derived field at all. `explain`, `schema`, `policy`, `vet`, and `diff` read `source` tags from your Go source, and a derive leaves nothing there to find. Ask a running process instead, or use the [`Doctor` preflight](/docs/observability/doctor/#derived-fields-are-probed) in CI, which runs your hooks and fails on one that errors.
 
-`mamori doctor --compare` straddles the two, diffing statically extracted paths against a live report's. It excludes derived fields from the live side, so a healthy config that declares one does not report it as drift.
+## What mamori cannot see
 
-## What mamori still cannot see
-
-A hook that writes a field it did not declare in `writes` behaves exactly as it did before declaring existed: mamori cannot inspect the hook's body, so an undeclared write is invisible to `ev.Changed()` and `Status()`, and mamori has no way to detect that it happened at all. Nor does declaring a write let mamori flag a field carrying both a `source` tag and a derive assignment as a conflict: the derive runs after decoding and its assignment simply wins, with nothing to detect or warn about the overlap.
+A hook that assigns a field it did not declare is invisible: no `ev.Changed()` entry, no `Status()` row, and no way for mamori to notice it happened. Nor can mamori flag a field carrying both a `source` tag and a derive assignment as a conflict; the derive runs after decoding and simply wins.
 
 ## See also
 
 - [Rotation safety](/docs/usage/rotation/) - `WithDerive` and `PreApply` together, so a rebuilt value is also a proven one.
 - [Options reference](/docs/usage/options/) - `WithDerive` alongside every other option and its default.
 - [Watch for changes](/docs/usage/watching/) - `Change`, `Changed`, and `OnChange` in full.
-- [Observability](/docs/observability/) - `Status()` and the `Report`/`FieldStatus` shape a declared derived field joins.
+- [Observability](/docs/observability/) - the full `Report`/`FieldStatus` shape a derived field joins.
