@@ -580,10 +580,14 @@ func TestBuildCandidateDeriveClearsMarkWhenHookPanics(t *testing.T) {
 
 // TestStatusReportsDeclaredDerivedField is Task 2's headline Status()
 // assertion: a path declared via WithDerive(fn, "DSN") must appear in
-// Status().Fields, carrying Derived: true and nothing else - no ref, no
-// scheme, no staleness, no error - which is exactly what an operator needs to
-// see that the field exists and is maintained, without mamori inventing a ref
-// or version for a field that has neither.
+// Status().Fields, carrying Derived: true and a non-empty Version, but no ref,
+// scheme, staleness, or error - which is exactly what an operator needs to see
+// that the field exists and is maintained, without mamori inventing a ref for
+// a field that has none. Version is populated (derivedVersion) so an operator
+// can still tell one derived value apart from another without mamori ever
+// publishing the value itself; see TestDerivedFieldVersionChangesOnRotation
+// for the rotation case and TestReportJSONNeverCarriesDerivedValue for the
+// guarantee that this version is never a way back to the value.
 func TestStatusReportsDeclaredDerivedField(t *testing.T) {
 	clk := NewFakeClock(time.Time{})
 	wp := newWatchProvider("sderive-status")
@@ -623,6 +627,9 @@ func TestStatusReportsDeclaredDerivedField(t *testing.T) {
 	}
 	if found.Stale || !found.LastOK.IsZero() || found.LastError != "" || found.LastKind != "" {
 		t.Errorf("DSN entry carries staleness/error/LastOK state, want all zero: %+v", found)
+	}
+	if found.Version == "" {
+		t.Error("DSN entry has empty Version, want a non-empty derivedVersion of the resolved DSN")
 	}
 }
 
@@ -730,6 +737,62 @@ func TestDerivedFieldChangedTrueAfterInputRotation(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OnChange did not fire for the rotation")
+	}
+}
+
+// TestDerivedFieldVersionChangesOnRotation is the end-to-end form of the
+// reveal guard: a rotated password must move the derived DSN's reported
+// version, or an operator comparing versions across replicas would see a
+// stale credential as identical to a fresh one.
+func TestDerivedFieldVersionChangesOnRotation(t *testing.T) {
+	clk := NewFakeClock(time.Time{})
+	wp := newWatchProvider("sderive-version")
+	wp.set("user", "alice", "v1")
+
+	type Config struct {
+		User string `source:"sderive-version://user"`
+		DSN  string
+	}
+	w, err := Watch[Config](context.Background(),
+		WithProvider(wp), WithClock(clk),
+		WithDerive(func(c *Config) error { c.DSN = "postgres://" + c.User; return nil }, "DSN"),
+	)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	var before string
+	for _, f := range w.Status().Fields {
+		if f.Path == "DSN" {
+			before = f.Version
+		}
+	}
+	if before == "" {
+		t.Fatal("DSN entry has empty Version before rotation, want non-empty")
+	}
+
+	wp.push("user", "bob", "v2")
+	blockUntilTimers(t, clk, 1)
+	clk.Advance(defaultDebounce)
+	waitFlushed(t, w, 2)
+
+	var after string
+	var found bool
+	for _, f := range w.Status().Fields {
+		if f.Path == "DSN" {
+			after = f.Version
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Status().Fields has no entry for DSN after rotation")
+	}
+	if after == "" {
+		t.Fatal("DSN entry has empty Version after rotation, want non-empty")
+	}
+	if after == before {
+		t.Fatalf("DSN entry Version unchanged across rotation (%q), want it to move with the derived value from %q to %q", before, "postgres://alice", "postgres://bob")
 	}
 }
 

@@ -108,7 +108,12 @@ func (e *engine[T]) buildReport() *Report {
 				continue
 			}
 			sensitive := v.Type() == secretStringType || v.Type() == secretBytesType
-			fields = append(fields, FieldStatus{Path: p, Derived: true, Sensitive: sensitive})
+			fields = append(fields, FieldStatus{
+				Path:      p,
+				Derived:   true,
+				Sensitive: sensitive,
+				Version:   derivedVersion(v),
+			})
 		}
 	}
 	// served is the version Get actually returns: the pinned version while
