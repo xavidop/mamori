@@ -26,19 +26,20 @@ type FieldStatus struct {
 	Sensitive bool          // field is a secret.String or secret.Bytes
 
 	// Derived is true for a field a WithDerive hook declares it writes. It has
-	// no ref, so Scheme, Ref, LastOK, Age, and Stale are all zero for it, but
-	// Version is a content hash of the computed value (see derivedVersion,
-	// derivedversion.go), the same kind of content-derived version a provider
-	// without a native revision already reports. It is reported so an
-	// operator can see the field exists and is maintained, which is the whole
-	// reason a caller declares it.
+	// no ref, so Scheme, Ref, LastOK, Age, and Stale are all zero for it. It
+	// is reported so an operator can see the field exists and is maintained,
+	// which is the whole reason a caller declares it.
 	//
-	// A Derived entry appears in both Watcher.Status and a Doctor report. A
-	// Doctor probe evaluates the hook itself (see doctorDerivedFields,
-	// doctor.go) and may mark the row LastKind KindInvalid when the hook
-	// fails, which affects Healthy; a Watcher.Status entry can never carry
-	// that failure, because a failing hook rejects the whole candidate in
-	// buildCandidate before a config is ever published.
+	// A Derived entry appears in both Watcher.Status and a Doctor report.
+	// Version is a content hash of the computed value (see derivedVersion,
+	// derivedversion.go) when that value was actually computed. In
+	// Watcher.Status it always is: a failing hook rejects the whole
+	// candidate in buildCandidate, so a published config never contains one.
+	// In a Doctor report (see doctorDerivedFields, doctor.go) Version can be
+	// blank instead, in two different cases: the hook ran and failed, which
+	// leaves the row LastKind KindInvalid and affects Healthy, or a sourced
+	// field was unreachable so the hook was never run at all, which leaves
+	// the row carrying a LastError but no LastKind.
 	Derived bool
 }
 
