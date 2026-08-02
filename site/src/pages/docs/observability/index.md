@@ -90,9 +90,11 @@ type Report struct {
 
 `Snapshot` and `Live` are equal, and `Pinned` is `false`, unless the watcher is frozen with `Watcher.Pin` / `Watcher.PinCurrent`: see [Snapshots and pinning](/docs/usage/snapshots/) for what that divergence means.
 
-A `FieldStatus` with `Derived: true` is a field a [`WithDerive`](/docs/usage/derived-fields/) hook declares writing, not one mamori resolved from a source: it carries a `Path` and nothing else, since there is no ref, version, staleness, or error to report for it, and it never affects `Healthy`. It only appears at all if the hook that writes it names the field explicitly; an undeclared derive write has no entry here.
+A `FieldStatus` with `Derived: true` is a field a [`WithDerive`](/docs/usage/derived-fields/) hook declares writing, not one mamori resolved from a source: it never carries a `Scheme`, `Ref`, `LastOK`, `Age`, or `Stale`, since there is no ref behind it. It only appears at all if the hook that writes it names the field explicitly; an undeclared derive write has no entry here.
 
-A `Derived` entry appears only in a running `Watcher`'s `Status()`, never in a [`Doctor`](/docs/observability/doctor/) report: `Doctor` builds `Fields` from `source` tags alone and never reads a `WithDerive` hook's declared writes, so its `Report` never carries a `Derived` entry, even when the same `WithDerive` options are passed to it. A derived field has no ref, so there is nothing for a one-shot reachability probe to check in the first place.
+`Version` is different: it is populated for a derived entry, as a content hash of the value the hook produced, whenever that value was actually computed. In a running `Watcher`'s `Status()`, it always is - a failing hook rejects the whole candidate configuration before it is ever published, so a live report never contains a derived field whose hook failed.
+
+A [`Doctor`](/docs/observability/doctor/) report is where `Version` can instead come back blank, in one of two cases: every sourced field resolved but the hook itself returned an error, which leaves `LastKind` reading `invalid` and makes the report unhealthy; or a sourced field was unreachable, so the hook never ran at all, which leaves the row carrying a `LastError` saying it was not evaluated, with no `LastKind`. That second case is all-or-nothing across every derived field, not only the ones whose own inputs failed: `Doctor` cannot inspect a hook's closure to learn which fields it reads. See [Doctor: pre-deploy check](/docs/observability/doctor/#derived-fields-are-probed) for the full detail.
 
 ## Health: one yes/no for a probe
 

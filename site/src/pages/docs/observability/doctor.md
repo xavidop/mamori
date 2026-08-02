@@ -15,9 +15,17 @@ Unlike `Load`, `Doctor` never aborts on the first failure: it walks every field 
 
 `Report.Snapshot` and `Report.Live` are always `0` for a `Doctor` report (and `Report.Pinned` is always `false`), marking a one-shot probe rather than a running watcher's snapshot (whose version starts at 1).
 
-## Derived fields are not probed
+## Derived fields are probed
 
-"Every field," above, means every field a `source` tag declares - the same walk `Load` and `Watch` share - not a field a [`WithDerive`](/docs/usage/derived-fields/) hook writes. `Doctor` builds its `Report` from `T`'s struct tags alone and never reads a registered `WithDerive` hook's declared writes at all, so a derived field never gets a [`FieldStatus`](/docs/observability/#report-and-fieldstatus) entry here - not even a `Derived: true` one - regardless of whether the same `WithDerive` options are also passed to `Doctor`. This is not an oversight: a derived field has no ref, so there is nothing for a reachability preflight to resolve or report success or failure on. A `Watcher`'s `Status()` is where a declared derived field appears (see [Observability](/docs/observability/#report-and-fieldstatus)); `Doctor` is a pre-`Watch` check for the fields mamori resolves from a backend, not a substitute for exercising a derive hook itself.
+"Every field," above, now also means every field a [`WithDerive`](/docs/usage/derived-fields/) hook declares writing, not only the ones a `source` tag declares. `Doctor` runs the registered hooks against the values it just resolved and appends one [`FieldStatus`](/docs/observability/#report-and-fieldstatus) per declared write path, each carrying `Derived: true`. There are exactly three outcomes for a derived row:
+
+- **Every sourced field resolved and the hook succeeded**: `Version` is a content hash of the value the hook produced - the same kind of version a provider without a native revision already reports.
+- **Every sourced field resolved but the hook returned an error**: `Version` stays blank, `LastKind` reads `invalid`, `LastError` carries the hook's own error, and the report is unhealthy.
+- **A sourced field was unreachable**: the hook never runs at all, so there is no value to hash. `Version` stays blank and `LastError` says the field was not evaluated, with no `LastKind` - there was nothing to classify, because nothing ran.
+
+That third case is all-or-nothing across every derived field, not only the ones whose own inputs failed: `Doctor` cannot inspect a hook's closure to learn which fields it reads, so a single unreachable sourced field blocks every derived row, not just the ones that depend on it.
+
+Running the hooks means `Doctor` executes your code during a preflight. `WithDerive` documents a hook as a pure transformation, but nothing enforces that: a hook with a side effect - a metric increment, a log line, a call to another service - runs for real every time `Doctor` runs, not only when a candidate config is actually about to ship.
 
 ## Run it before a watcher starts
 

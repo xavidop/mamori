@@ -41,7 +41,7 @@ Build the DSN with `net/url`, as above, not `fmt.Sprintf`: `net/url` escapes a p
 
 ## Declare what it writes
 
-The second argument to `WithDerive`, `"DSN"` above, is the dotted field path the hook writes (the same shape a `source` tag's field path uses). Declaring it is what makes `DSN` show up in `ev.Changed("DSN")` and in `Status().Fields`: mamori cannot inspect an opaque Go function to see what it assigns, so the hook states its own output. `ev.Changed("DSN")` works exactly like it does for any other field, but the `Status().Fields` entry does not: it carries only a `Path` (and `Derived: true`), never a `Ref`, `Scheme`, or `Version`, since a derived field has none of those to report - see [Observability](/docs/observability/#report-and-fieldstatus) for the full shape.
+The second argument to `WithDerive`, `"DSN"` above, is the dotted field path the hook writes (the same shape a `source` tag's field path uses). Declaring it is what makes `DSN` show up in `ev.Changed("DSN")` and in `Status().Fields`: mamori cannot inspect an opaque Go function to see what it assigns, so the hook states its own output. `ev.Changed("DSN")` works exactly like it does for any other field, but the `Status().Fields` entry does not: it carries a `Path`, `Derived: true`, and a `Version` - a content hash of the value the hook produced - but never a `Ref` or `Scheme`, since a derived field has no ref for either of those to describe - see [Observability](/docs/observability/#report-and-fieldstatus) for the full shape.
 
 `WithDerive` can also be called with no path at all, `mamori.WithDerive(fn)`, and the hook still registers and runs; it simply writes a field nobody can see change. Declaring the path is the ordinary way to use this option, not an advanced one, because there is little reason to build a field mamori can never tell you rebuilt.
 
@@ -115,9 +115,27 @@ mamori.WithDerive(func(c *Config) error {
 
 `Get()` is the exception and always works from inside a derive hook: it is a lock-free read, not a command the reconciler goroutine has to service. A `Pin` from an unrelated goroutine that merely overlaps a running derive hook is unaffected too: it waits and is serviced normally.
 
+## Seeing a derived field from the CLI
+
+A declared derived field appears in [`mamori status` and `mamori doctor`](/docs/cli/doctor-status/), which render the same table from a live process's report. It gets a `DERIVED` column, and `SCHEME` and `REF` are blank for it:
+
+```bash
+$ mamori status --endpoint unix:///run/app-admin.sock
+PATH  SCHEME  REF                     VERSION   STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
+Host  env     env://DB_HOST           3         false  -          -           false      false
+Pass  aws-sm  aws-sm://prod/db-pw     3         false  -          -           true       false
+DSN                                   a3f9c1e2  false  -          -           true       true
+```
+
+The empty `SCHEME` and `REF` are the point: they say mamori maintains this field but never resolved it from anywhere, rather than leaving a row that reads as a half-broken source field. `VERSION` is filled in, though: it is a content hash of the value the hook produced, the same kind of version a provider without a native revision already reports. `mamori status` and `mamori doctor` only ever show a running watcher's already-published config, and a hook that fails rejects the whole candidate before it is published, so a `DSN` row this command shows never comes from a hook that failed. (An empty `VERSION` column is possible in the library-side [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) preflight you run in CI, which evaluates hooks directly - not here.)
+
+The CLI's static commands are the other half. `mamori explain`, `schema`, `policy`, and `vet` read `source` tags out of a source tree with no process running, and `mamori diff` compares two `explain --json` outputs, so it inherits the same view. `WithDerive(fn, "DSN")` puts nothing on the struct field, so none of them has anything to find, and `DSN` appears in no static output no matter how many fields feed into it. To see a derived field, ask a running process with `status`, not the source tree with `explain`.
+
+`mamori doctor --compare` straddles the two, diffing statically extracted paths against a live report's. It excludes derived fields from the live side, so a healthy config that declares one does not report it as drift.
+
 ## What mamori still cannot see
 
-A hook that writes a field it did not declare in `writes` behaves exactly as it did before declaring existed: mamori cannot inspect the hook's body, so an undeclared write is invisible to `ev.Changed()` and `Status()`, and mamori has no way to detect that it happened at all. Declaring a write does not extend to `mamori explain`, `schema`, or `diff` either way: all three read `source` struct tags statically, a derive has none, and `DSN` appears in none of their output no matter how many fields feed into it. Nor does declaring a write let mamori flag a field carrying both a `source` tag and a derive assignment as a conflict: the derive runs after decoding and its assignment simply wins, with nothing to detect or warn about the overlap.
+A hook that writes a field it did not declare in `writes` behaves exactly as it did before declaring existed: mamori cannot inspect the hook's body, so an undeclared write is invisible to `ev.Changed()` and `Status()`, and mamori has no way to detect that it happened at all. Nor does declaring a write let mamori flag a field carrying both a `source` tag and a derive assignment as a conflict: the derive runs after decoding and its assignment simply wins, with nothing to detect or warn about the overlap.
 
 ## See also
 

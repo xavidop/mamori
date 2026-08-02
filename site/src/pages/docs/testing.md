@@ -218,7 +218,7 @@ go test -tags preflight ./...
 
 Unlike `Load`, `Doctor` never aborts on the first failure, so one run reports every misconfigured ref. See [Doctor](/docs/observability/doctor/) for the full `Report` shape.
 
-This preflight covers every `source`-tagged field, not a field a [`WithDerive`](/docs/usage/derived-fields/) hook writes: a derived field has no ref, so `Doctor` has nothing to resolve for it and reports nothing at all, healthy or otherwise. Exercise a derive hook's own logic with an ordinary unit test instead (call `Load` or `Watch` and assert on the resulting field), not by expecting this preflight to catch it.
+`Doctor` also runs every registered `WithDerive` hook and reports a row for each declared write path, so a hook that panics or returns an error fails this preflight too - but only once every `source`-tagged field it reads has itself resolved. When a sourced field is unreachable, `Doctor` does not feed the hook a zero value in its place: every derived row instead reports that it was never evaluated, since mamori cannot tell which fields a given hook actually reads. See [Doctor: pre-deploy check](/docs/observability/doctor/#derived-fields-are-probed) for the three outcomes a derived row can report.
 
 ## Drive poll intervals with the fake clock
 

@@ -20,17 +20,18 @@ mamori doctor --endpoint <ep> [--insecure] [--json] [--compare "<patterns>"]
 
 ```bash
 $ mamori doctor --endpoint https://svc.internal:9090 --compare ./...
-PATH            SCHEME  REF                     VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
-Redis.Addr      env     env://REDIS_ADDR        3        false  -          -           false      false
-Redis.Password  aws-sm  aws-sm://prod/redis-pw  3        false  -          -           true       false
+PATH            SCHEME  REF                     VERSION   STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
+Redis.Addr      env     env://REDIS_ADDR        3         false  -          -           false      false
+Redis.Password  aws-sm  aws-sm://prod/redis-pw  3         false  -          -           true       false
+DSN                                             a3f9c1e2  false  -          -           true       true
 
-HEALTHY: 2 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
+HEALTHY: 3 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
 
 compare: source vs. live field paths
   no drift: source and live field sets match
 ```
 
-A row with `DERIVED` `true` is a [`WithDerive`](/docs/usage/derived-fields/)-declared write path, not a field mamori resolved: `SCHEME`, `REF`, and `VERSION` are blank for it, since there is no ref behind it. `--compare` excludes it from the live side of the comparison entirely, so a declared derive never reports as drift against source, which has no `source:` tag for it to match in the first place.
+A row with `DERIVED` `true` is a [`WithDerive`](/docs/usage/derived-fields/)-declared write path, not a field mamori resolved: `SCHEME` and `REF` are empty for it, since there is no ref behind it. `VERSION` is filled in, and always is for a row this command can show: it is a content hash of the value the hook produced, the same kind of version a provider without a native revision already reports. That is because `doctor` and `status` only ever render a running watcher's already-published config, and a hook that fails rejects the whole candidate before it is ever published, so a config this command can see never contains a derived field whose hook did not succeed. The library-side [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) preflight you run in CI is different: it evaluates hooks directly and can leave `VERSION` empty there, either because a hook failed or because a sourced field it depends on was unreachable. `--compare` excludes a derived row from the live side of the comparison entirely, so a declared derive never reports as drift against source, which has no `source:` tag for it to match in the first place.
 
 ## status
 
@@ -45,10 +46,11 @@ mamori status --endpoint <ep> [--insecure] [--watch] [--interval <dur>]
 
 ```bash
 $ mamori status --endpoint unix:///run/app-admin.sock --watch --interval 5s
-PATH        SCHEME  REF               VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
-Redis.Addr  env     env://REDIS_ADDR  3        false  -          -           false      false
+PATH        SCHEME  REF               VERSION   STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
+Redis.Addr  env     env://REDIS_ADDR  3         false  -          -           false      false
+DSN                                   a3f9c1e2  false  -          -           true       true
 
-HEALTHY: 1 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
+HEALTHY: 2 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
 # ...re-renders every 5s until Ctrl-C
 ```
 
