@@ -101,6 +101,14 @@ func TestSettingsRegionDefaultsToFrPar(t *testing.T) {
 	}
 }
 
+// TestSettingsMissing pins one half of each missing-setting error: that it
+// names the environment variable a caller must set. Its table and setup are
+// identical to TestSettingsMissingErrorsNameTheOption below, which pins the
+// other half (the WithXxx option name), and that duplication is deliberate,
+// not an oversight to tidy later: merging the two into one test would couple
+// two independent regressions, a dropped env var name and a dropped option
+// name, into a single case, so a future break in either one would no longer
+// fail on its own.
 func TestSettingsMissing(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

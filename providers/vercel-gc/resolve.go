@@ -161,8 +161,22 @@ func (p *Provider) fetchItems(ctx context.Context, c connection, store string) (
 
 // get performs one authenticated GET against a store endpoint and returns the
 // body. The token travels in the Authorization header rather than the
-// documented token query parameter, so it can never reach a log line, a trace
-// span, or an error message through a URL.
+// documented token query parameter, so an ordinary request through this
+// method cannot leak it into a log line, a trace span, or an error message
+// through a URL.
+//
+// That guarantee is about requests actually reaching Vercel, not about every
+// way c.host can be set. WithBaseURL redirects a connection-string-derived
+// host rather than being ignored when one is supplied (see its doc comment),
+// so passing a full connection string to WithBaseURL by mistake, instead of
+// just a bare origin, puts the token into c.host and therefore into this
+// method's URL and any transport error a live request against it produces.
+// Parsing a malformed connection string is a narrower case: url.Parse can
+// echo a fragment of it back into its error, for example invalid port
+// ":notaport" after host or invalid URL escape "%zz", but never the token
+// itself, because url.Parse neither validates nor unescapes the query string
+// the token lives in (see parseConnectionString's doc comment for how that
+// error is stripped before it reaches a caller).
 func (p *Provider) get(ctx context.Context, c connection, store, endpoint string) ([]byte, error) {
 	url := c.host + "/" + store + "/" + endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

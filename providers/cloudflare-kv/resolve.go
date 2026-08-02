@@ -226,7 +226,14 @@ func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[
 		return nil, fmt.Errorf("mamori/cloudflare-kv: namespace not found for bulk get of %d key(s): %w", len(keys), mamori.ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics. Never log it.
+		// Read a bounded amount of the error body for diagnostics. Never log
+		// it. Embedding the body verbatim, bounded by errBodyLimit, is a
+		// deliberate house convention shared with providers/doppler,
+		// providers/vercel-gc, and providers/scaleway-sm, not something
+		// invented here: the verbatim text is what actually tells an operator
+		// what the upstream rejected the request for, and the bound is what
+		// stops a hostile or broken upstream turning that diagnostic into an
+		// unbounded string.
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
 		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d from bulk get of %d key(s): %s",
 			resp.StatusCode, len(keys), strings.TrimSpace(string(msg)))
@@ -304,7 +311,9 @@ func (p *Provider) get(ctx context.Context, s settings, key string) ([]byte, err
 		return nil, fmt.Errorf("mamori/cloudflare-kv: key %q not found: %w", key, mamori.ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics. Never log it.
+		// Read a bounded amount of the error body for diagnostics. Never log
+		// it (same errBodyLimit bound and rationale as bulkGet's status
+		// branch, above).
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
 		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d reading key %q: %s",
 			resp.StatusCode, key, strings.TrimSpace(string(msg)))
