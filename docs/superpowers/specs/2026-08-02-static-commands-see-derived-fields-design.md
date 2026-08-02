@@ -134,12 +134,23 @@ a `WithDerive` call appearing only in a test does not contribute a derived field
 This is deliberate and stays that way: `explain` describes the shipping config
 surface.
 
-## diff compatibility
+## The explain --json shape changes, and that is fine
 
-`mamori diff` compares two `explain --json` outputs. Adding `kind` to that JSON
-means an old base file diffed against a new head file would show every field as
-modified. `diff` therefore treats a missing `kind` as `source`, so a base file
-produced by an older binary keeps comparing cleanly.
+`mamori diff` compares two `explain --json` outputs, so adding `kind` means a
+base file produced by an older binary compares badly against a new head file.
+
+No fallback is built for that. The repo owner's call: the format has no
+installed base worth preserving, and a missing-`kind`-means-`source` shim would
+be permanent complexity bought for nobody. Regenerate the base file with the
+new binary, which is what a CI job doing `explain --json` on the base commit
+already does on every run.
+
+**Golden files to regenerate**, since the shape change reaches them:
+`testdata/explain.json.golden`, `testdata/explain.table.golden`,
+`testdata/schema.json.golden`, and the `testdata/diff/` inputs
+(`base.json`, `head.json`, `head-minus.json`, `notarray.json`). The
+`policy.*.golden` files must NOT change: `policy` filters to `KindSource`, so a
+diff there means the filter is wrong and is a signal, not a chore.
 
 ## Piece 3: vet flags a derive that launders a secret
 
@@ -205,9 +216,6 @@ from the struct; a path naming no field on `T` (must not appear); a non-literal
 path (must set `DerivesIncomplete`, must not silently drop); and a local
 function named `WithDerive` (must not be picked up). Mutation-verify the
 package-path check and the non-literal detection.
-
-**Compatibility.** A `diff` test feeding a base JSON with no `kind` key against
-a head JSON with one asserts no spurious modifications.
 
 **Piece 3.** `analysistest` fixtures, the shape `vetcheck` already uses, for:
 a hook revealing into a plain `string` (flagged); the same hook revealing into a
