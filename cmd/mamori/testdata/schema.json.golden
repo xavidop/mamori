@@ -151,5 +151,27 @@
     "required": [
       "Name"
     ]
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "example.com/fixture.DeriveOverlap",
+    "type": "object",
+    "properties": {
+      "Port": {
+        "type": "string",
+        "default": "8080"
+      },
+      "DSN": {
+        "type": "string",
+        "minLength": 10
+      },
+      "Derived": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "DSN",
+      "Derived"
+    ]
   }
 ]

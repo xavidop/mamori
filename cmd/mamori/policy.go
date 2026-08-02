@@ -207,6 +207,15 @@ func collectPolicyRefs(structs []StructInfo) policyRefs {
 	byScheme := policyRefs{}
 	for _, s := range structs {
 		for _, f := range s.Fields {
+			// Defense in depth, not a load-bearing filter: KindDerived and
+			// KindValidate fields have no source tag, so extract.go never
+			// populates their Refs and the loop below would iterate zero times
+			// anyway. Deleting this line changes no output and fails no test
+			// today (the policy.*.golden files do NOT guard it -- they are
+			// built from the fixture's source-tagged refs alone). It stays as
+			// an explicit statement of the invariant, so a future Field kind
+			// that does carry a Ref cannot silently start granting
+			// permissions.
 			if f.Kind != KindSource {
 				continue // no ref, so no permission to grant
 			}

@@ -124,8 +124,12 @@ func Extract(patterns []string, typeName string, schemes sourcetag.SchemeSet) ([
 				continue
 			}
 			key := pkg.PkgPath + "." + s.name
+			// walkFields runs first and derivedFields is handed its result, so
+			// a declared write path that ALSO names a source- or
+			// validate-tagged field adds no second, emptier entry for the same
+			// Path. See derivedFields's own doc comment.
 			fields := walkFields(pkg.Types, s.typ, "", firstSensitive)
-			fields = append(fields, derivedFields(pkg.Types, s.typ, declared[key])...)
+			fields = append(fields, derivedFields(pkg.Types, s.typ, declared[key], fields)...)
 			out = append(out, StructInfo{
 				Package:           pkg.PkgPath,
 				TypeName:          s.name,

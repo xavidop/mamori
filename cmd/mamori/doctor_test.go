@@ -93,10 +93,20 @@ func TestDoctorCompareDetectsDrift(t *testing.T) {
 		t.Fatalf("Extract: %v", err)
 	}
 
+	// Only KindSource fields, for the same reason
+	// TestDoctorCompareNoDriftReportsMatch filters: doctor --compare builds its
+	// source-side path set from the fields that can actually be resolved to a
+	// live value, so a validate-only or WithDerive-declared path is never in it
+	// and can never be reported "only in source". Taking the last path of an
+	// unfiltered list picked whichever kind the fixture happened to declare
+	// last, which made this test depend on fixture declaration order.
 	var sourcePaths []string
 	seen := map[string]bool{}
 	for _, s := range structs {
 		for _, f := range s.Fields {
+			if f.Kind != KindSource {
+				continue
+			}
 			if !seen[f.Path] {
 				seen[f.Path] = true
 				sourcePaths = append(sourcePaths, f.Path)

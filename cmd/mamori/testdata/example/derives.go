@@ -56,6 +56,13 @@ func init() {
 	// into TestFindDerivesLiteralPaths and friends above.
 	incompletePaths := []string{"Name"}
 	mamori.WithDerive(func(c *IncompleteConfig) error { return nil }, incompletePaths...)
+
+	// DeriveOverlap (config.go) declares three write paths at once: one that
+	// also carries a source: tag, one that also carries a validate: tag, and
+	// one that carries neither. Extract must emit exactly one entry per path,
+	// and the tagged two must be the walkFields entries, not KindDerived
+	// stand-ins that lost their default/optional/validate.
+	mamori.WithDerive(func(c *DeriveOverlap) error { return nil }, "Port", "DSN", "Derived")
 }
 
 // DeriveLiteral is TestFindDerivesLiteralPaths's fixture type.

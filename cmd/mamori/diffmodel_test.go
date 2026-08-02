@@ -6,6 +6,14 @@ import (
 )
 
 // si builds a one-struct slice with the given fields, for brevity in tests.
+//
+// The privilege-delta tests below set Kind: KindSource on their fields and the
+// pure structural-diff tests do not, which is not an inconsistency:
+// computeDiff's own walk never reads Field.Kind, but computePrivilegeDelta
+// reaches collectPolicyRefs (policy.go), which skips every field whose Kind is
+// not KindSource. Drop those tags and the four privilege tests stop seeing any
+// refs at all and fail. They are load-bearing, and they also mirror what a
+// real Extract emits for a source-tagged field.
 func si(pkg, typeName string, fields ...Field) []StructInfo {
 	return []StructInfo{{Package: pkg, TypeName: typeName, Fields: fields}}
 }

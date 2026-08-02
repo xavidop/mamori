@@ -46,6 +46,15 @@ type DeriveCfg struct {
 	PlainDSN string
 	SafeDSN  secret.String
 	FullName string
+
+	// PassPtr reaches the same secret.String Reveal through a pointer. Go
+	// dereferences automatically, so this is the same reveal; asserting
+	// *types.Named on the receiver missed it.
+	PassPtr *secret.String
+
+	// Label is a second plain write path, so a hook can write two plain
+	// fields and only one of them be the laundering one.
+	Label string
 }
 
 // BAD: reveals a secret into a plain string.
@@ -75,3 +84,43 @@ var _ = mamori.WithDerive(func(c *DeriveCfg) error {
 	c.FullName = fakeSecret{}.Reveal()
 	return nil
 }, "FullName")
+
+// OK: the multi-path hook that a hook-scoped reveal check got wrong. This is
+// the safe pattern the rule itself recommends (reveal into a secret.String)
+// sitting beside an ordinary non-secret derived field, in one hook declaring
+// both paths. A single Reveal anywhere in the body used to flag every plain
+// declared path of the hook, so "FullName" drew a diagnostic positioned at the
+// SafeDSN line. Nothing here may be reported.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.SafeDSN = secret.NewString("postgres://" + c.Pass.Reveal() + "@h/db")
+	c.FullName = c.First + " " + c.Last
+	return nil
+}, "SafeDSN", "FullName")
+
+// BAD, but only on one of three paths: the reveal must be attributed to the
+// assignment that actually carries it, and reported there. Label and FullName
+// are plain strings written by the same hook and must stay clean, and the
+// diagnostic must land on the PlainDSN line, not on whichever line the first
+// Reveal happens to sit on.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.Label = "primary"
+	c.PlainDSN = "postgres://" + c.Pass.Reveal() + "@h/db" // want `derive hook writes revealed secret material into "PlainDSN", a plain string; use secret.String or secret.Bytes`
+	c.FullName = c.First + " " + c.Last
+	return nil
+}, "Label", "PlainDSN", "FullName")
+
+// BAD: the plaintext reaches the plain field through a local variable. Scoping
+// the reveal to one assignment must not cost this true positive.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	plain := c.Pass.Reveal()
+	c.FullName = c.First + " " + c.Last
+	c.PlainDSN = "postgres://" + plain + "@h/db" // want `derive hook writes revealed secret material into "PlainDSN", a plain string; use secret.String or secret.Bytes`
+	return nil
+}, "PlainDSN", "FullName")
+
+// BAD: the reveal is reached through a *secret.String. Go dereferences
+// automatically, so this launders exactly as the value receiver does.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.PlainDSN = "postgres://" + c.PassPtr.Reveal() + "@h/db" // want `derive hook writes revealed secret material into "PlainDSN", a plain string; use secret.String or secret.Bytes`
+	return nil
+}, "PlainDSN")

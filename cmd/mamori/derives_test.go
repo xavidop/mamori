@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -163,5 +164,147 @@ func TestExplainNotesIncompleteDerives(t *testing.T) {
 		"      above may be incomplete\n"
 	if !strings.Contains(stdout, want) {
 		t.Errorf("stdout missing incomplete-derives note:\n%s", stdout)
+	}
+}
+
+// extractOne runs Extract against the fixture module for a single struct type
+// and returns its StructInfo, for tests that assert on Extract's own field
+// list rather than on a rendered command's output.
+func extractOne(t *testing.T, typeName string) StructInfo {
+	t.Helper()
+	root := moduleRoot(t)
+	enterFixtureModule(t, filepath.Join(root, "testdata", "example"))
+
+	structs, err := Extract([]string{"./..."}, typeName, nil)
+	if err != nil {
+		t.Fatalf("Extract(--type=%s): %v", typeName, err)
+	}
+	if len(structs) != 1 {
+		t.Fatalf("Extract(--type=%s) returned %d structs, want 1", typeName, len(structs))
+	}
+	return structs[0]
+}
+
+// fieldsWithPath returns every Field in si whose Path is path. It returns a
+// slice, not a single Field, precisely because the bug under test was Extract
+// emitting two entries for one path.
+func fieldsWithPath(si StructInfo, path string) []Field {
+	var got []Field
+	for _, f := range si.Fields {
+		if f.Path == path {
+			got = append(got, f)
+		}
+	}
+	return got
+}
+
+// TestExtractDerivedPathKeepsSourceTaggedEntry covers the first of the two
+// shapes where a WithDerive write path names a field walkFields already
+// emitted: DeriveOverlap.Port carries source:, default:, and optional:"true"
+// AND is a declared write path. Appending a KindDerived entry for it produced
+// two Port rows in `mamori explain`, two "Path": "Port" entries in
+// `explain --json` (which `mamori diff` consumes), and -- because schema.go's
+// builderNode.insert is last-write-wins and a KindDerived Field sets none of
+// Default/HasDefault/Optional/Validate -- a schema where Port had lost its
+// "8080" default and moved into "required" despite optional:"true".
+func TestExtractDerivedPathKeepsSourceTaggedEntry(t *testing.T) {
+	si := extractOne(t, "DeriveOverlap")
+
+	got := fieldsWithPath(si, "Port")
+	if len(got) != 1 {
+		t.Fatalf("Extract emitted %d entries for DeriveOverlap.Port, want exactly 1: %+v", len(got), got)
+	}
+	f := got[0]
+	if f.Kind != KindSource {
+		t.Errorf("Port Kind = %q, want %q: the source-tagged entry is the one that must survive", f.Kind, KindSource)
+	}
+	if !f.HasDefault || f.Default != "8080" {
+		t.Errorf("Port HasDefault/Default = %v/%q, want true/%q", f.HasDefault, f.Default, "8080")
+	}
+	if !f.Optional {
+		t.Error("Port Optional = false, want true: optional:\"true\" must survive the derive declaration")
+	}
+	if f.Source != "env:OVERLAP_PORT" {
+		t.Errorf("Port Source = %q, want %q", f.Source, "env:OVERLAP_PORT")
+	}
+}
+
+// TestExtractDerivedPathKeepsValidateRules covers the second shape:
+// DeriveOverlap.DSN carries no source: tag but does carry
+// validate:"required,min=10", so walkFields emits it as KindValidate, and it
+// is also a declared write path. The KindDerived duplicate carried an empty
+// Validate and won, which dropped minLength from the schema -- defeating the
+// point of emitting validate-tagged fields at all, for exactly the fields
+// both features touch.
+func TestExtractDerivedPathKeepsValidateRules(t *testing.T) {
+	si := extractOne(t, "DeriveOverlap")
+
+	got := fieldsWithPath(si, "DSN")
+	if len(got) != 1 {
+		t.Fatalf("Extract emitted %d entries for DeriveOverlap.DSN, want exactly 1: %+v", len(got), got)
+	}
+	f := got[0]
+	if f.Kind != KindValidate {
+		t.Errorf("DSN Kind = %q, want %q: the validate-tagged entry is the one that must survive", f.Kind, KindValidate)
+	}
+	if f.Validate != "required,min=10" {
+		t.Errorf("DSN Validate = %q, want %q", f.Validate, "required,min=10")
+	}
+}
+
+// TestExtractStillEmitsDeriveOnlyPath is the other half of the skip: a
+// declared write path naming a field with neither a source: nor a validate:
+// tag has no walkFields entry to defer to, so it must still produce its
+// KindDerived one. Without this, the fix for the two tests above could pass by
+// dropping derived fields entirely.
+func TestExtractStillEmitsDeriveOnlyPath(t *testing.T) {
+	si := extractOne(t, "DeriveOverlap")
+
+	got := fieldsWithPath(si, "Derived")
+	if len(got) != 1 {
+		t.Fatalf("Extract emitted %d entries for DeriveOverlap.Derived, want exactly 1: %+v", len(got), got)
+	}
+	if got[0].Kind != KindDerived {
+		t.Errorf("Derived Kind = %q, want %q", got[0].Kind, KindDerived)
+	}
+}
+
+// TestSchemaDerivedOverlapKeepsDefaultAndRules is the end-to-end consequence
+// of the two tests above, asserted where a user would actually notice it: the
+// emitted JSON Schema. Port keeps its default and stays out of "required";
+// DSN keeps the minLength its validate: rule asks for.
+func TestSchemaDerivedOverlapKeepsDefaultAndRules(t *testing.T) {
+	root := moduleRoot(t)
+	fixtureDir := filepath.Join(root, "testdata", "example")
+
+	stdout, stderr, code := runSchema(t, fixtureDir, "--type=DeriveOverlap", "./...")
+	if code != 0 {
+		t.Fatalf("schemaCmd(--type=DeriveOverlap) = %d, stderr = %s", code, stderr)
+	}
+
+	var doc struct {
+		Properties map[string]struct {
+			Default   any      `json:"default"`
+			MinLength *int     `json:"minLength"`
+			Type      string   `json:"type"`
+			Enum      []string `json:"enum"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("schema output is not valid JSON: %v\n%s", err, stdout)
+	}
+
+	if got := doc.Properties["Port"].Default; got != "8080" {
+		t.Errorf("Port default = %v, want %q", got, "8080")
+	}
+	if slices.Contains(doc.Required, "Port") {
+		t.Errorf("Port is in required %v, want it excluded: it is optional:\"true\" with a default", doc.Required)
+	}
+	if got := doc.Properties["DSN"].MinLength; got == nil || *got != 10 {
+		t.Errorf("DSN minLength = %v, want 10: validate:\"min=10\" must survive the derive declaration", got)
+	}
+	if !slices.Contains(doc.Required, "DSN") {
+		t.Errorf("DSN missing from required %v, want it listed: validate:\"required\"", doc.Required)
 	}
 }

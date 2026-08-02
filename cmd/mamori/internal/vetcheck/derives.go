@@ -17,6 +17,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -43,19 +44,29 @@ const secretPkgPath = "github.com/xavidop/mamori/secret"
 // reveals a secret and launders the plaintext into a declared write path
 // naming a plain string or []byte field, reporting a diagnostic for each
 // such path found.
+//
+// The reveal is matched per write path, not per hook. A hook routinely writes
+// several paths, and only some of them touch secret material: the safe pattern
+// this very rule recommends (SafeDSN = secret.NewString(... Pass.Reveal()
+// ...)) sitting in the same hook as an ordinary FullName = First + " " + Last
+// is enough for a hook-scoped reveal to fire on FullName, at a position
+// pointing at the SafeDSN line. A check that cries wolf gets turned off, so
+// each declared path is judged only by the assignments that actually target
+// it.
 func checkDerives(pass *analysis.Pass, call *ast.CallExpr) {
 	named, hook, writePaths, ok := withDeriveCall(pass, call)
 	if !ok {
 		return
 	}
 
-	revealPos, revealed := findReveal(pass, hook)
-	if !revealed {
-		// No Reveal/RevealBytes call anywhere in the hook body: no secret
-		// material can have moved, however this hook shuffles fields around
-		// (e.g. FullName = First + " " + Last). Nothing to report.
+	writes := hookWrites(hook)
+	if len(writes) == 0 {
+		// The hook assigns nothing this rule can attribute to a write path
+		// (an unnamed or "_" parameter, or every write routed through a
+		// helper). Nothing to report; see hookWrites for the boundary.
 		return
 	}
+	tainted := revealedLocals(pass, hook)
 
 	for _, path := range writePaths {
 		fieldType, ok := fieldTypeByPath(named, path)
@@ -72,10 +83,215 @@ func checkDerives(pass *analysis.Pass, call *ast.CallExpr) {
 			// (see the SafeDSN fixture), not laundering.
 			continue
 		}
-		pass.Reportf(revealPos,
-			"derive hook writes revealed secret material into %q, a plain %s; use secret.String or secret.Bytes",
-			path, kind)
+		for _, w := range writes[path] {
+			if !revealsAny(pass, w.rhs, tainted) {
+				continue
+			}
+			// Report at the assignment that launders, not at the first reveal
+			// anywhere in the hook: with several paths written from one hook
+			// those are different lines, and the reveal's line names the wrong
+			// field.
+			pass.Reportf(w.pos,
+				"derive hook writes revealed secret material into %q, a plain %s; use secret.String or secret.Bytes",
+				path, kind)
+			break // one diagnostic per path, however many times it is written
+		}
 	}
+}
+
+// hookWrite is one assignment inside a hook that targets a declared write
+// path: where to report, and the right-hand side expressions feeding it.
+type hookWrite struct {
+	pos token.Pos
+	rhs []ast.Expr
+}
+
+// hookWrites maps every dotted path assigned on the hook's own parameter to
+// the assignments that target it, so checkDerives can ask "does the assignment
+// to THIS path carry revealed secret material" rather than "does this hook
+// reveal anything at all".
+//
+// Only assignments written directly against the hook's parameter are seen
+// (c.SafeDSN = ..., c.Nested.Field = ...). A write routed through a helper
+// function or through a pointer alias produces no entry and therefore no
+// diagnostic: the same "inline hook literal only" boundary withDeriveCall
+// already draws, and the direction a static check should err in.
+func hookWrites(hook *ast.FuncLit) map[string][]hookWrite {
+	recv, ok := hookParamName(hook)
+	if !ok {
+		return nil
+	}
+
+	writes := make(map[string][]hookWrite)
+	ast.Inspect(hook.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			path, ok := fieldPathOf(lhs, recv)
+			if !ok {
+				continue
+			}
+			// Paired assignment (a, b = x, y) feeds each path its own
+			// expression; a single right-hand side (a, b = f()) feeds both.
+			rhs := assign.Rhs
+			if len(assign.Rhs) == len(assign.Lhs) {
+				rhs = assign.Rhs[i : i+1]
+			}
+			writes[path] = append(writes[path], hookWrite{pos: assign.Pos(), rhs: rhs})
+		}
+		return true
+	})
+	return writes
+}
+
+// hookParamName returns the name of the hook's single *T parameter, the
+// identifier every write path is rooted at. It reports false for a hook that
+// does not name its parameter at all (func(*Config) error) or names it "_",
+// neither of which can carry a field assignment.
+func hookParamName(hook *ast.FuncLit) (string, bool) {
+	if hook.Type == nil || hook.Type.Params == nil || len(hook.Type.Params.List) == 0 {
+		return "", false
+	}
+	names := hook.Type.Params.List[0].Names
+	if len(names) == 0 || names[0].Name == "_" {
+		return "", false
+	}
+	return names[0].Name, true
+}
+
+// fieldPathOf renders expr as a dotted field path rooted at recv, the same
+// "Redis.Password" shape a source: tag's Path and a WithDerive write path both
+// use, and reports false for anything not rooted at recv. The hook parameter
+// is a *T, so c.Field and (*c).Field are the same write and both resolve here.
+func fieldPathOf(expr ast.Expr, recv string) (string, bool) {
+	var parts []string
+	cur := expr
+	for {
+		switch e := cur.(type) {
+		case *ast.SelectorExpr:
+			parts = append(parts, e.Sel.Name)
+			cur = e.X
+		case *ast.ParenExpr:
+			cur = e.X
+		case *ast.StarExpr:
+			cur = e.X
+		case *ast.Ident:
+			if e.Name != recv || len(parts) == 0 {
+				return "", false
+			}
+			slices.Reverse(parts)
+			return strings.Join(parts, "."), true
+		default:
+			return "", false
+		}
+	}
+}
+
+// revealedLocals returns the local identifiers inside hook that hold revealed
+// secret material, so the very common two-step shape
+//
+//	plain := c.Pass.Reveal()
+//	c.PlainDSN = "postgres://" + plain + "@h/db"
+//
+// is still caught once the reveal is matched per assignment rather than per
+// hook. ast.Inspect visits statements in source order, so a local is tainted
+// before the assignment that consumes it is examined; this is a deliberately
+// shallow heuristic, not a dataflow analysis, and a laundering path it cannot
+// follow degrades to no diagnostic rather than to a wrong one.
+func revealedLocals(pass *analysis.Pass, hook *ast.FuncLit) map[string]bool {
+	tainted := make(map[string]bool)
+	ast.Inspect(hook.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			id, ok := lhs.(*ast.Ident)
+			if !ok || id.Name == "_" {
+				continue
+			}
+			rhs := assign.Rhs
+			if len(assign.Rhs) == len(assign.Lhs) {
+				rhs = assign.Rhs[i : i+1]
+			}
+			if revealsAny(pass, rhs, tainted) {
+				tainted[id.Name] = true
+			}
+		}
+		return true
+	})
+	return tainted
+}
+
+// revealsAny reports whether any of exprs carries revealed secret material:
+// either a Reveal/RevealBytes call on the secret package's own types, or a
+// reference to a local already known to hold one (see revealedLocals).
+func revealsAny(pass *analysis.Pass, exprs []ast.Expr, tainted map[string]bool) bool {
+	found := false
+	for _, expr := range exprs {
+		ast.Inspect(expr, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				if isRevealCall(pass, node) {
+					found = true
+					return false
+				}
+			case *ast.Ident:
+				if tainted[node.Name] {
+					found = true
+					return false
+				}
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// isRevealCall reports whether call is Reveal or RevealBytes on a type
+// belonging to secretPkgPath.
+func isRevealCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if sel.Sel.Name != "Reveal" && sel.Sel.Name != "RevealBytes" {
+		return false
+	}
+
+	recvType := pass.TypesInfo.TypeOf(sel.X)
+	if recvType == nil {
+		return false
+	}
+	named := namedReceiver(recvType)
+	if named == nil || named.Obj().Pkg() == nil {
+		// Matching name, wrong (or no) package: not the secret package's
+		// Reveal - e.g. the fakeSecret fixture.
+		return false
+	}
+	return named.Obj().Pkg().Path() == secretPkgPath
+}
+
+// namedReceiver unwraps t to the named type a method call resolves against:
+// through an alias, and through one level of pointer, because Go dereferences
+// automatically and a *secret.String field reaches String's value-receiver
+// Reveal exactly as a secret.String field does. Asserting *types.Named on the
+// receiver directly missed that shape.
+func namedReceiver(t types.Type) *types.Named {
+	t = types.Unalias(t)
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(ptr.Elem())
+	}
+	named, _ := t.(*types.Named)
+	return named
 }
 
 // withDeriveCall reports whether call is a call to mamori.WithDerive[T],
@@ -150,47 +366,6 @@ func withDeriveCall(pass *analysis.Pass, call *ast.CallExpr) (named *types.Named
 	}
 
 	return named, hook, writePaths, true
-}
-
-// findReveal walks hook's body for a call to Reveal or RevealBytes whose
-// receiver's named type belongs to secretPkgPath, returning the position of
-// the first such call found and true. It returns false if no such call
-// exists anywhere in the body.
-func findReveal(pass *analysis.Pass, hook *ast.FuncLit) (pos token.Pos, found bool) {
-	ast.Inspect(hook.Body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if sel.Sel.Name != "Reveal" && sel.Sel.Name != "RevealBytes" {
-			return true
-		}
-
-		recvType := pass.TypesInfo.TypeOf(sel.X)
-		if recvType == nil {
-			return true
-		}
-		recvNamed, ok := recvType.(*types.Named)
-		if !ok || recvNamed.Obj().Pkg() == nil ||
-			recvNamed.Obj().Pkg().Path() != secretPkgPath {
-			// Matching name, wrong (or no) package: not the secret package's
-			// Reveal - e.g. the fakeSecret fixture. Keep walking; some other
-			// call in the body may still be the real thing.
-			return true
-		}
-
-		pos = call.Pos()
-		found = true
-		return false
-	})
-	return pos, found
 }
 
 // fieldTypeByPath resolves a dotted field path against t, mirroring

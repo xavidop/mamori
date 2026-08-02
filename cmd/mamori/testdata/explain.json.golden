@@ -332,5 +332,40 @@
       }
     ],
     "DerivesIncomplete": true
+  },
+  {
+    "Package": "example.com/fixture",
+    "TypeName": "DeriveOverlap",
+    "Fields": [
+      {
+        "Path": "Port",
+        "Kind": "source",
+        "GoType": "string",
+        "Source": "env:OVERLAP_PORT",
+        "Refs": [
+          "env:OVERLAP_PORT"
+        ],
+        "Default": "8080",
+        "HasDefault": true,
+        "Optional": true,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      },
+      {
+        "Path": "Derived",
+        "Kind": "derived",
+        "GoType": "string",
+        "Source": "",
+        "Refs": null,
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      }
+    ],
+    "DerivesIncomplete": false
   }
 ]

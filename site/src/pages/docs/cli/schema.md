@@ -50,7 +50,11 @@ A field is also `required` when it has no `default:` and is not `optional:"true"
 
 ## What this describes
 
-`schema` describes the **validated config struct**, after every field is resolved and every `WithDerive` hook has run, not a document you would ever hand mamori. That is why a field with no `source:` tag can appear at all, and even end up `required`: mamori's validator runs against the whole struct, so a field carrying `validate:` rules is enforced whether or not it has a source, and `schema` emits it accordingly. That is also why this output can list a field [`mamori explain`](/docs/cli/explain/) does not: explain lists what mamori reads from a backend, schema lists everything mamori enforces. A `WithDerive`-declared field lands in `required` the same way, and that is correct, not a bug: mamori genuinely rejects a config whose derived field comes out empty after the hook runs.
+`schema` describes the **validated config struct**, after every field is resolved and every `WithDerive` hook has run, not a document you would ever hand mamori. That is why a field with no `source:` tag can appear at all, and even end up `required`: mamori's validator runs against the whole struct, so a field carrying `validate:` rules is enforced whether or not it has a source, and `schema` emits it accordingly. That is also why this output can list a field [`mamori explain`](/docs/cli/explain/) does not: explain lists what mamori reads from a backend, schema lists everything mamori enforces.
+
+A [`WithDerive`](/docs/usage/derived-fields/)-declared field with no `default:` and no `optional:"true"` lands in `required` too, by the same "no default, not optional" rule. Read that as a description of the struct the hooks are expected to leave behind, not as a promise mamori polices it: mamori never resolves a field with no `source:` tag, so nothing checks that a derived field came out non-empty unless the field also carries `validate:"required"`, a rule the validator does run against the whole struct, derived fields included. Add that tag if you want the check, not just the schema entry.
+
+A field that carries a `source:` or `validate:` tag **and** is a `WithDerive` write path appears once, described by its tags: its `default`, its `optional:"true"`, and its `validate:` rules all survive. The derive overwrites the value at runtime, not the declaration.
 
 ## Custom provider schemes
 

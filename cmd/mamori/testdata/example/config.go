@@ -138,3 +138,34 @@ type ServerConfig struct {
 type IncompleteConfig struct {
 	Name string `source:"env:INCOMPLETE_NAME"`
 }
+
+// DeriveOverlap backs TestExtractDerivedPathKeepsSourceTaggedEntry and
+// TestExtractDerivedPathKeepsValidateRules: a WithDerive write path is allowed
+// to name a field that ALSO carries a source: or validate: tag (the derive
+// runs after decoding and simply wins -- see
+// site/src/pages/docs/usage/derived-fields.md), which means walkFields and
+// derivedFields can both have something to say about the same Path. Only the
+// walkFields entry may survive; a second, KindDerived entry carries no
+// Default/Optional/Validate at all, and schema.go's last-write-wins
+// builderNode.insert let it erase them.
+//
+// Declared here in config.go rather than in derives.go for the same reason
+// IncompleteConfig is (see its doc comment): taggedStructs orders same-package
+// structs by token.Pos, which is only reliable within one file.
+type DeriveOverlap struct {
+	// Port is the source-tagged shape: defaulted and optional, and also a
+	// declared derive write path. The duplicate entry dropped its "8080"
+	// default and pushed Port into the schema's "required" array despite
+	// optional:"true".
+	Port string `source:"env:OVERLAP_PORT" default:"8080" optional:"true"`
+
+	// DSN is the validate-only shape: no source tag, so walkFields emits it as
+	// KindValidate, and also a declared derive write path. The duplicate entry
+	// carried an empty Validate, which dropped minLength from the schema.
+	DSN string `validate:"required,min=10"`
+
+	// Derived carries neither tag, so walkFields never emits it and the
+	// declared write path is the only thing that can: the skip above must not
+	// swallow the genuinely derive-only case it is surrounded by.
+	Derived string
+}

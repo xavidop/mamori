@@ -185,9 +185,38 @@ func fieldByName(st *types.Struct, name string) (types.Type, bool) {
 // no ref to list - see FieldKind's own doc comment) and GoType/Sensitive
 // resolved from the field the path actually names, exactly as a plain
 // scalar field's would be.
-func derivedFields(pkg *types.Package, st *types.Struct, paths []string) []Field {
+//
+// walked is whatever walkFields (extract.go) already produced for the same
+// struct, and a declared path that names one of those fields contributes
+// nothing here: it is already described, more completely than a KindDerived
+// entry ever could be. Declaring a write path for a field that ALSO carries a
+// source: or validate: tag is legal and documented ("the derive runs after
+// decoding and simply wins", site/src/pages/docs/usage/derived-fields.md), so
+// this is the common case, not an edge one, and without the skip such a field
+// is emitted twice: once by walkFields with its Default/HasDefault/Optional/
+// Validate, and once here with none of them. schema.go's builderNode.insert is
+// last-write-wins, so the second, emptier entry silently erased the real one -
+// a defaulted, optional field lost its "default" and moved into "required",
+// and a validate:"min=10" field lost its "minLength".
+//
+// This mirrors the decision core already made for the same overlap:
+// reconciler.go's hasSpecPath, which report.go's derived-append loop and
+// derivedFieldChanges both consult so a declared path that also names a real
+// fieldSpec yields one entry, not two. paths is also deduplicated against
+// itself, the way derivedFieldChanges's own seen map is, so two WithDerive
+// calls naming the same path cannot produce two rows either.
+func derivedFields(pkg *types.Package, st *types.Struct, paths []string, walked []Field) []Field {
+	seen := make(map[string]struct{}, len(walked))
+	for _, f := range walked {
+		seen[f.Path] = struct{}{}
+	}
+
 	var fields []Field
 	for _, p := range paths {
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
 		t, ok := fieldTypeByPath(st, p)
 		if !ok {
 			// findDerives already validates this against the same struct, so
