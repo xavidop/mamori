@@ -198,8 +198,22 @@
         "Sensitive": false,
         "OnFail": "",
         "Validate": ""
+      },
+      {
+        "Path": "DSN",
+        "Kind": "derived",
+        "GoType": "string",
+        "Source": "",
+        "Refs": null,
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
       }
-    ]
+    ],
+    "DerivesIncomplete": false
   },
   {
     "Package": "example.com/fixture",
@@ -220,7 +234,8 @@
         "OnFail": "",
         "Validate": ""
       }
-    ]
+    ],
+    "DerivesIncomplete": false
   },
   {
     "Package": "example.com/fixture",
@@ -256,7 +271,8 @@
         "OnFail": "keeplast",
         "Validate": ""
       }
-    ]
+    ],
+    "DerivesIncomplete": false
   },
   {
     "Package": "example.com/fixture",
@@ -292,6 +308,29 @@
         "OnFail": "default",
         "Validate": ""
       }
-    ]
+    ],
+    "DerivesIncomplete": false
+  },
+  {
+    "Package": "example.com/fixture",
+    "TypeName": "IncompleteConfig",
+    "Fields": [
+      {
+        "Path": "Name",
+        "Kind": "source",
+        "GoType": "string",
+        "Source": "env:INCOMPLETE_NAME",
+        "Refs": [
+          "env:INCOMPLETE_NAME"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      }
+    ],
+    "DerivesIncomplete": true
   }
 ]

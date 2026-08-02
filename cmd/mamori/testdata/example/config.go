@@ -92,6 +92,14 @@ type Config struct {
 	// to reach Nested.Addr: this is the regression fixture for the ordering
 	// trap (see TaggedNest's doc comment).
 	Nested TaggedNest `validate:"required"`
+
+	// DSN carries no source tag and no validate tag: nothing in walkFields
+	// would ever emit it. It exists only for derives.go's
+	// mamori.WithDerive(fn, "DSN") call to declare, making it the fixture for
+	// KindDerived (see extract.go's FieldKind and cmd/mamori/derives.go):
+	// the only way this field can appear in `mamori explain` or `mamori
+	// schema` is by reading that call site statically.
+	DSN string
 }
 
 // TaggedNest is a nested struct carrying its own validate tag. walkFields must
@@ -115,4 +123,18 @@ type RedisConfig struct {
 type ServerConfig struct {
 	Host string `source:"env:SERVER_HOST"`
 	Port string `source:"env:SERVER_PORT" default:"9090" onfail:"default"`
+}
+
+// IncompleteConfig backs TestExplainNotesIncompleteDerives
+// (explain.go's derivesIncompleteNote): it carries a real source: tagged
+// field (so it appears in Extract's output at all); derives.go's init
+// declares a WithDerive call for it whose write path is a variable, which
+// findDerives cannot read statically. Its type is declared here, alongside
+// Config and friends, rather than in derives.go, deliberately: taggedStructs
+// orders same-package structs by token.Pos, and that ordering is only
+// reliable within one file's AST -- across files in the same package it can
+// vary between otherwise-identical runs (parsing runs concurrently per
+// file), which would make explain.table.golden/explain.json.golden flake.
+type IncompleteConfig struct {
+	Name string `source:"env:INCOMPLETE_NAME"`
 }

@@ -69,6 +69,15 @@ type StructInfo struct {
 	Package  string // the struct's package path
 	TypeName string // the struct's type name
 	Fields   []Field
+
+	// DerivesIncomplete is true when at least one WithDerive call site
+	// targeting this struct (see findDerives, derives.go) declared a write
+	// path that was not a string literal (a variable, a spread slice, ...),
+	// which cannot be read without running the program. When true, the
+	// KindDerived fields already listed in Fields may not be every field this
+	// struct's hooks actually write. explain prints a note when this is true
+	// rather than silently listing an incomplete set as if it were complete.
+	DerivesIncomplete bool
 }
 
 // Extract loads the Go packages matching patterns and returns a StructInfo
@@ -76,7 +85,11 @@ type StructInfo struct {
 // struct tag, in deterministic order: packages sorted by path, structs in
 // source declaration order within each package, fields in struct
 // declaration order (with nested, source-less struct fields recursed into
-// and their fields contributing dotted paths).
+// and their fields contributing dotted paths). A struct that qualifies also
+// gets one KindDerived field appended per WithDerive-declared write path
+// findDerives (derives.go) found for it; a struct with no source-tagged
+// field at all is never returned, even if some WithDerive call names it -
+// see findDerives's own doc comment.
 //
 // When typeName is non-empty, only the struct named typeName is returned
 // (still recursing into any nested, source-less struct fields it has).
@@ -92,6 +105,50 @@ func Extract(patterns []string, typeName string, schemes sourcetag.SchemeSet) ([
 		firstSensitive = schemes.FirstSensitiveScheme
 	}
 
+	sorted, err := loadPackages(patterns)
+	if err != nil {
+		return nil, err
+	}
+
+	// declared/incomplete come from findDerives (derives.go): every
+	// WithDerive-declared write path found anywhere in the loaded packages,
+	// keyed by "pkgpath.TypeName" of the config type that owns it, plus
+	// which of those keys had at least one path that could not be read
+	// statically.
+	declared, incomplete := findDerives(sorted)
+
+	var out []StructInfo
+	for _, pkg := range sorted {
+		for _, s := range taggedStructs(pkg) {
+			if typeName != "" && s.name != typeName {
+				continue
+			}
+			key := pkg.PkgPath + "." + s.name
+			fields := walkFields(pkg.Types, s.typ, "", firstSensitive)
+			fields = append(fields, derivedFields(pkg.Types, s.typ, declared[key])...)
+			out = append(out, StructInfo{
+				Package:           pkg.PkgPath,
+				TypeName:          s.name,
+				Fields:            fields,
+				DerivesIncomplete: incomplete[key],
+			})
+		}
+	}
+	return out, nil
+}
+
+// loadPackages loads patterns with golang.org/x/tools/go/packages, in the
+// mode both Extract's own field walk and findDerives need (types, syntax,
+// and cross-package type info, so a WithDerive call site in one package can
+// be matched against a T declared in another one - see
+// TestFindDerivesCrossPackage), and returns them sorted by package path for
+// deterministic output.
+//
+// It never sets packages.Config.Tests. explain/schema/policy/doctor
+// --compare all describe the shipping config surface, not the test surface,
+// so a source: tag or a WithDerive call living only in a _test.go file is
+// invisible to every command built on Extract.
+func loadPackages(patterns []string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax |
 			packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
@@ -107,21 +164,7 @@ func Extract(patterns []string, typeName string, schemes sourcetag.SchemeSet) ([
 	sorted := make([]*packages.Package, len(pkgs))
 	copy(sorted, pkgs)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].PkgPath < sorted[j].PkgPath })
-
-	var out []StructInfo
-	for _, pkg := range sorted {
-		for _, s := range taggedStructs(pkg) {
-			if typeName != "" && s.name != typeName {
-				continue
-			}
-			out = append(out, StructInfo{
-				Package:  pkg.PkgPath,
-				TypeName: s.name,
-				Fields:   walkFields(pkg.Types, s.typ, "", firstSensitive),
-			})
-		}
-	}
-	return out, nil
+	return sorted, nil
 }
 
 // namedStruct is a package-level struct type found while scanning a
@@ -131,6 +174,7 @@ func Extract(patterns []string, typeName string, schemes sourcetag.SchemeSet) ([
 type namedStruct struct {
 	name string
 	typ  *types.Struct
+	file string // the declaring file, for a stable cross-file order
 	pos  token.Pos
 }
 
@@ -166,11 +210,31 @@ func taggedStructs(pkg *packages.Package) []namedStruct {
 				return true
 			}
 			seen[name] = true
-			found = append(found, namedStruct{name: name, typ: st, pos: ts.Pos()})
+			found = append(found, namedStruct{
+				name: name,
+				typ:  st,
+				file: pkg.Fset.Position(ts.Pos()).Filename,
+				pos:  ts.Pos(),
+			})
 			return true
 		})
 	}
-	sort.Slice(found, func(i, j int) bool { return found[i].pos < found[j].pos })
+	// Sort by (file, pos), not by pos alone. A token.Pos is only meaningful
+	// within one file: across the files of a package its value depends on the
+	// order they were added to the shared FileSet, which packages.Load does
+	// concurrently. Sorting on pos alone therefore let a package whose structs
+	// span several files report them in a different order from run to run,
+	// breaking the deterministic order Extract's own doc comment promises and
+	// making "mamori diff" see changes between two runs of an unchanged tree.
+	// Filename first keeps declaration order inside each file, which is what a
+	// reader expects, and is identical to the old behavior for the
+	// single-file packages that are the common case.
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].file != found[j].file {
+			return found[i].file < found[j].file
+		}
+		return found[i].pos < found[j].pos
+	})
 	return found
 }
 

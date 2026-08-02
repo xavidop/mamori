@@ -13,6 +13,7 @@ GCPSecret       string         gcp-sm://acme-prod/db-password      -        fals
 Redis.Addr      string         env:REDIS_ADDR                      -        false     false
 Redis.Password  secret.String  vault://kv/redis#password           -        false     true
 Nested.Addr     string         env:NEST_ADDR                       -        false     false
+DSN             string                                             -        false     false
 
 example.com/fixture.TaggedNest
 FIELD  TYPE    CHAIN          DEFAULT  OPTIONAL  SENSITIVE
@@ -27,3 +28,10 @@ example.com/fixture.ServerConfig
 FIELD  TYPE    CHAIN            DEFAULT  OPTIONAL  SENSITIVE
 Host   string  env:SERVER_HOST  -        false     false
 Port   string  env:SERVER_PORT  9090     false     false
+
+example.com/fixture.IncompleteConfig
+FIELD  TYPE    CHAIN                DEFAULT  OPTIONAL  SENSITIVE
+Name   string  env:INCOMPLETE_NAME  -        false     false
+note: this struct declares WithDerive write paths that could not be read
+      statically (a variable or a slice expansion); the derived fields listed
+      above may be incomplete

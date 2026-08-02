@@ -174,5 +174,21 @@ func writeExplainTable(stdout io.Writer, structs []StructInfo) {
 				strconv.FormatBool(f.Optional), strconv.FormatBool(f.Sensitive))
 		}
 		_ = tw.Flush()
+
+		if s.DerivesIncomplete {
+			_, _ = fmt.Fprint(stdout, derivesIncompleteNote)
+		}
 	}
 }
+
+// derivesIncompleteNote is printed after a struct's table when
+// StructInfo.DerivesIncomplete is true. Silent under-reporting would make an
+// incomplete derived-field listing look complete, which is worse than
+// admitting the gap: at least one WithDerive call targeting this struct
+// declared a write path findDerives could not read statically (derives.go),
+// so the KindDerived rows already printed above may not be every field that
+// struct's hooks actually write.
+const derivesIncompleteNote = `note: this struct declares WithDerive write paths that could not be read
+      statically (a variable or a slice expansion); the derived fields listed
+      above may be incomplete
+`

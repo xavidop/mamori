@@ -74,12 +74,16 @@
         "required": [
           "Addr"
         ]
+      },
+      "DSN": {
+        "type": "string"
       }
     },
     "required": [
       "APIKey",
       "Computed",
       "DBHost",
+      "DSN",
       "GCPSecret",
       "Level",
       "LogLevel",
@@ -133,6 +137,19 @@
     },
     "required": [
       "Host"
+    ]
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "example.com/fixture.IncompleteConfig",
+    "type": "object",
+    "properties": {
+      "Name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "Name"
     ]
   }
 ]
