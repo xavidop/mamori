@@ -207,6 +207,9 @@ func collectPolicyRefs(structs []StructInfo) policyRefs {
 	byScheme := policyRefs{}
 	for _, s := range structs {
 		for _, f := range s.Fields {
+			if f.Kind != KindSource {
+				continue // no ref, so no permission to grant
+			}
 			for _, ref := range f.Refs {
 				scheme, ok := sourcetag.SchemeOf(ref)
 				if !ok {

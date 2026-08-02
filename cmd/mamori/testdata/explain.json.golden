@@ -5,6 +5,7 @@
     "Fields": [
       {
         "Path": "LogLevel",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:LOG_LEVEL",
         "Refs": [
@@ -19,6 +20,7 @@
       },
       {
         "Path": "APIKey",
+        "Kind": "source",
         "GoType": "secret.String",
         "Source": "aws-sm://prod/api#key",
         "Refs": [
@@ -33,6 +35,7 @@
       },
       {
         "Path": "DBHost",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:DB_HOST,aws-sm://prod/db#host",
         "Refs": [
@@ -48,6 +51,7 @@
       },
       {
         "Path": "Port",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:PORT",
         "Refs": [
@@ -62,6 +66,7 @@
       },
       {
         "Path": "Workers",
+        "Kind": "source",
         "GoType": "int",
         "Source": "env:WORKERS",
         "Refs": [
@@ -76,6 +81,7 @@
       },
       {
         "Path": "Level",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:LEVEL",
         "Refs": [
@@ -90,6 +96,7 @@
       },
       {
         "Path": "Region",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:REGION",
         "Refs": [
@@ -104,6 +111,7 @@
       },
       {
         "Path": "ServiceName",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:SERVICE_NAME",
         "Refs": [
@@ -118,6 +126,7 @@
       },
       {
         "Path": "RequestTimeout",
+        "Kind": "source",
         "GoType": "string",
         "Source": "aws-ps://prod/app/config#timeout",
         "Refs": [
@@ -132,6 +141,7 @@
       },
       {
         "Path": "GCPSecret",
+        "Kind": "source",
         "GoType": "string",
         "Source": "gcp-sm://acme-prod/db-password",
         "Refs": [
@@ -146,6 +156,7 @@
       },
       {
         "Path": "Redis.Addr",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:REDIS_ADDR",
         "Refs": [
@@ -160,6 +171,7 @@
       },
       {
         "Path": "Redis.Password",
+        "Kind": "source",
         "GoType": "secret.String",
         "Source": "vault://kv/redis#password",
         "Refs": [
@@ -171,6 +183,42 @@
         "Sensitive": true,
         "OnFail": "keeplast",
         "Validate": ""
+      },
+      {
+        "Path": "Nested.Addr",
+        "Kind": "source",
+        "GoType": "string",
+        "Source": "env:NEST_ADDR",
+        "Refs": [
+          "env:NEST_ADDR"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
+      }
+    ]
+  },
+  {
+    "Package": "example.com/fixture",
+    "TypeName": "TaggedNest",
+    "Fields": [
+      {
+        "Path": "Addr",
+        "Kind": "source",
+        "GoType": "string",
+        "Source": "env:NEST_ADDR",
+        "Refs": [
+          "env:NEST_ADDR"
+        ],
+        "Default": "",
+        "HasDefault": false,
+        "Optional": false,
+        "Sensitive": false,
+        "OnFail": "",
+        "Validate": ""
       }
     ]
   },
@@ -180,6 +228,7 @@
     "Fields": [
       {
         "Path": "Addr",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:REDIS_ADDR",
         "Refs": [
@@ -194,6 +243,7 @@
       },
       {
         "Path": "Password",
+        "Kind": "source",
         "GoType": "secret.String",
         "Source": "vault://kv/redis#password",
         "Refs": [
@@ -214,6 +264,7 @@
     "Fields": [
       {
         "Path": "Host",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:SERVER_HOST",
         "Refs": [
@@ -228,6 +279,7 @@
       },
       {
         "Path": "Port",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:SERVER_PORT",
         "Refs": [

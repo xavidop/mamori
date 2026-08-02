@@ -60,10 +60,25 @@
           "Addr",
           "Password"
         ]
+      },
+      "Computed": {
+        "type": "string"
+      },
+      "Nested": {
+        "type": "object",
+        "properties": {
+          "Addr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "Addr"
+        ]
       }
     },
     "required": [
       "APIKey",
+      "Computed",
       "DBHost",
       "GCPSecret",
       "Level",
@@ -71,6 +86,19 @@
       "Region",
       "RequestTimeout",
       "ServiceName"
+    ]
+  },
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "example.com/fixture.TaggedNest",
+    "type": "object",
+    "properties": {
+      "Addr": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "Addr"
     ]
   },
   {

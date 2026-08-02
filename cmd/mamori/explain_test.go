@@ -111,6 +111,18 @@ func TestExplainJSON(t *testing.T) {
 	compareGolden(t, root, "explain.json.golden", stdout)
 }
 
+// TestExplainOmitsValidateOnlyField pins that explain lists what mamori reads.
+// A field the application populates itself has no ref and does not belong.
+func TestExplainOmitsValidateOnlyField(t *testing.T) {
+	stdout, _, code := runExplain(t, "./...")
+	if code != 0 {
+		t.Fatalf("explain exited %d", code)
+	}
+	if strings.Contains(stdout, "Computed") {
+		t.Fatalf("explain listed a validate-only field:\n%s", stdout)
+	}
+}
+
 func TestExplainTypeFilter(t *testing.T) {
 	stdout, stderr, code := runExplain(t, "--type=Config", "--json", "./...")
 	if code != 0 {

@@ -5,6 +5,7 @@
     "Fields": [
       {
         "Path": "Port",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:PORT,aws-ps://svc/port",
         "Refs": ["env:PORT", "aws-ps://svc/port"],
@@ -17,6 +18,7 @@
       },
       {
         "Path": "StripeKey",
+        "Kind": "source",
         "GoType": "secret.String",
         "Source": "aws-sm://prod/stripe#key",
         "Refs": ["aws-sm://prod/stripe#key"],

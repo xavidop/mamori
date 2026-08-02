@@ -59,6 +59,60 @@ func TestSchemaJSON(t *testing.T) {
 	}
 }
 
+// TestSchemaEmitsValidateOnlyField pins that a field mamori validates at
+// runtime appears in the schema even with no source tag. Before this, schema
+// described less than mamori enforced.
+func TestSchemaEmitsValidateOnlyField(t *testing.T) {
+	root := moduleRoot(t)
+	fixtureDir := filepath.Join(root, "testdata", "example")
+
+	stdout, _, code := runSchema(t, fixtureDir, "./...")
+	if code != 0 {
+		t.Fatalf("schema exited %d", code)
+	}
+	if !strings.Contains(stdout, `"Computed"`) {
+		t.Fatalf("schema omitted the validate-only field Computed:\n%s", stdout)
+	}
+}
+
+// TestSchemaStillRecursesIntoTaggedNestedStruct is the regression guard for
+// the ordering trap: Nested (validate:"required") must still be recursed
+// into to reach Nested.Addr. This asserts on the specific
+// properties.Nested.properties.Addr location (scoped with --type=Config,
+// then parsed as JSON) rather than a bare `strings.Contains(stdout, "Addr")`
+// substring check: the fixture's unrelated Redis.Addr field also contributes
+// an "Addr" key to the same document, so a substring check would pass even
+// if walkFields stopped recursing into Nested specifically.
+func TestSchemaStillRecursesIntoTaggedNestedStruct(t *testing.T) {
+	root := moduleRoot(t)
+	fixtureDir := filepath.Join(root, "testdata", "example")
+
+	stdout, _, code := runSchema(t, fixtureDir, "--type=Config", "./...")
+	if code != 0 {
+		t.Fatalf("schema exited %d", code)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not a single JSON object: %v\n%s", err, stdout)
+	}
+	props, ok := doc["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties is not an object: %v", doc["properties"])
+	}
+	nested, ok := props["Nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties.Nested is not an object; walkFields stopped recursing into a validate-tagged nested struct:\n%s", stdout)
+	}
+	nestedProps, ok := nested["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties.Nested.properties is not an object: %v\n%s", nested["properties"], stdout)
+	}
+	if _, ok := nestedProps["Addr"]; !ok {
+		t.Fatalf("nested source field Nested.Addr vanished; walkFields stopped recursing:\n%s", stdout)
+	}
+}
+
 func TestSchemaTypeFilter(t *testing.T) {
 	root := moduleRoot(t)
 	fixtureDir := filepath.Join(root, "testdata", "example")

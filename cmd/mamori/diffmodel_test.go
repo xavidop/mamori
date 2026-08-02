@@ -231,9 +231,9 @@ func TestComputeDiffChainOnlyChangeStillCountsAsModified(t *testing.T) {
 
 func TestComputePrivilegeDeltaAddedAndRemoved(t *testing.T) {
 	base := si("acme/svc", "Config",
-		Field{Path: "A", Source: "aws-sm://prod/legacy#k", Refs: []string{"aws-sm://prod/legacy#k"}})
+		Field{Path: "A", Kind: KindSource, Source: "aws-sm://prod/legacy#k", Refs: []string{"aws-sm://prod/legacy#k"}})
 	head := si("acme/svc", "Config",
-		Field{Path: "A", Source: "aws-sm://prod/stripe#k", Refs: []string{"aws-sm://prod/stripe#k"}})
+		Field{Path: "A", Kind: KindSource, Source: "aws-sm://prod/stripe#k", Refs: []string{"aws-sm://prod/stripe#k"}})
 
 	got := computePrivilegeDelta(base, head)
 
@@ -247,7 +247,7 @@ func TestComputePrivilegeDeltaAddedAndRemoved(t *testing.T) {
 
 func TestComputePrivilegeDeltaIgnoresUnchangedPaths(t *testing.T) {
 	in := si("acme/svc", "Config",
-		Field{Path: "A", Source: "aws-sm://prod/db#p", Refs: []string{"aws-sm://prod/db#p"}})
+		Field{Path: "A", Kind: KindSource, Source: "aws-sm://prod/db#p", Refs: []string{"aws-sm://prod/db#p"}})
 
 	got := computePrivilegeDelta(in, in)
 
@@ -258,10 +258,10 @@ func TestComputePrivilegeDeltaIgnoresUnchangedPaths(t *testing.T) {
 
 func TestComputePrivilegeDeltaCoversNonPolicySchemes(t *testing.T) {
 	base := si("acme/svc", "Config",
-		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}})
+		Field{Path: "A", Kind: KindSource, Source: "env:X", Refs: []string{"env:X"}})
 	head := si("acme/svc", "Config",
-		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}},
-		Field{Path: "B", Source: "vault://kv/data/api#token", Refs: []string{"vault://kv/data/api#token"}})
+		Field{Path: "A", Kind: KindSource, Source: "env:X", Refs: []string{"env:X"}},
+		Field{Path: "B", Kind: KindSource, Source: "vault://kv/data/api#token", Refs: []string{"vault://kv/data/api#token"}})
 
 	got := computePrivilegeDelta(base, head)
 
@@ -290,10 +290,10 @@ func TestPrivilegeGrew(t *testing.T) {
 
 func TestComputeDiffIncludesPrivilegeDelta(t *testing.T) {
 	base := si("acme/svc", "Config",
-		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}})
+		Field{Path: "A", Kind: KindSource, Source: "env:X", Refs: []string{"env:X"}})
 	head := si("acme/svc", "Config",
-		Field{Path: "A", Source: "env:X", Refs: []string{"env:X"}},
-		Field{Path: "B", Source: "aws-sm://prod/stripe#k", Refs: []string{"aws-sm://prod/stripe#k"}, Sensitive: true})
+		Field{Path: "A", Kind: KindSource, Source: "env:X", Refs: []string{"env:X"}},
+		Field{Path: "B", Kind: KindSource, Source: "aws-sm://prod/stripe#k", Refs: []string{"aws-sm://prod/stripe#k"}, Sensitive: true})
 
 	got := computeDiff(base, head)
 

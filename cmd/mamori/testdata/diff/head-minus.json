@@ -5,6 +5,7 @@
     "Fields": [
       {
         "Path": "Port",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:PORT,aws-ps://svc/port",
         "Refs": ["env:PORT", "aws-ps://svc/port"],

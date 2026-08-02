@@ -5,6 +5,7 @@
     "Fields": [
       {
         "Path": "Port",
+        "Kind": "source",
         "GoType": "string",
         "Source": "env:PORT",
         "Refs": ["env:PORT"],
@@ -17,6 +18,7 @@
       },
       {
         "Path": "LegacyKey",
+        "Kind": "source",
         "GoType": "secret.String",
         "Source": "aws-sm://prod/legacy#key",
         "Refs": ["aws-sm://prod/legacy#key"],

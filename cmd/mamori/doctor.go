@@ -203,6 +203,11 @@ func runCompare(stdout, stderr io.Writer, patterns []string, rep *mamori.Report,
 	source := map[string]bool{}
 	for _, s := range structs {
 		for _, f := range s.Fields {
+			if f.Kind != KindSource {
+				// A derived or validate-only field is never in a live report,
+				// so counting it here would report drift on a healthy config.
+				continue
+			}
 			source[f.Path] = true
 		}
 	}

@@ -12,6 +12,11 @@ RequestTimeout  string         aws-ps://prod/app/config#timeout    -        fals
 GCPSecret       string         gcp-sm://acme-prod/db-password      -        false     true
 Redis.Addr      string         env:REDIS_ADDR                      -        false     false
 Redis.Password  secret.String  vault://kv/redis#password           -        false     true
+Nested.Addr     string         env:NEST_ADDR                       -        false     false
+
+example.com/fixture.TaggedNest
+FIELD  TYPE    CHAIN          DEFAULT  OPTIONAL  SENSITIVE
+Addr   string  env:NEST_ADDR  -        false     false
 
 example.com/fixture.RedisConfig
 FIELD     TYPE           CHAIN                      DEFAULT  OPTIONAL  SENSITIVE

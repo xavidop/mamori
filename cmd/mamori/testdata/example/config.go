@@ -81,6 +81,24 @@ type Config struct {
 	// Redis carries no source tag but is a struct type: Extract recurses
 	// into it, contributing dotted paths Redis.Addr and Redis.Password.
 	Redis RedisConfig
+
+	// Computed carries no source tag but is validated, which mamori enforces
+	// because the validator runs against the whole struct. It is the fixture
+	// for KindValidate: schema must emit it, explain and policy must not.
+	Computed string `validate:"required"`
+
+	// Nested carries no source tag but its type, TaggedNest, does carry its
+	// own validate tag on this field. walkFields must still recurse into it
+	// to reach Nested.Addr: this is the regression fixture for the ordering
+	// trap (see TaggedNest's doc comment).
+	Nested TaggedNest `validate:"required"`
+}
+
+// TaggedNest is a nested struct carrying its own validate tag. walkFields must
+// still recurse into it to reach Addr; emitting TaggedNest as a validate-only
+// leaf would make every nested source field disappear.
+type TaggedNest struct {
+	Addr string `source:"env:NEST_ADDR"`
 }
 
 // RedisConfig is nested inside Config (via the Redis field above) and also

@@ -21,15 +21,35 @@ import (
 	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
+// FieldKind says why a field appears in a StructInfo, so each command can take
+// the kinds it can act on. Extract has four consumers and they disagree: policy
+// emits permissions from refs, doctor --compare diffs paths against a live
+// report, schema describes everything mamori validates, and explain lists what
+// mamori reads.
+type FieldKind string
+
+const (
+	// KindSource carries a source: tag. Every consumer wants these.
+	KindSource FieldKind = "source"
+	// KindDerived is named by a WithDerive call's declared write paths. It has
+	// no ref, so it grants no permissions and cannot appear in a live report.
+	KindDerived FieldKind = "derived"
+	// KindValidate has no source: tag but does carry validate: rules, which
+	// mamori enforces on every load and update because the validator runs
+	// against the whole struct. Only schema wants these.
+	KindValidate FieldKind = "validate"
+)
+
 // Field describes one configurable leaf field discovered while walking a
 // config struct: where its value comes from (its source tag) and how it is
 // meant to be decoded. It mirrors core's unexported fieldSpec (decode.go)
 // closely enough that the two never drift in what "a field" means, without
 // either depending on the other (the CLI never resolves, decision D1).
 type Field struct {
-	Path   string // dotted path from the struct root, e.g. "Redis.Password"
-	GoType string // the field's Go type, e.g. "string", "secret.String"
-	Source string // the raw source tag, e.g. "env:X,aws-sm://s"
+	Path   string    // dotted path from the struct root, e.g. "Redis.Password"
+	Kind   FieldKind // why this field is here; see FieldKind
+	GoType string    // the field's Go type, e.g. "string", "secret.String"
+	Source string    // the raw source tag, e.g. "env:X,aws-sm://s"
 
 	Refs []string // Source split into its precedence chain (sourcetag.SplitChain)
 
@@ -208,6 +228,7 @@ func walkFields(pkg *types.Package, st *types.Struct, prefix string, firstSensit
 			_, schemeSensitive := firstSensitive(source)
 			fields = append(fields, Field{
 				Path:       path,
+				Kind:       KindSource,
 				GoType:     types.TypeString(v.Type(), shortQualifier(pkg)),
 				Source:     source,
 				Refs:       refs,
@@ -219,11 +240,30 @@ func walkFields(pkg *types.Package, st *types.Struct, prefix string, firstSensit
 				Validate:   validate,
 			})
 		default:
+			// Recurse BEFORE considering a validate-only leaf. A nested struct
+			// commonly carries its own `validate:"required"`, and treating that
+			// as a leaf here would drop every source-tagged field inside it.
 			if nested, ok := v.Type().Underlying().(*types.Struct); ok && !sensitiveType {
 				fields = append(fields, walkFields(pkg, nested, path, firstSensitive)...)
+				continue
 			}
-			// No source tag and not a source-less container struct: skip
-			// (decode.go leaves this to its zero value / manual population).
+			if validate != "" {
+				// mamori validates the whole struct, so this rule is enforced at
+				// runtime even with no source tag. schema would otherwise
+				// describe less than mamori enforces.
+				fields = append(fields, Field{
+					Path:       path,
+					Kind:       KindValidate,
+					GoType:     types.TypeString(v.Type(), shortQualifier(pkg)),
+					Default:    def,
+					HasDefault: hasDefault,
+					Optional:   optional,
+					Sensitive:  sensitiveType,
+					Validate:   validate,
+				})
+			}
+			// Neither sourced, nor a container, nor validated: skip, exactly as
+			// before (decode.go leaves it to its zero value).
 		}
 	}
 	return fields

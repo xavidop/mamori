@@ -157,10 +157,17 @@ func TestDoctorCompareNoDriftReportsMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
+	// Only a KindSource field is ever resolved to a live value, so only those
+	// belong in a synthetic "live" Report: a validate-only field would
+	// otherwise show up here (Extract now returns it too) and falsely report
+	// as live-only drift.
 	seen := map[string]bool{}
 	var fields []mamori.FieldStatus
 	for _, s := range structs {
 		for _, f := range s.Fields {
+			if f.Kind != KindSource {
+				continue
+			}
 			if seen[f.Path] {
 				continue
 			}
@@ -210,10 +217,15 @@ func TestDoctorCompareIgnoresDeclaredDerivedField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
+	// Only a KindSource field is ever resolved to a live value; see the same
+	// filter's comment in TestDoctorCompareNoDriftReportsMatch.
 	seen := map[string]bool{}
 	var fields []mamori.FieldStatus
 	for _, s := range structs {
 		for _, f := range s.Fields {
+			if f.Kind != KindSource {
+				continue
+			}
 			if seen[f.Path] {
 				continue
 			}
@@ -251,6 +263,65 @@ func TestDoctorCompareIgnoresDeclaredDerivedField(t *testing.T) {
 	}
 	if strings.Contains(out, "only in") {
 		t.Errorf("expected no drift once the derived field is excluded from the comparison, got:\n%s", out)
+	}
+}
+
+// TestDoctorCompareIgnoresValidateOnlyField pins that widening Extract does not
+// make --compare report drift. A validate-only field never appears in a live
+// report, so an unfiltered source set calls it "only in source" on a healthy
+// config.
+func TestDoctorCompareIgnoresValidateOnlyField(t *testing.T) {
+	root := moduleRoot(t)
+	fixtureDir := filepath.Join(root, "testdata", "example")
+	enterFixtureModule(t, fixtureDir)
+
+	structs, err := Extract([]string{"./..."}, "", nil)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	// Build a live Report containing only the fixture's source-tagged paths:
+	// a real live process never resolves anything for a validate-only field
+	// (it has no ref), so it is never part of an actual Report either.
+	seen := map[string]bool{}
+	var fields []mamori.FieldStatus
+	for _, s := range structs {
+		for _, f := range s.Fields {
+			if f.Kind != KindSource {
+				continue
+			}
+			if seen[f.Path] {
+				continue
+			}
+			seen[f.Path] = true
+			fields = append(fields, mamori.FieldStatus{Path: f.Path, Scheme: "env"})
+		}
+	}
+
+	body, err := json.Marshal(mamori.Report{Fields: fields, Healthy: true})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write(body)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var outBuf, errBuf bytes.Buffer
+	code := doctorCmd([]string{"--endpoint", srv.URL, "--insecure", "--compare", "./..."}, &outBuf, &errBuf)
+	if code != 0 {
+		t.Fatalf("doctorCmd() code = %d, stderr = %s", code, errBuf.String())
+	}
+	out := outBuf.String()
+	if strings.Contains(out, "Computed") {
+		t.Errorf("a validate-only field was reported as drift, want it excluded entirely:\n%s", out)
+	}
+	if strings.Contains(out, "only in") {
+		t.Errorf("expected no drift once the validate-only field is excluded from the comparison, got:\n%s", out)
 	}
 }
 
