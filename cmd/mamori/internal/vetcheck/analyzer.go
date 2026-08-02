@@ -24,10 +24,12 @@ import (
 	"github.com/xavidop/mamori/cmd/mamori/internal/sourcetag"
 )
 
-// Analyzer reports any struct field that binds a secret-bearing source (via its
-// `source:"..."` tag) to a plain string or []byte, and suggests using
-// secret.String / secret.Bytes instead. Its name is what appears when the CLI
-// runs as a go vet tool.
+// Analyzer reports two things: any struct field that binds a secret-bearing
+// source (via its `source:"..."` tag) to a plain string or []byte, and any
+// WithDerive hook that reveals such a secret and launders the plaintext into
+// a plain string or []byte write path. Both suggest using secret.String /
+// secret.Bytes instead. Its name is what appears when the CLI runs as a go
+// vet tool.
 var Analyzer = &analysis.Analyzer{
 	Name: "mamorivet",
 	// The scheme list is rendered from the set itself so help text cannot
@@ -35,7 +37,9 @@ var Analyzer = &analysis.Analyzer{
 	Doc: "reports struct fields that pull a secret-bearing source (" +
 		strings.Join(sourcetag.DefaultSecretSchemes().Sorted(), ", ") +
 		") into a plain string or []byte instead of the redacting " +
-		"secret.String / secret.Bytes types",
+		"secret.String / secret.Bytes types, and WithDerive hooks that " +
+		"reveal such a secret and write the plaintext into a plain string " +
+		"or []byte field instead",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -79,14 +83,18 @@ func run(pass *analysis.Pass) (any, error) {
 		return nil, err
 	}
 
-	nodeFilter := []ast.Node{(*ast.StructType)(nil)}
+	nodeFilter := []ast.Node{(*ast.StructType)(nil), (*ast.CallExpr)(nil)}
 	insp.Preorder(nodeFilter, func(n ast.Node) {
-		st := n.(*ast.StructType)
-		if st.Fields == nil {
-			return
-		}
-		for _, field := range st.Fields.List {
-			checkField(pass, field, schemes)
+		switch node := n.(type) {
+		case *ast.StructType:
+			if node.Fields == nil {
+				return
+			}
+			for _, field := range node.Fields.List {
+				checkField(pass, field, schemes)
+			}
+		case *ast.CallExpr:
+			checkDerives(pass, node)
 		}
 	})
 

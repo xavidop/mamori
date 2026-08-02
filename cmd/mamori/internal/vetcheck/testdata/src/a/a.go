@@ -1,6 +1,9 @@
 package a
 
-import "github.com/xavidop/mamori/secret"
+import (
+	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/secret"
+)
 
 // Config exercises every branch of the analyzer.
 type Config struct {
@@ -31,3 +34,44 @@ type Config struct {
 	// OK: chained source tag where every ref is a non-secret scheme.
 	ChainedLevel string `source:"env:LEVEL,file:///etc/app/level"`
 }
+
+// DeriveCfg exercises the WithDerive-laundering rule: a hook that reveals a
+// secret.String and writes the plaintext into a plain string/[]byte field
+// with no source: tag of its own, which the tag-based check above cannot see
+// at all.
+type DeriveCfg struct {
+	Pass     secret.String `source:"aws-sm://prod/db#password"`
+	First    string        `source:"env:FIRST"`
+	Last     string        `source:"env:LAST"`
+	PlainDSN string
+	SafeDSN  secret.String
+	FullName string
+}
+
+// BAD: reveals a secret into a plain string.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.PlainDSN = "postgres://" + c.Pass.Reveal() + "@h/db" // want `derive hook writes revealed secret material into "PlainDSN", a plain string; use secret.String or secret.Bytes`
+	return nil
+}, "PlainDSN")
+
+// OK: reveals into a redacting type.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.SafeDSN = secret.NewString("postgres://" + c.Pass.Reveal() + "@h/db")
+	return nil
+}, "SafeDSN")
+
+// OK: no Reveal anywhere, so no secret material moved.
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.FullName = c.First + " " + c.Last
+	return nil
+}, "FullName")
+
+// OK: Reveal on an unrelated type is not the secret package's.
+type fakeSecret struct{}
+
+func (fakeSecret) Reveal() string { return "" }
+
+var _ = mamori.WithDerive(func(c *DeriveCfg) error {
+	c.FullName = fakeSecret{}.Reveal()
+	return nil
+}, "FullName")
