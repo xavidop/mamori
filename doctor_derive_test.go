@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/xavidop/mamori/secret"
 )
 
 // TestDoctorEmitsDerivedRow pins the headline behavior: a declared write path
@@ -374,5 +376,38 @@ func TestDoctorEmptyDeriveWritePathIsUnhealthy(t *testing.T) {
 	}
 	if rep.Healthy {
 		t.Error("rep.Healthy = true, want false: this config fails at startup")
+	}
+}
+
+// TestDoctorTypeErrorRowKeepsSensitive pins that a derived row produced by the
+// hooks-cannot-be-typed path still reports Sensitive from T's own field type.
+// Leaving it false would flip a CLI's SENSITIVE column for a derived secret
+// purely because the run failed this particular way.
+func TestDoctorTypeErrorRowKeepsSensitive(t *testing.T) {
+	type cfg struct {
+		Host string `source:"env:DOCTOR_SENS_HOST"`
+		DSN  secret.String
+	}
+	t.Setenv("DOCTOR_SENS_HOST", "h")
+
+	rep, err := Doctor[cfg](t.Context(), WithDerive(func(*struct{}) error { return nil }, "DSN"))
+	if err != nil {
+		t.Fatalf("Doctor returned an error; its contract covers only an unwalkable T: %v", err)
+	}
+	var found bool
+	for _, f := range rep.Fields {
+		if f.Path != "DSN" {
+			continue
+		}
+		found = true
+		if !f.Derived || f.LastKind != KindInvalid {
+			t.Fatalf("DSN row = %+v, want Derived with KindInvalid", f)
+		}
+		if !f.Sensitive {
+			t.Fatal("DSN is a secret.String but the row reports Sensitive false")
+		}
+	}
+	if !found {
+		t.Fatalf("no DSN row in %+v", rep.Fields)
 	}
 }

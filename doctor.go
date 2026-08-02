@@ -173,7 +173,7 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, sourcesComplete bool) ([]FieldStatus, bool) {
 	derives, err := typedDerives[T](o)
 	if err != nil {
-		return deriveConfigErrorFields(o, err), false
+		return deriveConfigErrorFields[T](o, err), false
 	}
 	if len(derives) == 0 {
 		return nil, true
@@ -257,7 +257,15 @@ func doctorDerivedFields[T any](o *options, specs []fieldSpec, res []resolved, s
 // caller sees a failing preflight with nothing to point at, which is the same
 // invisibility WithDerive's declared writes exist to fix and is strictly better
 // than a green report on a config that cannot load.
-func deriveConfigErrorFields(o *options, err error) []FieldStatus {
+// Sensitive is read from T's own field type rather than left false, matching
+// what buildReport (report.go) does for a healthy derived row. The hooks could
+// not be typed, so there is no config to inspect, but the zero T still carries
+// the declared path's type, which is all Sensitive depends on. Without this a
+// derived secret would flip the CLI's SENSITIVE column to false purely because
+// the run happened to fail this way.
+func deriveConfigErrorFields[T any](o *options, err error) []FieldStatus {
+	var zero T
+	zv := reflect.ValueOf(zero)
 	seen := make(map[string]struct{})
 	var out []FieldStatus
 	for _, d := range o.derives {
@@ -266,12 +274,16 @@ func deriveConfigErrorFields(o *options, err error) []FieldStatus {
 				continue
 			}
 			seen[p] = struct{}{}
-			out = append(out, FieldStatus{
+			fs := FieldStatus{
 				Path:      p,
 				Derived:   true,
 				LastError: err.Error(),
 				LastKind:  KindInvalid,
-			})
+			}
+			if f, ok := fieldByPath(zv, p); ok {
+				fs.Sensitive = f.Type() == secretStringType || f.Type() == secretBytesType
+			}
+			out = append(out, fs)
 		}
 	}
 	return out

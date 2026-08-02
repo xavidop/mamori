@@ -9,10 +9,10 @@ import (
 )
 
 // Audit logs every Resolve - scheme, ref, latency, and outcome - WITHOUT the
-// resolved value, so an audit trail never leaks a value fetched from a
-// backend. The ref is logged as ref.Raw and is not redacted the way Report
-// and Status redact it, so a ref carrying an inline credential in a query
-// option appears in the log unredacted.
+// resolved value, so an audit trail never leaks a value fetched from a backend.
+// The ref is logged through Ref.Redacted, the same redaction Report and Status
+// apply, so a ref carrying an inline credential in a query option does not
+// appear in the log in the clear.
 func Audit(logger *slog.Logger, inner mamori.Provider) mamori.Provider {
 	if logger == nil {
 		logger = slog.Default()
@@ -22,7 +22,7 @@ func Audit(logger *slog.Logger, inner mamori.Provider) mamori.Provider {
 		v, err := inner.Resolve(ctx, ref)
 		attrs := []slog.Attr{
 			slog.String("scheme", ref.Scheme),
-			slog.String("ref", ref.Raw),
+			slog.String("ref", ref.Redacted()),
 			slog.Duration("latency", time.Since(start)),
 		}
 		if err != nil {

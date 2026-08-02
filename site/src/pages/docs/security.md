@@ -51,7 +51,9 @@ w, err := mamori.Watch[Config](ctx,
 
 Every `Report.Fields[i].Ref` has a fixed denylist of query-option names redacted before it can leave the process: `token`, `password`, `secret`, `key`, `apikey`, `api_key`, `sas`, `credential`, `client_secret`, `secret_access_key`, `access_key`, `private_key`, `secret_key`, `pwd`, `passwd` (matched case-insensitively). The scheme, path, key, and any non-sensitive option are left intact so the ref stays useful for diagnostics; only the values behind those names are replaced with `secret.Redacted`.
 
-Redaction runs once, where the `Report` is built, not per surface. The same denylist therefore applies whether a ref leaves via `Status()`, `Doctor`, or the admin HTTP endpoint, so there is no path that emits an un-redacted ref. See [Observability](/docs/observability/) for the `Report` shape this applies to.
+One denylist covers every surface a ref leaves by: `Status()`, `Doctor`, the admin HTTP endpoint, error messages, log lines, the `Audit` middleware, and the span attributes handed to a `Tracer`. See [Observability](/docs/observability/) for the `Report` shape this applies to.
+
+If you write your own `Meter`, `Tracer`, or middleware, call `Ref.Redacted()` rather than reading `Ref.Raw`. `Raw` is the tag exactly as written, so it still carries an inline credential when a provider accepts one as a query option; `Redacted()` applies the denylist above and is what everything inside mamori uses.
 
 ## Redaction and memory safety
 

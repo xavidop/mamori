@@ -271,6 +271,9 @@ field, and `mamori diff` inherits that since it reads `explain --json`.
   the hook ran; it is blank when the hook failed, when an input produced no
   value, or when the hooks could not be typed. Note it executes hook code, so a
   hook with side effects runs for real.
+- In a custom `Meter`, `Tracer`, or middleware, use `ref.Redacted()`, never
+  `ref.Raw`. A ref can carry an inline credential in a query option, and
+  `Redacted()` is the denylist everything inside mamori already applies.
 - Suggest `WithLogger(slog.Default())` for a resolve-failure trail, and
   `WithMeter` to make failures alertable. `RecordChangeDropped()` is the signal
   that an `OnChange` handler is too slow to keep up.

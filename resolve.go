@@ -156,7 +156,10 @@ func resolveRef(ctx context.Context, ref Ref, o *options) (Value, error) {
 		return Value{}, &ProviderError{Scheme: ref.Scheme, Ref: redactRef(ref), Err: ErrInvalid}
 	}
 	start := o.clock.Now()
-	sctx, finish := o.tracer.StartResolve(ctx, ref.Scheme, ref.Raw)
+	// Redacted, not Raw: a span attribute leaves the process for a tracing
+	// backend exactly like a Report leaves it over HTTP, and a ref can carry an
+	// inline credential in a query option. See Ref.Redacted.
+	sctx, finish := o.tracer.StartResolve(ctx, ref.Scheme, ref.Redacted())
 	val, err := p.Resolve(sctx, ref)
 	finish(err)
 	o.meter.RecordResolve(ref.Scheme, o.clock.Now().Sub(start), err)

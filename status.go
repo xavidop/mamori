@@ -92,10 +92,22 @@ var sensitiveOptKeys = map[string]struct{}{
 	"private_key": {}, "secret_key": {}, "pwd": {}, "passwd": {},
 }
 
-// redactRef renders ref as a string with any sensitive query-option value
-// replaced by secret.Redacted. The scheme, path, key, and non-sensitive options
-// are preserved so the ref stays useful for diagnostics.
-func redactRef(ref Ref) string {
+// redactRef is the package-internal spelling of Ref.Redacted, kept because most
+// of the package reads better calling it as a function on a ref it already has.
+func redactRef(ref Ref) string { return ref.Redacted() }
+
+// Redacted renders the ref as a string with any sensitive query-option value
+// replaced by secret.Redacted, preserving the scheme, path, key, and
+// non-sensitive options so it stays useful for diagnostics.
+//
+// Use this, never Raw, anywhere a ref leaves the process: a log line, an audit
+// record, a span attribute, an error message, an HTTP body. Some providers
+// accept an inline credential as a query option, so Raw can carry a live secret
+// (see sensitiveOptKeys for the names covered). Everything mamori itself
+// publishes already goes through this; it is exported so a Meter, Tracer, or
+// middleware outside this package can hold the same line.
+func (r Ref) Redacted() string {
+	ref := r
 	if len(ref.Opts) == 0 {
 		if ref.Raw != "" {
 			return ref.Raw
