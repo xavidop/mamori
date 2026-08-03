@@ -74,11 +74,11 @@ DSN                                   a3f9c1e2  false  -          -           tr
 
 The blank `SCHEME` and `REF` say mamori maintains this field but never fetched it from anywhere. `VERSION` is a content hash of the value your hook produced, so it moves the moment the credential rotates, even for a secret nested inside a struct.
 
-[`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), and [`diff`](/docs/cli/diff/) do see a derived field: they read the `WithDerive` call site itself, not a `source` tag, since a derive has none. It shows with no ref and no scheme, the same emptiness `status` reports above. [`policy`](/docs/cli/policy/) still grants it nothing, because no ref means no permission to grant. A write path built at runtime instead of written as a literal, a variable or `paths...` from a slice, can't be recovered this way; a struct with one prints a note that its derived listing may be incomplete. Ask a running process instead when you need the value itself, or use the [`Doctor` preflight](/docs/observability/doctor/#derived-fields-are-probed) in CI, which runs your hooks and fails on one that errors.
+[`explain`](/docs/cli/explain/), [`schema`](/docs/cli/schema/), and [`diff`](/docs/cli/diff/) list your derived fields too, with the ref and scheme columns empty, exactly as `status` shows above. [`policy`](/docs/cli/policy/) leaves them out: there is no backend behind a derived field, so there is no permission to grant.
 
-## What mamori cannot see
+Write the path as a literal string, as `"DSN"` is above. If you build it at runtime, from a variable or a slice, these commands cannot see it, and they say so rather than quietly listing fewer fields than you have.
 
-A hook that assigns a field it did not declare is invisible: no `ev.Changed()` entry, no `Status()` row, and no way for mamori to notice it happened. Nor can mamori flag a field carrying both a `source` tag and a derive assignment as a conflict; the derive runs after decoding and simply wins.
+None of them show the value. For that, ask a running process with `status`. To fail a build on a hook that errors, run the [`Doctor` preflight](/docs/observability/doctor/#derived-fields-are-probed) in CI.
 
 ## See also
 
