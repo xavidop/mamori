@@ -118,12 +118,27 @@ func New(endpoints ...Endpoint) (*Provider, error) {
 			return nil, fmt.Errorf("https: duplicate Endpoint.Name %q: %w", e.Name, mamori.ErrInvalid)
 		}
 
+		if e.BaseURL == "" {
+			return nil, fmt.Errorf("https: endpoint %q BaseURL is required: %w", e.Name, mamori.ErrInvalid)
+		}
 		u, err := url.Parse(e.BaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("https: endpoint %q BaseURL %q is not a URL: %w: %w", e.Name, e.BaseURL, mamori.ErrInvalid, err)
 		}
-		if u.Scheme == "http" && !e.AllowInsecure {
-			return nil, fmt.Errorf("https: endpoint %q BaseURL is http://, which sends configuration in cleartext; set AllowInsecure to accept that: %w", e.Name, mamori.ErrInvalid)
+		// The scheme is checked against a closed set rather than only rejecting
+		// http://. Anything else, an ftp:// typo or a ws:// paste, otherwise
+		// passes here AND passes httpcore.New, which only requires a scheme and
+		// a host, and then fails on every single resolve with net/http's
+		// "unsupported protocol scheme". New exists precisely so a
+		// misconfiguration cannot reach production as a resolve-time failure.
+		switch u.Scheme {
+		case "https":
+		case "http":
+			if !e.AllowInsecure {
+				return nil, fmt.Errorf("https: endpoint %q BaseURL is http://, which sends configuration in cleartext; set AllowInsecure to accept that: %w", e.Name, mamori.ErrInvalid)
+			}
+		default:
+			return nil, fmt.Errorf("https: endpoint %q BaseURL scheme %q is not http or https: %w", e.Name, u.Scheme, mamori.ErrInvalid)
 		}
 
 		client, err := httpcore.New(httpcore.Config{

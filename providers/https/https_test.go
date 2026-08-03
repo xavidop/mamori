@@ -52,6 +52,45 @@ func TestNewRejectsUnparsableBaseURL(t *testing.T) {
 	}
 }
 
+// TestNewRejectsNonHTTPScheme pins that the scheme is checked against a closed
+// set, not merely tested for http://.
+//
+// An ftp:// typo or a ws:// paste satisfies both this provider's insecure-scheme
+// gate and httpcore.New's scheme-and-host check, so without this the endpoint
+// constructs cleanly and then fails on every resolve with net/http's
+// "unsupported protocol scheme". That is the resolve-time failure New exists to
+// prevent.
+func TestNewRejectsNonHTTPScheme(t *testing.T) {
+	for _, base := range []string{"ftp://api.test", "ws://api.test", "file:///etc/config"} {
+		t.Run(base, func(t *testing.T) {
+			_, err := New(Endpoint{Name: "a", BaseURL: base})
+			if !errors.Is(err, mamori.ErrInvalid) {
+				t.Fatalf("New(%q) err = %v, want ErrInvalid", base, err)
+			}
+		})
+	}
+}
+
+// TestAllowInsecureDoesNotRescueOtherSchemes pins the scope of AllowInsecure: it
+// permits cleartext http, and nothing else. Reading it as a general "skip the
+// scheme check" switch would reopen exactly the hole TestNewRejectsNonHTTPScheme
+// closes.
+func TestAllowInsecureDoesNotRescueOtherSchemes(t *testing.T) {
+	_, err := New(Endpoint{Name: "a", BaseURL: "ftp://api.test", AllowInsecure: true})
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid; AllowInsecure rescued a non-http scheme", err)
+	}
+}
+
+// TestNewRejectsEmptyBaseURL pins that an omitted BaseURL fails at construction
+// with this provider's own message, rather than reaching httpcore.New.
+func TestNewRejectsEmptyBaseURL(t *testing.T) {
+	_, err := New(Endpoint{Name: "a"})
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+}
+
 func TestNewRejectsInsecureBaseURL(t *testing.T) {
 	_, err := New(Endpoint{Name: "a", BaseURL: "http://api.test"})
 	if !errors.Is(err, mamori.ErrInvalid) {
