@@ -1827,6 +1827,12 @@ import (
 	"github.com/xavidop/mamori"
 )
 
+// clientSecretMarker is the client secret used by every test in this file, and
+// the needle the leak assertions search for. It is deliberately long and
+// distinctive: a short secret like "sec" can match incidentally in unrelated
+// text, and would not catch a leak that truncated the value.
+const clientSecretMarker = "cs3cr3t-oauth-marker-4d1b"
+
 // tokenServer returns a RoundTripper answering the token endpoint with a token
 // valid for expiresIn seconds, counting how many exchanges it performed.
 func tokenServer(t *testing.T, expiresIn int, exchanges *int) roundTripFunc {
@@ -1858,7 +1864,7 @@ func TestOAuth2ClientCredentialsSetsBearer(t *testing.T) {
 	auth, err := OAuth2ClientCredentials(OAuth2Config{
 		TokenURL:     "https://idp.test/token",
 		ClientID:     "cid",
-		ClientSecret: "sec",
+		ClientSecret: clientSecretMarker,
 		HTTPClient:   fakeClient(tokenServer(t, 3600, &exchanges)),
 	})
 	if err != nil {
@@ -1882,7 +1888,7 @@ func TestOAuth2CachesToken(t *testing.T) {
 	auth, err := OAuth2ClientCredentials(OAuth2Config{
 		TokenURL:     "https://idp.test/token",
 		ClientID:     "cid",
-		ClientSecret: "sec",
+		ClientSecret: clientSecretMarker,
 		HTTPClient:   fakeClient(tokenServer(t, 3600, &exchanges)),
 	})
 	if err != nil {
@@ -1904,7 +1910,7 @@ func TestOAuth2RefreshesBeforeExpiry(t *testing.T) {
 	auth, err := OAuth2ClientCredentials(OAuth2Config{
 		TokenURL:     "https://idp.test/token",
 		ClientID:     "cid",
-		ClientSecret: "sec",
+		ClientSecret: clientSecretMarker,
 		Leeway:       30 * time.Second,
 		HTTPClient:   fakeClient(tokenServer(t, 60, &exchanges)),
 		Now:          func() time.Time { return now },
@@ -1934,7 +1940,7 @@ func TestOAuth2ClassifiesTokenFailure(t *testing.T) {
 	auth, err := OAuth2ClientCredentials(OAuth2Config{
 		TokenURL:     "https://idp.test/token",
 		ClientID:     "cid",
-		ClientSecret: "sec",
+		ClientSecret: clientSecretMarker,
 		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
 			resp, _ := newResponse(http.StatusUnauthorized, []byte(`{"error":"invalid_client"}`), nil)
 			return resp, nil
@@ -1948,8 +1954,37 @@ func TestOAuth2ClassifiesTokenFailure(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnauthenticated", err)
 	}
 	// The client secret must never reach an error message.
-	if strings.Contains(err.Error(), "sec") {
+	if strings.Contains(err.Error(), clientSecretMarker) {
 		t.Fatalf("client secret leaked into %q", err.Error())
+	}
+}
+
+// TestOAuth2FetchesLazily pins that constructing the authenticator performs no
+// token exchange.
+//
+// Building a provider must never block on the network, and a misconfigured
+// identity provider must surface as a classified resolve error rather than as a
+// constructor failure at process start. Without this test, moving the exchange
+// into OAuth2ClientCredentials would pass every other test in this file.
+func TestOAuth2FetchesLazily(t *testing.T) {
+	exchanges := 0
+	auth, err := OAuth2ClientCredentials(OAuth2Config{
+		TokenURL:     "https://idp.test/token",
+		ClientID:     "cid",
+		ClientSecret: clientSecretMarker,
+		HTTPClient:   fakeClient(tokenServer(t, 3600, &exchanges)),
+	})
+	if err != nil {
+		t.Fatalf("OAuth2ClientCredentials: %v", err)
+	}
+	if exchanges != 0 {
+		t.Fatalf("exchanges = %d before the first Apply, want 0: construction must not touch the network", exchanges)
+	}
+	if err := auth.Apply(context.Background(), newTestRequest(t)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if exchanges != 1 {
+		t.Fatalf("exchanges = %d after the first Apply, want 1", exchanges)
 	}
 }
 
@@ -1976,7 +2011,7 @@ func TestOAuth2ConcurrentApply(t *testing.T) {
 	auth, err := OAuth2ClientCredentials(OAuth2Config{
 		TokenURL:     "https://idp.test/token",
 		ClientID:     "cid",
-		ClientSecret: "sec",
+		ClientSecret: clientSecretMarker,
 		HTTPClient: fakeClient(func(req *http.Request) (*http.Response, error) {
 			mu.Lock()
 			defer mu.Unlock()
