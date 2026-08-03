@@ -22,6 +22,7 @@ use (
 	./providers/gcs
 	./providers/goff
 	./providers/growthbook
+	./providers/httpcore
 	./providers/k8s
 	./providers/launchdarkly
 	./providers/mamori
