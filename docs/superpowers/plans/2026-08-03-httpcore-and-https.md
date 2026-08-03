@@ -636,6 +636,13 @@ import (
 	"github.com/xavidop/mamori"
 )
 
+// bodyMarker is the fake response body used by the tests that assert a payload
+// never reaches an error message. It must not be a word that appears in any
+// mamori sentinel's own text: mamori.ErrPermissionDenied renders as "mamori:
+// permission denied", so a body of "denied" would make the assertion trip on
+// the sentinel rather than on a real leak.
+const bodyMarker = "s3cr3t-body-marker-9f2a"
+
 func TestNewRejectsEmptyBaseURL(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("New with empty BaseURL returned nil error")
@@ -765,7 +772,7 @@ func TestDoClassifiesStatus(t *testing.T) {
 	c, err := New(Config{
 		BaseURL: "https://api.test",
 		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
-			resp, _ := newResponse(http.StatusForbidden, []byte("denied"), nil)
+			resp, _ := newResponse(http.StatusForbidden, []byte(bodyMarker), nil)
 			return resp, nil
 		}),
 	})
@@ -777,7 +784,7 @@ func TestDoClassifiesStatus(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPermissionDenied", err)
 	}
 	// The body must not leak into the message: it can contain the value itself.
-	if strings.Contains(err.Error(), "denied") {
+	if strings.Contains(err.Error(), bodyMarker) {
 		t.Fatalf("response body leaked into error %q", err.Error())
 	}
 }
