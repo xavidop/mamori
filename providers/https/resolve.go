@@ -80,12 +80,28 @@ func splitEndpoint(refPath string) (name, path string) {
 // one that fails. mamori doctor resolves every ref before deployment, so this
 // surfaces there rather than in production.
 //
+// Backslash counts as a separator here, not only '/'. Splitting on '/' alone
+// leaves `a\..\..\secrets` as a single segment that matches neither "." nor
+// "..", so the check passes and the request goes out. url.URL.String percent
+// encodes the backslashes, so the wire carries "%5C", which most backends treat
+// as an ordinary character. IIS and ASP.NET are the well known exceptions: they
+// decode it and honour '\' as a directory separator, which is the classic
+// backslash traversal bypass. Endpoint.BaseURL is operator supplied with no
+// platform restriction, so this package cannot assume the backend is not one of
+// them. Splitting on both keeps `a\b` usable as an ordinary key while refusing
+// `a\..\b`.
+//
 // The percent-encoded form needs no separate check: mamori's ParseRef does not
 // decode escapes, so "%2e%2e" stays literal, and url.URL.String re-encodes the
 // percent sign, leaving the backend with "%252e%252e" rather than a traversal.
 // TestResolveRejectsDotSegments pins both halves of that.
+//
+// Segments of three or more dots are deliberately not matched. RFC 3986 section
+// 5.2.4 defines dot-segment removal over exactly "." and "..", so "..." is an
+// ordinary segment name rather than a traversal.
 func hasDotSegment(p string) bool {
-	for _, seg := range strings.Split(p, "/") {
+	isSep := func(r rune) bool { return r == '/' || r == '\\' }
+	for _, seg := range strings.FieldsFunc(p, isSep) {
 		if seg == "." || seg == ".." {
 			return true
 		}

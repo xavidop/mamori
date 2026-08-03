@@ -176,7 +176,17 @@ func TestResolveUsesConditionalGetOnSecondCall(t *testing.T) {
 // without ever leaving the declared host, so the endpoint check that exists to
 // contain exactly this never fires.
 func TestResolveRejectsDotSegments(t *testing.T) {
-	for _, path := range []string{"../secrets", "a/../../b", "./cfg", "a/./b"} {
+	paths := []string{
+		"../secrets", "a/../../b", "./cfg", "a/./b",
+		// Backslash separators. Splitting on '/' alone leaves these as one
+		// segment matching neither "." nor "..", so the check passes and the
+		// request goes out with the backslashes percent encoded as %5C. IIS and
+		// ASP.NET decode that and honour '\' as a directory separator, which is
+		// the classic backslash traversal bypass, and BaseURL is operator
+		// supplied with no platform restriction.
+		`..\secrets`, `a\..\..\secrets`, `a/..\b`,
+	}
+	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			f := newFake()
 			p := newTestProvider(t, f, nil)
@@ -189,6 +199,25 @@ func TestResolveRejectsDotSegments(t *testing.T) {
 				t.Fatalf("Resolve(%q) reported ErrNotFound, which would hide the traversal behind a field default", path)
 			}
 		})
+	}
+}
+
+// TestResolveAllowsBackslashInAnOrdinaryKey pins the scope of the backslash
+// rule: a backslash is treated as a separator when looking for dot segments,
+// but a key that merely contains one is still an ordinary key. Rejecting every
+// backslash outright would be simpler and would break a legitimate
+// Windows-style key name on a generic HTTP backend.
+func TestResolveAllowsBackslashInAnOrdinaryKey(t *testing.T) {
+	f := newFake()
+	f.set(`/v1/a\b`, []byte("payload"))
+	p := newTestProvider(t, f, nil)
+
+	v, err := p.Resolve(context.Background(), mustRef(t, `https://billing/a\b`))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if string(v.Bytes) != "payload" {
+		t.Fatalf("Bytes = %q, want payload", v.Bytes)
 	}
 }
 
