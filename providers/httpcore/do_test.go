@@ -3,6 +3,7 @@ package httpcore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -650,4 +651,62 @@ func TestDoTransportErrorRedactsURLWithoutBreakingChain(t *testing.T) {
 	if strings.Contains(urlErr.URL, credentialMarker) {
 		t.Fatalf("urlErr.URL = %q, credential leaked", urlErr.URL)
 	}
+}
+
+// TestDoPreservesAuthenticatorClassification pins that Do does not overwrite a
+// kind an Authenticator already chose.
+//
+// mamori.ErrorKind tests KindUnauthenticated before KindUnavailable and
+// KindRateLimited, so wrapping every Apply failure in ErrUnauthenticated would
+// silently reclassify a 503 or a 429 from a token endpoint. The core module
+// treats KindUnauthenticated as terminal and the other two as self-healing, so
+// the difference decides whether a passing identity-provider blip reports the
+// field unhealthy in Status, Health and `mamori doctor`.
+func TestDoPreservesAuthenticatorClassification(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		want mamori.Kind
+	}{
+		{"unclassified becomes unauthenticated", errors.New("no credential file"), mamori.KindUnauthenticated},
+		{"unavailable survives", fmt.Errorf("token endpoint: %w", mamori.ErrUnavailable), mamori.KindUnavailable},
+		{"rate limited survives", fmt.Errorf("token endpoint: %w", mamori.ErrRateLimited), mamori.KindRateLimited},
+		{"permission denied survives", fmt.Errorf("token endpoint: %w", mamori.ErrPermissionDenied), mamori.KindPermissionDenied},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := New(Config{
+				BaseURL: "https://api.test",
+				Auth: AuthenticatorFunc(func(context.Context, *http.Request) error {
+					return tt.err
+				}),
+				HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+					t.Error("request reached the transport despite a failing Authenticator")
+					return newResponseOK()
+				}),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			_, err = c.Do(context.Background(), Request{Path: "cfg"})
+			if err == nil {
+				t.Fatal("Do with a failing Authenticator returned nil error")
+			}
+			if got := mamori.ErrorKind(err); got != tt.want {
+				t.Fatalf("ErrorKind = %q, want %q (err = %v)", got, tt.want, err)
+			}
+			// The cause must stay reachable either way, so a caller can still
+			// see what the Authenticator actually reported.
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("cause lost from %v", err)
+			}
+		})
+	}
+}
+
+// newResponseOK is the placeholder response for a transport that must never be
+// reached.
+func newResponseOK() (*http.Response, error) {
+	resp, _ := newResponse(http.StatusOK, nil, nil)
+	return resp, nil
 }

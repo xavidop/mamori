@@ -99,6 +99,9 @@ func ExampleOAuth2ClientCredentials() {
 		TokenURL:     tokenSrv.URL,
 		ClientID:     "client-id",
 		ClientSecret: "client-secret",
+		// httptest serves http://, which is exactly what AllowInsecure is for.
+		// A real identity provider needs https:// and must not set this.
+		AllowInsecure: true,
 	})
 	if err != nil {
 		panic(err)

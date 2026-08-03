@@ -39,6 +39,45 @@ func TestNewRejectsNameWithSlash(t *testing.T) {
 	}
 }
 
+// TestNewRejectsNameWithRefDelimiter pins that '?' and '#' are rejected in a
+// Name alongside '/'.
+//
+// mamori.ParseRef splits a ref on '?' then '#' before the remaining path is
+// matched against any endpoint name, so a name containing one is normally
+// unreachable and fails loudly. Not always, though: TestNameWithQueryCannotBe
+// SilentlyMisrouted below covers the case where it silently routes to a
+// DIFFERENT endpoint instead.
+func TestNewRejectsNameWithRefDelimiter(t *testing.T) {
+	for _, name := range []string{"a?b", "a#b"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := New(Endpoint{Name: name, BaseURL: "https://api.test"})
+			if !errors.Is(err, mamori.ErrInvalid) {
+				t.Fatalf("err = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+// TestNameWithQueryCannotBeSilentlyMisrouted is the reason the check above is
+// not merely tidiness.
+//
+// With both "a?b" and "a" registered, ParseRef splits "https://a?b/cfg" at the
+// '?', so Path becomes "a" and the ref reaches endpoint "a" with an empty
+// request path. That answers mamori.ErrNotFound, and ErrNotFound is the ONE
+// kind that makes mamori apply the field's default: a ref pointing at the wrong
+// backend would quietly become a default value rather than an error. Resolve's
+// own doc comment says a misconfigured ref must never be hidden behind
+// ErrNotFound, so New has to refuse the pair outright.
+func TestNameWithQueryCannotBeSilentlyMisrouted(t *testing.T) {
+	_, err := New(
+		Endpoint{Name: "a?b", BaseURL: "https://one.test"},
+		Endpoint{Name: "a", BaseURL: "https://two.test"},
+	)
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid: 'a?b' alongside 'a' silently misroutes https://a?b/cfg to 'a'", err)
+	}
+}
+
 // TestNewRejectsUnparsableBaseURL covers New's url.Parse branch.
 //
 // url.Parse is permissive, so most malformed input slips through it and is

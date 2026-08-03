@@ -202,6 +202,16 @@ construction, so a missing one surfaces immediately rather than as an opaque
 failure on the first `Apply`. The token itself is still fetched lazily, on
 the first `Apply`, so building a provider never blocks on the network.
 
+`TokenURL` must be `https://`. The client-credentials grant POSTs
+`client_secret` in the form body, so a cleartext token endpoint hands that
+secret to anything on the path, and the secret is the key to every value the
+backend serves. The scheme is checked against a closed set, so an `ftp://`
+typo or a `ws://` paste fails at construction rather than on every exchange.
+`OAuth2Config.AllowInsecure` opts into `http://` for a local test identity
+provider, exactly like `Endpoint.AllowInsecure` in `providers/https`: it
+permits cleartext `http` and nothing else, never a way to skip the scheme
+check itself.
+
 ```go
 tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
@@ -213,6 +223,9 @@ auth, err := httpcore.OAuth2ClientCredentials(httpcore.OAuth2Config{
     TokenURL:     tokenSrv.URL,
     ClientID:     "client-id",
     ClientSecret: "client-secret",
+    // httptest serves http://, which is exactly what AllowInsecure is for.
+    // A real identity provider needs https:// and must not set this.
+    AllowInsecure: true,
 })
 if err != nil {
     panic(err)
@@ -250,14 +263,18 @@ rely on it under load or reach for its config afterward:
   reconciler runs on a single goroutine, so an `Apply` wedged behind a hung
   identity provider would stall reconciliation for every field, not only the
   one currently being resolved.
-- **It never retains the `OAuth2Config` it was built from.** The client
-  secret lives only inside a closure that encodes the token request body
-  once, at construction. This is deliberate, not an oversight: `fmt`'s `%+v`
-  and `%#v` walk a struct's unexported fields by reflection, and reflection
-  cannot call a `String` method on a value it reaches that way - so a
-  redaction method on `OAuth2Config` would not have protected `ClientSecret`
-  from a debug dump or a panic trace. Keeping the secret inside a closure,
-  which reflection renders as an opaque function pointer, does.
+- **It holds no credential in a readable field, neither the client secret nor
+  the access token.** The secret lives only inside a closure that encodes the
+  token request body once, at construction, and the cached access token lives
+  inside a closure created by each successful exchange. This is deliberate,
+  not an oversight: `fmt`'s `%+v` and `%#v` walk a struct's unexported fields
+  by reflection, and reflection cannot call a `String` or `GoString` method on
+  a value it reaches that way - so a redaction method, on `OAuth2Config` or on
+  an opaque token wrapper, would not have protected either one from a debug
+  dump or a panic trace; `fmt` falls back to printing the raw contents.
+  Keeping both inside closures, which reflection renders as opaque function
+  pointers, does. The access token earns that treatment as much as the secret:
+  it is a live bearer credential for the whole backend until it expires.
 
 ## Error classification
 

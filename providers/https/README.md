@@ -51,7 +51,7 @@ rather register it globally once you have built it.
 
 ## Scheme
 
-```
+```text
 https://<endpoint>/<path>[#<key>][?<opts>]
 ```
 

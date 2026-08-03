@@ -263,3 +263,47 @@ func TestResolvePassesThroughUnknownOptions(t *testing.T) {
 		t.Fatalf("Bytes = %q; the provider decoded the value, which is core's job", v.Bytes)
 	}
 }
+
+// TestNewCopiesQueryAndHeader pins that New defensively copies Endpoint.Query
+// and Endpoint.Header.
+//
+// Storing them by reference makes a caller that keeps the map, to build several
+// endpoints from one template, or simply because it did not expect New to
+// retain it, able to change what goes on the wire long after construction. For
+// Header that reaches credentials; for Query it reaches whatever the endpoint
+// selects. This package already clones bytes in both directions in
+// httpcore.Revalidator for the same reason.
+//
+// url.Values needs a DEEP copy: its values are slices, so a shallow map copy
+// still shares the backing arrays and the mutation below would land anyway.
+func TestNewCopiesQueryAndHeader(t *testing.T) {
+	f := newFake()
+	f.set("/v1/cfg", []byte("ok"))
+
+	query := url.Values{"env": {"prod"}}
+	header := http.Header{"X-Tenant": {"acme"}}
+	p := newTestProvider(t, f, func(e *Endpoint) {
+		e.Query = query
+		e.Header = header
+	})
+
+	// Mutate the caller's maps every way that matters: replace a slice element
+	// in place, extend a slice, and add a whole new key.
+	query["env"][0] = "staging"
+	query["extra"] = []string{"1"}
+	header["X-Tenant"][0] = "evil"
+	header.Set("X-Injected", "1")
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "https://billing/cfg")); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if f.lastQuery != "env=prod" {
+		t.Fatalf("query = %q, want env=prod: New retained the caller's url.Values", f.lastQuery)
+	}
+	if got := f.lastHeader.Get("X-Tenant"); got != "acme" {
+		t.Fatalf("X-Tenant = %q, want acme: New retained the caller's http.Header", got)
+	}
+	if got := f.lastHeader.Get("X-Injected"); got != "" {
+		t.Fatalf("X-Injected = %q, want empty: New retained the caller's http.Header", got)
+	}
+}

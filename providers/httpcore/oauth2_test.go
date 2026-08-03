@@ -277,6 +277,90 @@ func TestOAuth2DoesNotExposeSecretByReflection(t *testing.T) {
 	}
 }
 
+// TestOAuth2RejectsInsecureTokenURL pins that the token endpoint's scheme is
+// validated at construction.
+//
+// httpcore.New requires only a scheme and a host, so without this check an
+// http:// TokenURL is accepted and the client_secret form POST goes out in
+// cleartext, and an ftp:// typo is accepted and then fails on every single
+// exchange with net/http's "unsupported protocol scheme". providers/https makes
+// the same call for a BaseURL, and a token endpoint carries the higher-value
+// secret of the two.
+func TestOAuth2RejectsInsecureTokenURL(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		tokenURL      string
+		allowInsecure bool
+		wantErr       bool
+	}{
+		{name: "https accepted", tokenURL: "https://idp.test/token"},
+		{name: "http rejected", tokenURL: "http://idp.test/token", wantErr: true},
+		{name: "ftp rejected", tokenURL: "ftp://idp.test/token", wantErr: true},
+		{name: "http accepted with AllowInsecure", tokenURL: "http://idp.test/token", allowInsecure: true},
+		// AllowInsecure permits cleartext http and nothing else. It is not a
+		// general "skip the scheme check" switch.
+		{name: "ftp still rejected with AllowInsecure", tokenURL: "ftp://idp.test/token", allowInsecure: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := OAuth2ClientCredentials(OAuth2Config{
+				TokenURL:      tt.tokenURL,
+				ClientID:      "cid",
+				ClientSecret:  clientSecretMarker,
+				AllowInsecure: tt.allowInsecure,
+			})
+			switch {
+			case tt.wantErr && err == nil:
+				t.Fatalf("OAuth2ClientCredentials(%q) returned nil error", tt.tokenURL)
+			case tt.wantErr && !errors.Is(err, mamori.ErrInvalid):
+				t.Fatalf("err = %v, want ErrInvalid", err)
+			case !tt.wantErr && err != nil:
+				t.Fatalf("OAuth2ClientCredentials(%q): %v", tt.tokenURL, err)
+			}
+		})
+	}
+}
+
+// TestOAuth2DoesNotExposeAccessTokenByReflection pins that the CACHED ACCESS
+// TOKEN is no more reachable through fmt's reflection walk than the client
+// secret is.
+//
+// An access token in a plain struct field prints from any %v, %+v or %#v of the
+// authenticator, and it is a live bearer credential for the whole backend until
+// it expires. An opaque wrapper type with String and GoString does NOT fix this:
+// fmt cannot call a method on a value it reached through an unexported field, so
+// it falls back to printing the raw contents. The token is held in a closure for
+// that reason, exactly as the client secret is.
+func TestOAuth2DoesNotExposeAccessTokenByReflection(t *testing.T) {
+	exchanges := 0
+	auth, err := OAuth2ClientCredentials(OAuth2Config{
+		TokenURL:     "https://idp.test/token",
+		ClientID:     "cid",
+		ClientSecret: clientSecretMarker,
+		HTTPClient:   fakeClient(tokenServer(t, 3600, &exchanges)),
+	})
+	if err != nil {
+		t.Fatalf("OAuth2ClientCredentials: %v", err)
+	}
+
+	req := newTestRequest(t)
+	if err := auth.Apply(context.Background(), req); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// tokenServer mints "at-" + client_id, so this is the exact token now
+	// cached. Assert it really was issued, otherwise the leak check below would
+	// pass against a token that never existed.
+	const wantToken = "at-cid"
+	if got := req.Header.Get("Authorization"); got != "Bearer "+wantToken {
+		t.Fatalf("Authorization = %q, want %q", got, "Bearer "+wantToken)
+	}
+
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		if dump := fmt.Sprintf(verb, auth); strings.Contains(dump, wantToken) {
+			t.Fatalf("access token reachable via %s: %q", verb, dump)
+		}
+	}
+}
+
 func TestOAuth2ConcurrentApply(t *testing.T) {
 	exchanges := 0
 	var mu sync.Mutex

@@ -171,10 +171,39 @@ func (c *Client) build(ctx context.Context, r Request) (*http.Request, error) {
 	}
 	if c.auth != nil {
 		if err := c.auth.Apply(ctx, req); err != nil {
-			return nil, fmt.Errorf("httpcore: applying credentials: %w: %w", mamori.ErrUnauthenticated, err)
+			return nil, authError(err)
 		}
 	}
 	return req, nil
+}
+
+// authError wraps a failure from Authenticator.Apply, adding
+// mamori.ErrUnauthenticated only when the Authenticator supplied no
+// classification of its own.
+//
+// Adding the sentinel unconditionally would not merely duplicate a kind, it
+// would REPLACE one. mamori.ErrorKind walks kindSentinels in a fixed order and
+// tests KindUnauthenticated before KindUnavailable and KindRateLimited, so a
+// credential fetch that already classified itself, say
+// [OAuth2ClientCredentials] taking a 503 or a 429 from the token endpoint, comes
+// back out of Do as "unauthenticated" instead.
+//
+// That distinction is load bearing rather than cosmetic. fieldUnhealthy in the
+// core module treats KindUnauthenticated as terminal, while KindUnavailable and
+// KindRateLimited are the kinds mamori expects to heal on their own. Collapsing
+// them makes a passing blip at the identity provider report the field unhealthy
+// in Status, Health and `mamori doctor`, when the honest answer is that the
+// backend is briefly unreachable and the next poll will very likely succeed.
+//
+// An Authenticator that returns a bare, unclassified error still gets
+// ErrUnauthenticated, because a credential that could not be applied is exactly
+// that and an unclassified error would otherwise reach mamori as KindUnknown.
+func authError(err error) error {
+	if mamori.ErrorKind(err) == mamori.KindUnknown {
+		return fmt.Errorf("httpcore: applying credentials: %w: %w", mamori.ErrUnauthenticated, err)
+	}
+	// One %w, because the cause already carries the sentinel that classifies it.
+	return fmt.Errorf("httpcore: applying credentials: %w", err)
 }
 
 // setPath joins reqPath onto basePath and assigns the result to u, setting both

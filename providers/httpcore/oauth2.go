@@ -37,17 +37,34 @@ type OAuth2Config struct {
 	Leeway time.Duration
 	// Now overrides the clock, for tests.
 	Now func() time.Time
+	// AllowInsecure permits an http:// TokenURL, and nothing else: a scheme
+	// that is neither http nor https is still rejected. It exists for a local
+	// test identity provider, and mirrors Endpoint.AllowInsecure in
+	// providers/https.
+	//
+	// A client-credentials exchange POSTs the client secret in the form body,
+	// so an http:// token endpoint hands that secret to anything on the path.
+	// That is a higher-value leak than a cleartext BaseURL, which is why the
+	// opt-in is required here too.
+	AllowInsecure bool
 }
 
 // oauth2Auth caches one access token and refreshes it before expiry.
 //
-// It deliberately does NOT retain the OAuth2Config. fmt's %v, %+v and %#v walk
-// unexported struct fields through reflection, and cannot call a String method
-// on a value reached that way, so a ClientSecret held in a field here would
-// print in cleartext from any debug dump or panic trace. The four authenticators
-// in auth.go are immune because they capture their credentials in closures, and
-// this one does the same: the encoded form body, secret included, lives only
-// inside the form closure, which reflection renders as a function pointer.
+// No credential is held in a readable struct field, neither the client secret
+// nor the access token it buys. fmt's %v, %+v and %#v walk unexported struct
+// fields through reflection, and cannot call a String or GoString method on a
+// value reached that way, so a redaction method on a wrapper type would not
+// save one: fmt falls back to printing the raw contents. A string field here
+// therefore prints in cleartext from any debug dump or panic trace.
+//
+// The four authenticators in auth.go are immune because they capture their
+// credentials in closures, and this one does the same. Reflection renders a func
+// value as a bare pointer and cannot reach what it closed over, so both the
+// encoded form body (secret included, in form) and the cached access token (in
+// cached) are out of reach. The access token needs that protection as much as
+// the secret does: it is a live bearer credential for the whole backend until it
+// expires.
 type oauth2Auth struct {
 	client   *Client
 	form     func() []byte
@@ -55,8 +72,11 @@ type oauth2Auth struct {
 	leeway   time.Duration
 	now      func() time.Time
 
-	mu        sync.Mutex
-	token     string
+	mu sync.Mutex
+	// cached returns the access token from the last successful exchange. It is
+	// nil until there has been one, which is also how tokenFor tells "no token
+	// yet" from "a token that has expired".
+	cached    func() string
 	expiresAt time.Time
 	inflight  *tokenFetch
 }
@@ -64,9 +84,14 @@ type oauth2Auth struct {
 // tokenFetch is one in-flight token exchange, shared by every caller that
 // arrives while it runs. done is closed once token and err are final, so a
 // waiter that reads them after receiving from done sees settled values.
+//
+// token is a closure for the same reason oauth2Auth.cached is: this struct is
+// reachable from oauth2Auth.inflight for the duration of an exchange, so a
+// plain string field would put the access token back within reflection's reach
+// exactly while it is being fetched.
 type tokenFetch struct {
 	done  chan struct{}
-	token string
+	token func() string
 	err   error
 }
 
@@ -86,6 +111,9 @@ type tokenResponse struct {
 // identity provider surfaces as a classified resolve error rather than a
 // constructor failure.
 //
+// A TokenURL that is not https:// is rejected at construction, wrapping
+// mamori.ErrInvalid. Set OAuth2Config.AllowInsecure to accept an http:// one.
+//
 // The client secret is never logged and never appears in a returned error.
 func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error) {
 	switch {
@@ -95,6 +123,10 @@ func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error) {
 		return nil, fmt.Errorf("httpcore: OAuth2 ClientID is required: %w", mamori.ErrInvalid)
 	case cfg.ClientSecret == "":
 		return nil, fmt.Errorf("httpcore: OAuth2 ClientSecret is required: %w", mamori.ErrInvalid)
+	}
+
+	if err := checkTokenURLScheme(cfg.TokenURL, cfg.AllowInsecure); err != nil {
+		return nil, err
 	}
 
 	client, err := New(Config{BaseURL: cfg.TokenURL, HTTPClient: cfg.HTTPClient})
@@ -136,6 +168,41 @@ func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error) {
 	}, nil
 }
 
+// checkTokenURLScheme rejects a TokenURL this package will not send a client
+// secret to.
+//
+// The scheme is checked against a closed set rather than only rejecting http://,
+// for the reason providers/https gives for the same check on a BaseURL: New
+// requires only a scheme and a host, so an ftp:// typo or a ws:// paste passes
+// construction and then fails on every single exchange with net/http's
+// "unsupported protocol scheme". A misconfiguration must fail at startup, where
+// `mamori doctor` sees it, rather than at resolve time.
+//
+// The bar is higher here than for a BaseURL. A cleartext BaseURL exposes the
+// configuration value it fetches; a cleartext TokenURL exposes the client
+// secret, which the client-credentials grant POSTs in the form body, and that
+// secret is the key to every value the endpoint serves.
+func checkTokenURLScheme(tokenURL string, allowInsecure bool) error {
+	u, err := url.Parse(tokenURL)
+	if err != nil {
+		// The unparsed string is not echoed: a URL can carry userinfo, and this
+		// one is the token endpoint.
+		return fmt.Errorf("httpcore: OAuth2 TokenURL is not a URL: %w: %w", mamori.ErrInvalid, err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if !allowInsecure {
+			return fmt.Errorf("httpcore: OAuth2 TokenURL %s is http://, which POSTs the client secret in cleartext; set AllowInsecure to accept that: %w",
+				redactURL(u), mamori.ErrInvalid)
+		}
+		return nil
+	default:
+		return fmt.Errorf("httpcore: OAuth2 TokenURL scheme %q is not http or https: %w", u.Scheme, mamori.ErrInvalid)
+	}
+}
+
 // Apply sets the Authorization header, exchanging for a new token when the
 // cached one is missing or within Leeway of expiry.
 func (a *oauth2Auth) Apply(ctx context.Context, req *http.Request) error {
@@ -161,8 +228,8 @@ func (a *oauth2Auth) Apply(ctx context.Context, req *http.Request) error {
 // rest select on it against their own ctx.
 func (a *oauth2Auth) tokenFor(ctx context.Context) (string, error) {
 	a.mu.Lock()
-	if a.token != "" && a.now().Add(a.leeway).Before(a.expiresAt) {
-		tok := a.token
+	if a.cached != nil && a.now().Add(a.leeway).Before(a.expiresAt) {
+		tok := a.cached()
 		a.mu.Unlock()
 		return tok, nil
 	}
@@ -170,7 +237,10 @@ func (a *oauth2Auth) tokenFor(ctx context.Context) (string, error) {
 		a.mu.Unlock()
 		select {
 		case <-f.done:
-			return f.token, f.err
+			if f.err != nil {
+				return "", f.err
+			}
+			return f.token(), nil
 		case <-ctx.Done():
 			return "", fmt.Errorf("httpcore: OAuth2 token exchange for client %q: %w: %w",
 				a.clientID, mamori.ErrUnavailable, ctx.Err())
@@ -185,13 +255,13 @@ func (a *oauth2Auth) tokenFor(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	a.inflight = nil
 	if err == nil {
-		a.token, a.expiresAt = tok, expires
+		a.cached, a.expiresAt = func() string { return tok }, expires
 	}
 	a.mu.Unlock()
 
 	// Settle the result before closing, so a waiter reading after <-f.done sees
 	// final values rather than racing these writes.
-	f.token, f.err = tok, err
+	f.token, f.err = func() string { return tok }, err
 	close(f.done)
 	return tok, err
 }

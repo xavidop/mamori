@@ -2499,7 +2499,7 @@ Edit `go.work`, inserting `./providers/https` into the `use (` block. Both new
 modules share the `http` prefix, and the fifth byte decides the order: `c` in
 `httpcore` sorts before `s` in `https`. So the block reads
 
-```
+```text
 	./providers/growthbook
 	./providers/httpcore
 	./providers/https

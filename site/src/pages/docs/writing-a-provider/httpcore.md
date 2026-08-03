@@ -51,6 +51,8 @@ resp, err := c.Do(ctx, httpcore.Request{Path: ref.Path})
 | `Revalidator` | Turns a repeated poll into a conditional GET. |
 | `Version` | Derives `Value.Version` from ETag, then Last-Modified, then a body hash. |
 
+`OAuth2ClientCredentials` requires an `https://` `TokenURL` and rejects any other scheme at construction, wrapping `mamori.ErrInvalid`. The grant POSTs `client_secret` in the form body, so a cleartext token endpoint hands that secret to anything on the path, and the scheme is checked against a closed set so an `ftp://` typo fails at startup rather than on every exchange. `OAuth2Config.AllowInsecure` opts into `http://` for a local test identity provider, and into cleartext `http` only.
+
 ## Four guarantees you inherit
 
 **A path cannot escape your `BaseURL`.** `Do` rejects a `Request.Path` containing a `.` or `..` segment, in either its literal or its percent-encoded form, and treats `\` as a separator too, because IIS and ASP.NET decode `%5C` and honor it as one. Handing `ref.Path` straight to `Request.Path` is safe from traversal for exactly that reason, but that safety is scoped to traversal alone. `Request.Path` is an ESCAPED path, the same form `net/url` calls `RawPath`, so a literal `%` in it must already be written `%25`. Forwarding `ref.Path` unmodified satisfies that automatically, because mamori never decodes a ref's path; a provider that instead builds its own path by concatenating pieces must escape it itself, with `url.PathEscape`, before handing it to `Request.Path`. This is enforced in `httpcore` rather than left to each provider precisely so that no provider can be the one that forgets, and it matters because `${VAR}` interpolation means a ref path carries values the application supplies at runtime.
@@ -59,7 +61,7 @@ resp, err := c.Do(ctx, httpcore.Request{Path: ref.Path})
 
 **Every response body is drained and closed, on every path.** Including the ones that return an error. That is the hygiene issue #107 was about.
 
-**A repeated poll is a conditional GET.** `Revalidator` remembers the last `ETag` / `Last-Modified` and body per key, so an unchanged value costs a `304` instead of a full payload. It reports the validators the cache holds rather than whatever the `304` carried, since a CDN that omits them would otherwise make `Version` change on a poll that changed nothing.
+**A repeated poll is a conditional GET, when the backend gives you something to revalidate with.** `Revalidator` remembers the last `ETag` / `Last-Modified` and body per key, so an unchanged value costs a `304` instead of a full payload. That precondition is real: a response carrying neither `ETag` nor `Last-Modified` is not cached at all, since there would be no validator to send next time, so against a backend that emits neither, every poll stays unconditional and returns the full body. When there is a validator, `Revalidator` reports the one the cache holds rather than whatever the `304` carried, since a CDN that omits them would otherwise make `Version` change on a poll that changed nothing.
 
 ## Error classification
 

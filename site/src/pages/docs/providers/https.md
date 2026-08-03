@@ -5,7 +5,7 @@ title: Generic HTTPS
 
 # Generic HTTPS
 
-Load configuration and secrets from an HTTP endpoint you declare - your own REST API, not a named vendor. Built on `providers/httpcore`; no other provider in this repo names no vendor the way this one does.
+Load configuration and secrets from an HTTP endpoint you declare - your own REST API, not a named vendor. Built on `providers/httpcore`, it is the only provider in this repo that names no vendor at all: reach for it when your configuration or secrets live behind a REST API your own team owns, rather than one mamori already speaks to.
 
 | | |
 | --- | --- |

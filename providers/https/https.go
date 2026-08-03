@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/xavidop/mamori"
@@ -52,7 +53,7 @@ const scheme = "https"
 // selects.
 type Endpoint struct {
 	// Name is the ref authority, e.g. "billing" in https://billing/cfg. It must
-	// be non-empty and must not contain '/'. Required.
+	// be non-empty and must not contain '/', '?' or '#'. Required.
 	Name string
 	// BaseURL is the root every ref path is joined onto. Required. An http://
 	// BaseURL is rejected unless AllowInsecure is set.
@@ -61,8 +62,11 @@ type Endpoint struct {
 	Auth httpcore.Authenticator
 	// Query is merged into every request to this endpoint. It exists because a
 	// ref cannot carry target query parameters; see the package documentation.
+	// New copies it, so mutating the map afterwards does not change what goes
+	// on the wire.
 	Query url.Values
-	// Header is merged into every request to this endpoint.
+	// Header is merged into every request to this endpoint. New copies it, so
+	// mutating the map afterwards does not change what goes on the wire.
 	Header http.Header
 	// Client performs the round trips. Nil selects httpcore's default.
 	Client *http.Client
@@ -99,10 +103,14 @@ type Provider struct {
 // mamori.WithProvider or mamori.Register.
 //
 // It fails when no endpoint is supplied, when a Name is empty, duplicated, or
-// contains '/', when a BaseURL is missing or unparsable, or when a BaseURL is
-// http:// without AllowInsecure. Every one of those is a startup failure rather
-// than a resolve failure, so a misconfiguration cannot reach production as an
-// intermittent error.
+// contains '/', '?' or '#', when a BaseURL is missing or unparsable, or when a
+// BaseURL is http:// without AllowInsecure. Every one of those is a startup
+// failure rather than a resolve failure, so a misconfiguration cannot reach
+// production as an intermittent error.
+//
+// Query and Header are copied rather than retained, so a caller that keeps and
+// mutates the map it passed cannot change what later requests send. The same
+// reasoning makes httpcore.Revalidator clone bodies in both directions.
 func New(endpoints ...Endpoint) (*Provider, error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("https: at least one Endpoint is required: %w", mamori.ErrInvalid)
@@ -113,8 +121,18 @@ func New(endpoints ...Endpoint) (*Provider, error) {
 		switch {
 		case e.Name == "":
 			return nil, fmt.Errorf("https: Endpoint.Name is required: %w", mamori.ErrInvalid)
-		case strings.Contains(e.Name, "/"):
-			return nil, fmt.Errorf("https: Endpoint.Name %q must not contain '/', it is the ref authority: %w", e.Name, mamori.ErrInvalid)
+		// '?' and '#' are rejected alongside '/' because mamori.ParseRef splits
+		// a ref on them before the path is ever matched against a name. An
+		// endpoint named "a?b" is usually unreachable, which fails loudly, but
+		// not always: with both "a?b" and "a" registered, the ref
+		// "https://a?b/cfg" is split at the '?' and routes silently to endpoint
+		// "a" with an empty path. That returns mamori.ErrNotFound, and
+		// ErrNotFound is the one kind that makes mamori apply the field's
+		// default, so a misconfigured ref would quietly become a default value
+		// instead of an error. Resolve's doc comment says exactly that must
+		// never happen; the name is where it is cheapest to prevent.
+		case strings.ContainsAny(e.Name, "/?#"):
+			return nil, fmt.Errorf("https: Endpoint.Name %q must not contain '/', '?' or '#', it is the ref authority: %w", e.Name, mamori.ErrInvalid)
 		}
 		if _, dup := out[e.Name]; dup {
 			return nil, fmt.Errorf("https: duplicate Endpoint.Name %q: %w", e.Name, mamori.ErrInvalid)
@@ -155,13 +173,33 @@ func New(endpoints ...Endpoint) (*Provider, error) {
 		}
 
 		out[e.Name] = &endpoint{
-			query:     e.Query,
-			header:    e.Header,
+			query:     cloneQuery(e.Query),
+			header:    e.Header.Clone(),
 			sensitive: e.Sensitive,
 			reval:     httpcore.NewRevalidator(client, 0),
 		}
 	}
 	return &Provider{endpoints: out}, nil
+}
+
+// cloneQuery returns a deep copy of v, so an Endpoint.Query the caller still
+// holds cannot change what later requests send.
+//
+// http.Header has Clone for this; url.Values does not, and maps.Clone would not
+// do either, because a url.Values maps to a SLICE of values. A shallow copy
+// leaves both maps pointing at the same backing arrays, so v["env"][0] = "prod"
+// on the caller's copy still reaches the wire. A nil input stays nil, matching
+// http.Header.Clone, so an endpoint with no query keeps an absent one rather
+// than an empty map.
+func cloneQuery(v url.Values) url.Values {
+	if v == nil {
+		return nil
+	}
+	out := make(url.Values, len(v))
+	for k, vs := range v {
+		out[k] = slices.Clone(vs)
+	}
+	return out
 }
 
 // Scheme returns "https".
