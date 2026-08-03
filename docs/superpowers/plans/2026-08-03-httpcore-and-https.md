@@ -1251,16 +1251,23 @@ import (
 // newCountingClient returns a Client whose transport records every request and
 // answers 200 with body, then 304 once the caller sends a matching
 // If-None-Match.
+//
+// The recording is mutex-guarded because TestRevalidatorConcurrentGets drives
+// this transport from many goroutines at once. The callers read calls and
+// conditionals only after wg.Wait(), so the lock is needed for the writes alone.
 func newCountingClient(t *testing.T, etag string, body []byte) (*Client, *int, *[]string) {
 	t.Helper()
 	calls := 0
 	var conditionals []string
+	var mu sync.Mutex
 	c, err := New(Config{
 		BaseURL: "https://api.test",
 		HTTPClient: fakeClient(func(req *http.Request) (*http.Response, error) {
+			mu.Lock()
 			calls++
 			inm := req.Header.Get("If-None-Match")
 			conditionals = append(conditionals, inm)
+			mu.Unlock()
 			h := http.Header{}
 			h.Set("ETag", etag)
 			if inm == etag {
@@ -1376,6 +1383,59 @@ func TestRevalidatorDropsEntryOnError(t *testing.T) {
 	// success would be answered from a cache entry the backend never confirmed.
 	if got := rv.len(); got != 0 {
 		t.Fatalf("entries = %d after failure, want 0", got)
+	}
+}
+
+// TestRevalidatorRetriesWhenEntryEvictedDuringRequest covers the gap between
+// reading the validators and writing the response back. Get releases the lock
+// for the network call, so another caller can evict the entry in between. The
+// backend then answers 304 for a validator this Revalidator no longer holds,
+// and there is no cached body to return, so the fallback must retry
+// unconditionally rather than hand back an empty one.
+//
+// The eviction is forced from inside the RoundTripper, which IS the window
+// under test: it runs after validators() and before store(). Get holds no lock
+// there, so calling drop from the transport cannot deadlock.
+func TestRevalidatorRetriesWhenEntryEvictedDuringRequest(t *testing.T) {
+	var rv *Revalidator
+	evicted := false
+	calls := 0
+
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(req *http.Request) (*http.Response, error) {
+			calls++
+			h := http.Header{}
+			h.Set("ETag", `"v1"`)
+			if req.Header.Get("If-None-Match") == `"v1"` {
+				if !evicted {
+					evicted = true
+					rv.drop("k")
+				}
+				resp, _ := newResponse(http.StatusNotModified, nil, h)
+				return resp, nil
+			}
+			resp, _ := newResponse(http.StatusOK, []byte("payload"), h)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rv = NewRevalidator(c, 8)
+
+	if _, err := rv.Get(context.Background(), "k", Request{Path: "cfg"}); err != nil {
+		t.Fatalf("seed Get: %v", err)
+	}
+	got, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+	if string(got.Body) != "payload" {
+		t.Fatalf("Body = %q, want the payload recovered by the unconditional retry", got.Body)
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3: the seed, the 304 whose entry vanished, and the retry", calls)
 	}
 }
 
