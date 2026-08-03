@@ -2873,6 +2873,7 @@ type fakeBackend struct {
 	etags      map[string]string
 	failStatus int
 	seq        int
+	lastPath   string
 	lastQuery  string
 	lastHeader http.Header
 }
@@ -2911,6 +2912,10 @@ func (f *fakeBackend) transport() http.RoundTripper {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 
+		// EscapedPath, not Path: Path is the decoded form, so a percent-encoded
+		// traversal would look like a real one here even though the wire never
+		// carried it.
+		f.lastPath = req.URL.EscapedPath()
 		f.lastQuery = req.URL.RawQuery
 		f.lastHeader = req.Header.Clone()
 
@@ -2962,6 +2967,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -3122,6 +3128,51 @@ func TestResolveUsesConditionalGetOnSecondCall(t *testing.T) {
 	}
 }
 
+// TestResolveRejectsDotSegments pins that a ref path cannot escape the path
+// prefix its endpoint declares.
+//
+// This is reachable, not theoretical: expandRefVars substitutes ${VAR} from
+// WithRefVars, whose values the application supplies at runtime, so a ref of
+// https://billing/${TENANT}/cfg carries whatever TENANT holds. For an endpoint
+// scoped to a tenant prefix, "../.." reaches another tenant's configuration
+// without ever leaving the declared host, so the endpoint check that exists to
+// contain exactly this never fires.
+func TestResolveRejectsDotSegments(t *testing.T) {
+	for _, path := range []string{"../secrets", "a/../../b", "./cfg", "a/./b"} {
+		t.Run(path, func(t *testing.T) {
+			f := newFake()
+			p := newTestProvider(t, f, nil)
+
+			_, err := p.Resolve(context.Background(), mustRef(t, "https://billing/"+path))
+			if !errors.Is(err, mamori.ErrInvalid) {
+				t.Fatalf("Resolve(%q) err = %v, want ErrInvalid", path, err)
+			}
+			if errors.Is(err, mamori.ErrNotFound) {
+				t.Fatalf("Resolve(%q) reported ErrNotFound, which would hide the traversal behind a field default", path)
+			}
+		})
+	}
+}
+
+// TestResolveDoesNotDecodeEscapedDotSegments pins the other half: a
+// percent-encoded traversal needs no separate check, because ParseRef does not
+// decode escapes and url.URL.String re-encodes the percent sign. The request
+// must reach the backend as an ordinary, non-traversing path.
+func TestResolveDoesNotDecodeEscapedDotSegments(t *testing.T) {
+	f := newFake()
+	p := newTestProvider(t, f, nil)
+
+	// Not found is the expected outcome: the point is that it is treated as a
+	// literal key rather than resolved into a parent directory.
+	_, err := p.Resolve(context.Background(), mustRef(t, "https://billing/%2e%2e/secrets"))
+	if !errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if strings.Contains(f.lastPath, "../") {
+		t.Fatalf("request path %q traversed; the escape was decoded somewhere", f.lastPath)
+	}
+}
+
 // TestResolvePassesThroughUnknownOptions pins the DecodeOption conformance
 // requirement: decoding is core's job, so the provider must not touch ?decode=.
 func TestResolvePassesThroughUnknownOptions(t *testing.T) {
@@ -3178,6 +3229,9 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	if !ok {
 		return mamori.Value{}, fmt.Errorf("https: no endpoint named %q is registered (ref %q): %w", name, ref.Raw, mamori.ErrInvalid)
 	}
+	if hasDotSegment(path) {
+		return mamori.Value{}, fmt.Errorf("https: ref %q path contains a dot segment, which would escape endpoint %q's BaseURL: %w", ref.Raw, name, mamori.ErrInvalid)
+	}
 
 	resp, err := ep.reval.Get(ctx, ref.Raw, httpcore.Request{
 		Path:   path,
@@ -3207,6 +3261,38 @@ func splitEndpoint(refPath string) (name, path string) {
 	trimmed := strings.TrimPrefix(refPath, "/")
 	name, path, _ = strings.Cut(trimmed, "/")
 	return name, path
+}
+
+// hasDotSegment reports whether p contains a "." or ".." path segment.
+//
+// Such a segment is rejected rather than cleaned. httpcore's joinPath does not
+// resolve dot segments, so "../.." in a ref path would reach outside the path
+// prefix its endpoint declares: for an endpoint scoped to
+// https://api/v1/tenants/acme, that is another tenant's configuration, reached
+// without ever leaving the declared host and therefore without tripping the
+// endpoint check that exists to contain exactly this.
+//
+// It is reachable rather than theoretical, because a ref path is not only what
+// the struct tag says. expandRefVars substitutes ${VAR} from WithRefVars
+// (decode.go), whose values the application supplies at runtime, so a ref of
+// https://billing/${TENANT}/cfg carries whatever TENANT holds.
+//
+// Rejecting is the loud option. Cleaning silently would change which value a ref
+// names, and a ref that quietly means something other than it says is worse than
+// one that fails. mamori doctor resolves every ref before deployment, so this
+// surfaces there rather than in production.
+//
+// The percent-encoded form needs no separate check: mamori's ParseRef does not
+// decode escapes, so "%2e%2e" stays literal, and url.URL.String re-encodes the
+// percent sign, leaving the backend with "%252e%252e" rather than a traversal.
+// TestResolveRejectsDotSegments pins both halves of that.
+func hasDotSegment(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 ```
 
