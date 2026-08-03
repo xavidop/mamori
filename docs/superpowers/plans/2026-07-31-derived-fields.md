@@ -12,7 +12,7 @@
 
 ## The pipeline position, which is the whole design
 
-```
+```text
 resolve refs -> decode into struct -> DERIVE -> validate -> PreApply -> swap in
 ```
 
@@ -65,7 +65,7 @@ Derive goes immediately before the `Validate` call in each.
 - **Must pass `GOWORK=off golangci-lint run --timeout=5m`** with zero issues from the repo root.
 - **Commit at the end of every task on the `xavier/derived-fields` branch only.** Never `push`, `merge`, or `rebase`, and never touch `main`. Conventional Commits, ending with this trailer on its own line:
 
-```
+```text
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 ```
 

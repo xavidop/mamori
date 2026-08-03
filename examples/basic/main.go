@@ -22,7 +22,8 @@ import (
 
 // tokenPath is a fixed location so the `source` tag can reference it as a
 // literal string; struct tags cannot embed a variable, so this constant must
-// match the file:// path in Config.APIToken exactly.
+// match the path component of Config.APIToken's file:// ref exactly (the ref
+// carries the scheme and authority, "file://", that this constant does not).
 const tokenPath = "/tmp/mamori-example-token"
 
 // Config is loaded from multiple sources by tag.

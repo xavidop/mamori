@@ -75,7 +75,7 @@ rather than an oversight.
 
 ## Where it runs
 
-```
+```text
 resolve refs -> apply defaults -> DERIVE -> validate -> PreApply -> swap in
 ```
 

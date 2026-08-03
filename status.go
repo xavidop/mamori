@@ -25,10 +25,16 @@ type FieldStatus struct {
 	LastKind  Kind          // classification of LastError, empty if none
 	Sensitive bool          // field is a secret.String or secret.Bytes
 
-	// Derived is true for a field a WithDerive hook declares it writes. It has
-	// no ref, so Scheme, Ref, LastOK, Age, and Stale are all zero for it. It
-	// is reported so an operator can see the field exists and is maintained,
-	// which is the whole reason a caller declares it.
+	// Derived marks a row emitted for a WithDerive-declared write path in its
+	// own right. It has no ref, so Scheme, Ref, LastOK, Age, and Stale are all
+	// zero for it. It is reported so an operator can see the field exists and
+	// is maintained, which is the whole reason a caller declares it.
+	//
+	// Not every declared write path produces one. A path that also names a
+	// source-tagged field keeps that field's own row, which carries a real
+	// Scheme and Ref and reports Derived false, rather than gaining a second
+	// row here; and a path naming no readable field on T produces nothing at
+	// all. See buildReport (report.go) for both gates.
 	//
 	// A Derived entry appears in both Watcher.Status and a Doctor report.
 	// Version is a content hash of the computed value (see derivedVersion,

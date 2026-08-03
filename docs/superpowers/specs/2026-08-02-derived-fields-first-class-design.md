@@ -5,6 +5,25 @@
 
 **Status:** design approved, pending spec review.
 
+> **Superseded in two places. Read the code, not this document, for these.**
+> Review after implementation proved both of the algorithms below wrong, and
+> following the text here would reintroduce the bugs they caused:
+>
+> - **Hashing a derived value.** This document prescribes
+>   `fmt.Appendf(nil, "%v", ...)` for non-secret values. That hashes
+>   `[REDACTED]` for a secret nested inside a struct, and hashes a pointer's
+>   address rather than its pointee. `derivedVersion` (`derivedversion.go`) now
+>   walks the value, revealing secrets wherever they sit and encoding an
+>   interface's dynamic type.
+> - **Gating Doctor's derive hooks.** This document gates on the report being
+>   healthy. `fieldUnhealthy` ignores `unavailable`, `rate_limited`, and
+>   `unknown`, so a flaky backend left the report healthy while the hooks ran
+>   on zero values and published a fabricated version. `doctorDerivedFields`
+>   (`doctor.go`) now gates on every spec having produced a value, matching
+>   what `Load` would build.
+>
+> Everything else here matches what shipped.
+
 **Lands on:** `xavier/derived-fields` (PR #112), folded in rather than stacked, so
 `WithDerive` ships first-class in one release instead of shipping a documented
 limitation and removing it in the next.

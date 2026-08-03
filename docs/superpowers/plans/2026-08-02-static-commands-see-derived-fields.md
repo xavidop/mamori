@@ -410,7 +410,7 @@ Add a test asserting a derive declared in a `_test.go` fixture does not appear.
 
 When `DerivesIncomplete` is true, `explain` prints, after that struct's table:
 
-```
+```text
 note: this struct declares WithDerive write paths that could not be read
       statically (a variable or a slice expansion); the derived fields listed
       above may be incomplete
@@ -548,7 +548,7 @@ filter, and for each call:
 
 Message format, matching the existing rule's voice:
 
-```
+```text
 derive hook writes revealed secret material into %q, a plain %s; use secret.String or secret.Bytes
 ```
 

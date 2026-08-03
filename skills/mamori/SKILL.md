@@ -118,9 +118,11 @@ mamori.PreApply(func(ctx context.Context, ev mamori.Change[Config]) error {
 - `WithPreApplyTimeout` bounds the hook (default 10s) and cannot be disabled.
   Exceeding it is a **rejection**: mamori does not know the candidate works.
 - **Never call back into the same `Watcher` from `PreApply`, `WithDerive`, or
-  `OnError`.** All three run inline on the reconciler goroutine, so `Pin` and
-  `Refresh` return `ErrReentrantCall`, `PinCurrent` returns `0`, and `Unpin` does
-  nothing. `Get()` is safe. `OnChange` runs on its own goroutine and is exempt.
+  `OnError`.** During reconciliation all three run inline on the reconciler
+  goroutine, so `Pin` and `Refresh` return `ErrReentrantCall`, `PinCurrent`
+  returns `0`, and `Unpin` does nothing. `Get()` is safe. `OnChange` runs on its
+  own goroutine and is exempt. (On the initial load they run on the caller's
+  goroutine instead, where there is no watcher to call back into yet.)
 
 ## Derive fields from already-resolved fields
 
@@ -223,9 +225,10 @@ provider's native watch when there is one and polls otherwise.
 
 `mamori.ErrorKind(err)` classifies a failure as `not_found`,
 `permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`,
-`invalid`, or `unknown`. The first four and `invalid` are terminal and will not
-clear without human action; `unavailable` and `rate_limited` are expected to
-self-heal. Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrReentrantCall`,
+`invalid`, or `unknown`. `not_found`, `permission_denied`, `unauthenticated`,
+and `invalid` are terminal and will not clear without human action;
+`unavailable` and `rate_limited` are expected to self-heal.
+Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrReentrantCall`,
 `ErrNoSuchSnapshot`. Typed errors: `*ProviderError`, `*PreApplyError`,
 `*DeriveError`, `*StaleError`.
 

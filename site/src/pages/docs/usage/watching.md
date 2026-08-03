@@ -67,7 +67,7 @@ mamori.OnError(func(err error) {
 })
 ```
 
-The middle three all mean the same thing operationally: a candidate was built and rejected, so the config you are serving is older than the backend's. `*ProviderError` and `*StaleError` mean mamori could not read the backend at all.
+The middle three all mean the same thing operationally: a candidate was built and rejected, so the config you are serving is older than the backend's. `*ProviderError` means a resolve failed. `*StaleError` means a ref has gone too long without a fresh value, not that it never had one: the last good value is still being served, which is exactly why the age is worth alerting on.
 
 ## What you can rely on
 

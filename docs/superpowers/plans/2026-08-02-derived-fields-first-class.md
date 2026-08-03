@@ -10,6 +10,25 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-02-derived-fields-first-class-design.md`
 
+> **Superseded in two places. Read the code, not this document, for these.**
+> Review after implementation proved both of the algorithms below wrong, and
+> following the text here would reintroduce the bugs they caused:
+>
+> - **Hashing a derived value.** This document prescribes
+>   `fmt.Appendf(nil, "%v", ...)` for non-secret values. That hashes
+>   `[REDACTED]` for a secret nested inside a struct, and hashes a pointer's
+>   address rather than its pointee. `derivedVersion` (`derivedversion.go`) now
+>   walks the value, revealing secrets wherever they sit and encoding an
+>   interface's dynamic type.
+> - **Gating Doctor's derive hooks.** This document gates on the report being
+>   healthy. `fieldUnhealthy` ignores `unavailable`, `rate_limited`, and
+>   `unknown`, so a flaky backend left the report healthy while the hooks ran
+>   on zero values and published a fabricated version. `doctorDerivedFields`
+>   (`doctor.go`) now gates on every spec having produced a value, matching
+>   what `Load` would build.
+>
+> Everything else here matches what shipped.
+
 **Branch:** `xavier/derived-fields` (PR #112). This work is folded into that PR, not stacked on it.
 
 ## Global Constraints
@@ -566,7 +585,7 @@ The section titled "Derived fields are not probed" is now false end to end. Dele
 
 Neither example table currently shows a derived row. Add one to each, matching the real column order from `writeReportTable` (`cmd/mamori/doctor.go:143`):
 
-```
+```text
 PATH            SCHEME  REF                     VERSION   STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
 Redis.Addr      env     env://REDIS_ADDR        3         false  -          -           false      false
 Redis.Password  aws-sm  aws-sm://prod/redis-pw  3         false  -          -           true       false
