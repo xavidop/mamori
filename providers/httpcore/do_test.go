@@ -18,6 +18,13 @@ import (
 // the sentinel rather than on a real leak.
 const bodyMarker = "s3cr3t-body-marker-9f2a"
 
+// credentialMarker is a stand-in credential value used by tests that assert a
+// credential never reaches a returned error. QueryAuth puts this in the URL
+// query, and any error path that renders req.URL without redaction would leak
+// it. Like bodyMarker, it must not be a word that appears in any mamori
+// sentinel's own text.
+const credentialMarker = "s3cr3t-cred-marker-7c1d"
+
 func TestNewRejectsEmptyBaseURL(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("New with empty BaseURL returned nil error")
@@ -186,6 +193,33 @@ func TestDoBoundsBody(t *testing.T) {
 	}
 }
 
+// TestDoAllowsBodyExactlyAtCeiling proves the other half of readBounded's
+// max+1 read: a body of exactly MaxBody bytes is not truncation and must
+// succeed with every byte intact. TestDoBoundsBody only proves the
+// over-ceiling half; without this case, an off-by-one that rejects a body at
+// the exact boundary would ship green.
+func TestDoAllowsBodyExactlyAtCeiling(t *testing.T) {
+	exact := strings.Repeat("y", 100)
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		MaxBody: 100,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusOK, []byte(exact), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	resp, err := c.Do(context.Background(), Request{Path: "x"})
+	if err != nil {
+		t.Fatalf("Do with body exactly at MaxBody: %v", err)
+	}
+	if string(resp.Body) != exact {
+		t.Fatalf("Body = %q, want the full %d-byte body", resp.Body, len(exact))
+	}
+}
+
 func TestDoClosesBodyOnEveryPath(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusForbidden, http.StatusNotModified} {
 		var rb *recordingBody
@@ -204,6 +238,27 @@ func TestDoClosesBodyOnEveryPath(t *testing.T) {
 		if rb == nil || !rb.closed {
 			t.Fatalf("status %d: body not closed", status)
 		}
+	}
+
+	// A fourth, distinct return path: readBounded rejects an oversized body.
+	// It needs its own small MaxBody, so it cannot join the loop above as a
+	// fourth status sharing one Client.
+	var rb *recordingBody
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		MaxBody: 100,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			var resp *http.Response
+			resp, rb = newResponse(http.StatusOK, []byte(strings.Repeat("x", 5000)), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, _ = c.Do(context.Background(), Request{Path: "x"})
+	if rb == nil || !rb.closed {
+		t.Fatal("oversized body: body not closed")
 	}
 }
 
@@ -225,5 +280,103 @@ func TestDoWrapsTransportError(t *testing.T) {
 	// Two %w verbs must preserve the cause for errors.As and errors.Is.
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("cause lost from %v", err)
+	}
+}
+
+// TestDoRedactsCredentialFromClassifyError proves a QueryAuth credential does
+// not reach the error from the classify-status wrap site. redactURL strips
+// RawQuery and User for exactly this reason; nothing previously exercised
+// that path with a credential actually present in the URL.
+func TestDoRedactsCredentialFromClassifyError(t *testing.T) {
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		Auth:    QueryAuth("access_token", credentialMarker),
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusForbidden, nil, nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if err == nil {
+		t.Fatal("Do with 403 returned nil error")
+	}
+	if strings.Contains(err.Error(), credentialMarker) {
+		t.Fatalf("credential leaked into classify error %q", err.Error())
+	}
+}
+
+// TestDoRedactsCredentialFromTransportError proves the same for the
+// transport-error wrap site, which renders req.URL through a different
+// fmt.Errorf call than the classify path.
+func TestDoRedactsCredentialFromTransportError(t *testing.T) {
+	sentinel := errors.New("dial tcp: connection refused")
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		Auth:    QueryAuth("access_token", credentialMarker),
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			return nil, sentinel
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if err == nil {
+		t.Fatal("Do with transport error returned nil error")
+	}
+	if strings.Contains(err.Error(), credentialMarker) {
+		t.Fatalf("credential leaked into transport error %q", err.Error())
+	}
+}
+
+// TestDoTransportErrorRedactsURLWithoutBreakingChain proves redactTransportError
+// rebuilds the *url.Error rather than discarding it: the credential must be
+// gone from the URL it carries, but errors.Is and errors.As must still reach
+// everything they reached before redaction was added. This is the property
+// that distinguishes the approved fix (rebuild the wrapper) from the simpler,
+// rejected one (discard the wrapped cause entirely), so it needs its own test
+// rather than relying on the credential-absence checks above.
+func TestDoTransportErrorRedactsURLWithoutBreakingChain(t *testing.T) {
+	sentinel := errors.New("dial tcp: connection refused")
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		Auth:    QueryAuth("access_token", credentialMarker),
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			return nil, sentinel
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if err == nil {
+		t.Fatal("Do with transport error returned nil error")
+	}
+
+	// errors.Is must still reach mamori.ErrUnavailable, the sentinel this
+	// package wraps every transport failure in.
+	if !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	// errors.Is must still reach the raw cause the fake RoundTripper returned,
+	// through the rebuilt *url.Error, not just the *url.Error itself.
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("cause lost from %v", err)
+	}
+
+	// errors.As must still reach a *url.Error: rebuilding it, rather than
+	// discarding it for a plain string, is what keeps this working.
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("errors.As(err, *url.Error) = false for %v", err)
+	}
+	if strings.Contains(urlErr.URL, "?") {
+		t.Fatalf("urlErr.URL = %q, want no query string", urlErr.URL)
+	}
+	if strings.Contains(urlErr.URL, credentialMarker) {
+		t.Fatalf("urlErr.URL = %q, credential leaked", urlErr.URL)
 	}
 }
