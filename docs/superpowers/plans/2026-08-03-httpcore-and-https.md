@@ -1014,7 +1014,8 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("httpcore: %s %s: %w: %w", req.Method, redactURL(req.URL), mamori.ErrUnavailable, err)
+		return nil, fmt.Errorf("httpcore: %s %s: %w: %w",
+			req.Method, redactURL(req.URL), mamori.ErrUnavailable, redactTransportError(err, req.URL))
 	}
 	// Drain and close on every path so the connection is reused rather than
 	// abandoned. This is the hygiene issue #107 found missing across providers.
@@ -1131,7 +1132,30 @@ func redactURL(u *url.URL) string {
 	c.User = nil
 	return c.String()
 }
+
+// redactTransportError strips the credential that net/http leaks into the error
+// it wraps a transport failure in.
+//
+// http.Client.Do returns a *url.Error whose URL field is stripPassword(req.URL),
+// and stripPassword masks only a userinfo password: the query string survives
+// intact. A QueryAuth credential therefore reaches err.Error() through the
+// wrapped cause, bypassing redactURL entirely, and renders as:
+//
+//	Get "https://api/cfg?access_token=SUPERSECRET": dial tcp: connection refused
+//
+// The wrapper is rebuilt rather than discarded so the chain stays whole:
+// errors.As still reaches *url.Error, and errors.Is still reaches the underlying
+// net.OpError, timeout, or TLS verification error.
+func redactTransportError(err error, u *url.URL) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	return &url.Error{Op: ue.Op, URL: redactURL(u), Err: ue.Err}
+}
 ```
+
+`do.go` needs `"errors"` in its import block for `errors.As`.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
