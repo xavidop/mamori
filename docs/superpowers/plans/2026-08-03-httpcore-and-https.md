@@ -2005,6 +2005,91 @@ func TestOAuth2RejectsMissingFields(t *testing.T) {
 	}
 }
 
+// TestOAuth2WaiterReleasedByOwnContext pins that a caller blocked on someone
+// else's in-flight exchange leaves when its OWN context expires.
+//
+// A plain mutex held across the network call would serialize correctly but
+// ignore the waiter's ctx entirely, and mamori's reconciler is single-goroutine:
+// one Apply wedged behind a hung identity provider would stall reconciliation
+// for every field. The test hangs the token endpoint until released, so the
+// waiter can only return by honouring its own deadline.
+func TestOAuth2WaiterReleasedByOwnContext(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+
+	auth, err := OAuth2ClientCredentials(OAuth2Config{
+		TokenURL:     "https://idp.test/token",
+		ClientID:     "cid",
+		ClientSecret: clientSecretMarker,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			resp, _ := newResponse(http.StatusOK,
+				[]byte(`{"access_token":"at","token_type":"Bearer","expires_in":3600}`), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("OAuth2ClientCredentials: %v", err)
+	}
+
+	// Owner: starts the exchange and blocks in the transport.
+	ownerDone := make(chan struct{})
+	go func() {
+		defer close(ownerDone)
+		_ = auth.Apply(context.Background(), newTestRequest(t))
+	}()
+	<-entered
+
+	// Waiter: arrives while the exchange is in flight, with a context that dies.
+	ctx, cancel := context.WithCancel(context.Background())
+	waiterErr := make(chan error, 1)
+	go func() { waiterErr <- auth.Apply(ctx, newTestRequest(t)) }()
+	cancel()
+
+	select {
+	case err := <-waiterErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter err = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter did not return after its own context was cancelled; it is blocked on the exchange")
+	}
+
+	close(release)
+	<-ownerDone
+}
+
+// TestOAuth2DoesNotExposeSecretByReflection pins that the client secret is not
+// reachable through fmt's reflection walk.
+//
+// The four authenticators in auth.go are immune because they capture their
+// credentials in closures. This one holds state, so it must reach the same
+// result deliberately: a secret in a struct field would print in cleartext from
+// any %+v debug dump or panic trace, and fmt cannot call a String method on a
+// value reached through an unexported field, so a redaction method would not
+// save it.
+func TestOAuth2DoesNotExposeSecretByReflection(t *testing.T) {
+	exchanges := 0
+	auth, err := OAuth2ClientCredentials(OAuth2Config{
+		TokenURL:     "https://idp.test/token",
+		ClientID:     "cid",
+		ClientSecret: clientSecretMarker,
+		HTTPClient:   fakeClient(tokenServer(t, 3600, &exchanges)),
+	})
+	if err != nil {
+		t.Fatalf("OAuth2ClientCredentials: %v", err)
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		if dump := fmt.Sprintf(verb, auth); strings.Contains(dump, clientSecretMarker) {
+			t.Fatalf("client secret reachable via %s: %q", verb, dump)
+		}
+	}
+}
+
 func TestOAuth2ConcurrentApply(t *testing.T) {
 	exchanges := 0
 	var mu sync.Mutex
@@ -2090,15 +2175,34 @@ type OAuth2Config struct {
 }
 
 // oauth2Auth caches one access token and refreshes it before expiry.
+//
+// It deliberately does NOT retain the OAuth2Config. fmt's %v, %+v and %#v walk
+// unexported struct fields through reflection, and cannot call a String method
+// on a value reached that way, so a ClientSecret held in a field here would
+// print in cleartext from any debug dump or panic trace. The four authenticators
+// in auth.go are immune because they capture their credentials in closures, and
+// this one does the same: the encoded form body, secret included, lives only
+// inside the form closure, which reflection renders as a function pointer.
 type oauth2Auth struct {
-	cfg    OAuth2Config
-	client *Client
-	leeway time.Duration
-	now    func() time.Time
+	client   *Client
+	form     func() []byte
+	clientID string
+	leeway   time.Duration
+	now      func() time.Time
 
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
+	inflight  *tokenFetch
+}
+
+// tokenFetch is one in-flight token exchange, shared by every caller that
+// arrives while it runs. done is closed once token and err are final, so a
+// waiter that reads them after receiving from done sees settled values.
+type tokenFetch struct {
+	done  chan struct{}
+	token string
+	err   error
 }
 
 // tokenResponse is the subset of RFC 6749 section 5.1 this needs.
@@ -2141,7 +2245,30 @@ func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &oauth2Auth{cfg: cfg, client: client, leeway: leeway, now: now}, nil
+
+	// Encode the form once, here, so the client secret is captured by the
+	// closure below and never stored in a struct field where reflection could
+	// reach it. See the note on oauth2Auth.
+	form := url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {cfg.ClientID},
+		"client_secret": {cfg.ClientSecret},
+	}
+	if len(cfg.Scopes) > 0 {
+		form.Set("scope", strings.Join(cfg.Scopes, " "))
+	}
+	if cfg.Audience != "" {
+		form.Set("audience", cfg.Audience)
+	}
+	encoded := form.Encode()
+
+	return &oauth2Auth{
+		client:   client,
+		form:     func() []byte { return []byte(encoded) },
+		clientID: cfg.ClientID,
+		leeway:   leeway,
+		now:      now,
+	}, nil
 }
 
 // Apply sets the Authorization header, exchanging for a new token when the
@@ -2155,58 +2282,85 @@ func (a *oauth2Auth) Apply(ctx context.Context, req *http.Request) error {
 	return nil
 }
 
-// tokenFor returns a live token, exchanging under the lock so concurrent
-// callers perform one exchange rather than one each.
+// tokenFor returns a live token. Concurrent callers perform ONE exchange rather
+// than one each, and a caller waiting on someone else's exchange is released by
+// its own context.
+//
+// The lock is never held across the network call. A plain mutex would serialize
+// callers correctly, which is what golang.org/x/oauth2 does, but sync.Mutex has
+// no context-aware Lock, so a waiter is not woken by its own ctx expiring. That
+// matters here more than it does for a general OAuth2 client: mamori's
+// reconciler is single-goroutine, so an Apply wedged behind a hung identity
+// provider would stall reconciliation for every field, not just the one being
+// resolved. Instead the first caller publishes an inflight tokenFetch and the
+// rest select on it against their own ctx.
 func (a *oauth2Auth) tokenFor(ctx context.Context) (string, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if a.token != "" && a.now().Add(a.leeway).Before(a.expiresAt) {
-		return a.token, nil
+		tok := a.token
+		a.mu.Unlock()
+		return tok, nil
 	}
+	if f := a.inflight; f != nil {
+		a.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.token, f.err
+		case <-ctx.Done():
+			return "", fmt.Errorf("httpcore: OAuth2 token exchange for client %q: %w: %w",
+				a.clientID, mamori.ErrUnavailable, ctx.Err())
+		}
+	}
+	f := &tokenFetch{done: make(chan struct{})}
+	a.inflight = f
+	a.mu.Unlock()
 
-	form := url.Values{
-		"grant_type":    {"client_credentials"},
-		"client_id":     {a.cfg.ClientID},
-		"client_secret": {a.cfg.ClientSecret},
-	}
-	if len(a.cfg.Scopes) > 0 {
-		form.Set("scope", strings.Join(a.cfg.Scopes, " "))
-	}
-	if a.cfg.Audience != "" {
-		form.Set("audience", a.cfg.Audience)
-	}
+	tok, expires, err := a.exchange(ctx)
 
+	a.mu.Lock()
+	a.inflight = nil
+	if err == nil {
+		a.token, a.expiresAt = tok, expires
+	}
+	a.mu.Unlock()
+
+	// Settle the result before closing, so a waiter reading after <-f.done sees
+	// final values rather than racing these writes.
+	f.token, f.err = tok, err
+	close(f.done)
+	return tok, err
+}
+
+// exchange performs one client-credentials round trip and returns the token with
+// the instant it expires. It touches no shared state, so it runs outside the lock.
+func (a *oauth2Auth) exchange(ctx context.Context) (token string, expiresAt time.Time, err error) {
 	resp, err := a.client.Do(ctx, Request{
 		Method: http.MethodPost,
 		Header: http.Header{"Content-Type": {"application/x-www-form-urlencoded"}},
-		Body:   []byte(form.Encode()),
+		Body:   a.form(),
 	})
 	if err != nil {
-		// The exchange already classified the status. Restate it as an
-		// authentication failure without repeating the cause, so the message
-		// cannot accumulate anything derived from the secret.
-		return "", fmt.Errorf("httpcore: OAuth2 token exchange for client %q failed: %w", a.cfg.ClientID, err)
+		// Do already classified the status. Restate it as an authentication
+		// failure without repeating the cause, so the message cannot accumulate
+		// anything derived from the secret.
+		return "", time.Time{}, fmt.Errorf("httpcore: OAuth2 token exchange for client %q failed: %w", a.clientID, err)
 	}
 
 	var tr tokenResponse
 	if err := json.Unmarshal(resp.Body, &tr); err != nil {
-		return "", fmt.Errorf("httpcore: OAuth2 token response is not JSON: %w: %w", mamori.ErrInvalid, err)
+		return "", time.Time{}, fmt.Errorf("httpcore: OAuth2 token response is not JSON: %w: %w", mamori.ErrInvalid, err)
 	}
 	if tr.AccessToken == "" {
-		return "", fmt.Errorf("httpcore: OAuth2 token response carried no access_token: %w", mamori.ErrUnauthenticated)
+		return "", time.Time{}, fmt.Errorf("httpcore: OAuth2 token response carried no access_token: %w", mamori.ErrUnauthenticated)
 	}
 
-	a.token = tr.AccessToken
 	if tr.ExpiresIn > 0 {
-		a.expiresAt = a.now().Add(time.Duration(tr.ExpiresIn) * time.Second)
-	} else {
-		// No expires_in means the server did not commit to a lifetime. Treat it
-		// as good for one leeway window so it is re-fetched often rather than
-		// cached forever.
-		a.expiresAt = a.now().Add(a.leeway * 2)
+		return tr.AccessToken, a.now().Add(time.Duration(tr.ExpiresIn) * time.Second), nil
 	}
-	return a.token, nil
+	// No expires_in means the server did not commit to a lifetime. Treat it as
+	// good for two leeway windows so it is re-fetched often rather than cached
+	// forever.
+	return tr.AccessToken, a.now().Add(a.leeway * 2), nil
 }
 ```
 
