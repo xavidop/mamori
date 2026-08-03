@@ -77,6 +77,19 @@ type Config struct {
 }
 ```
 
+### Ref paths are percent-escaped
+
+A ref path is a percent-escaped path, the same contract
+[`providers/httpcore`](../httpcore/)'s `Request.Path` documents: `%2F`
+addresses a single path segment whose own name contains a slash, and a literal
+percent sign must be written `%25`, never a bare `%`, or `Resolve` rejects the
+ref before any request reaches the backend.
+
+```
+https://billing/discount-50%-off        # rejected: bare "%" is not a valid escape
+https://billing/discount-50%25-off      # reaches the backend as discount-50%-off
+```
+
 ## Why endpoints are named, not raw URLs
 
 A ref cannot carry target query parameters. mamori's grammar is
@@ -121,8 +134,10 @@ never sees the path at all.
 **That check lives in [`providers/httpcore`](../httpcore/), not here.** Every
 provider built on `httpcore` inherits it, so none can forget it, which matters
 because the module exists to be built on: a check each provider has to remember
-is a check the next provider ships without. Nothing about the behaviour of an
-`https://` ref changes as a result.
+is a check the next provider ships without. That is a claim about *where* the
+check lives, not that `https://`'s ref behaviour is unchanged in every respect:
+elsewhere in this document, a percent-encoded traversal (`%2e%2e`) now fails
+where it used to resolve, and a literal `%` now must be written `%25`.
 
 This is not theoretical. `expandRefVars` substitutes `${VAR}` from
 `WithRefVars` at runtime, so a ref of `https://billing/${TENANT}/cfg` carries
@@ -182,6 +197,12 @@ backend received the harmless literal `%252e%252e`. `httpcore` now preserves a
 caller's escapes all the way to the wire, since a backend whose key names may
 contain slashes cannot be addressed without an encoded slash surviving, and an
 encoded traversal would have survived with it.
+
+One case falls out of that: a key literally named `a/../b`, addressed with the
+encoded slashes this escaping exists to support (`a%2F..%2Fb`), is still
+rejected as a traversal, because the check runs on the path after those
+escapes are decoded - deliberate over-rejection on the safe side, not a bug to
+route around.
 
 ## Endpoint options
 

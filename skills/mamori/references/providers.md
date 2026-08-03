@@ -1,8 +1,11 @@
 # mamori providers reference
 
 Each provider is a separate Go module (except the core built-ins). Add the
-module, then blank-import it so it registers its scheme. Ref syntax is
-`scheme://path#key?opts`; `#key` selects a field from a structured payload.
+module, then blank-import it so it registers its scheme - except `https`,
+whose `New` takes operator-supplied endpoints and returns an error, so it
+needs an ordinary import and an explicit `New(...)` call instead (see the
+`https` row below). Ref syntax is `scheme://path#key?opts`; `#key` selects a
+field from a structured payload.
 
 For authentication details and every option, see https://mamorigo.dev/docs/providers .
 

@@ -72,6 +72,15 @@ type Config struct {
 }
 ```
 
+## Ref paths are percent-escaped
+
+A ref path is a percent-escaped path: `%2F` addresses a single path segment whose own name contains a slash, and a literal percent sign must be written `%25`, never a bare `%`, or `Resolve` rejects the ref before any request reaches the backend.
+
+```
+https://billing/discount-50%-off        # rejected: bare "%" is not a valid escape
+https://billing/discount-50%25-off      # reaches the backend as discount-50%-off
+```
+
 ## Why endpoints are named, not raw URLs
 
 A ref cannot carry target query parameters: mamori's grammar puts the fragment before the query (`path#key?opts`), the reverse of a standard URL's `path?query#fragment`, so a ref written the standard way, `https://api.example.com/cfg?env=prod#/db/pass`, does not fail loudly - `ParseRef` splits off everything from the first `?` onward as `Opts` before it ever looks for a `#`, so `Key` comes out empty and `Opts` comes out as `env` = `"prod#/db/pass"`. Fixed query parameters live on the `Endpoint`'s `Query` field instead.
@@ -82,7 +91,7 @@ A ref cannot carry credentials either, because a struct tag is source code; auth
 
 A ref path containing a `.` or `..` segment is rejected with `mamori.ErrInvalid`, before it is joined onto the endpoint's `BaseURL` and before any request goes out. This is not theoretical: `${VAR}` interpolation from `WithRefVars` means a ref like `https://billing/${TENANT}/cfg` carries whatever the application put in `TENANT` at runtime. Without this check, a `TENANT` of `../..` would reach another tenant's configuration without ever leaving the declared host, so the endpoint restriction above would never fire.
 
-**The check lives in `httpcore`, not here**, so that every provider built on it inherits the same guarantee and none can forget it. Nothing about the behaviour of an `https://` ref changes as a result.
+**The check lives in `httpcore`, not here**, so that every provider built on it inherits the same guarantee and none can forget it. That is a claim about where the check lives, not that `https://`'s ref behaviour is unchanged in every respect: elsewhere on this page, a percent-encoded traversal (`%2e%2e`) now fails where it used to resolve, and a literal `%` now must be written `%25`.
 
 The check splits on **both** `/` and `\`, not `/` alone: splitting only on `/` would leave `a\..\..\secrets` as one segment matching neither `.` nor `..`, and the request would go out with its backslashes percent-encoded as `%5C` - which IIS and ASP.NET decode and honor as a directory separator, the classic backslash traversal bypass. A backslash inside an ordinary key still works; only a traversal is refused. Three-dot segments are not matched: RFC 3986 defines dot-segment removal over exactly `.` and `..`, so `...` is an ordinary name.
 
