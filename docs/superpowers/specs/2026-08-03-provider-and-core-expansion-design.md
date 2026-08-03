@@ -150,7 +150,7 @@ func Bearer(token string) Authenticator
 func HeaderAuth(name, value string) Authenticator
 func BasicAuth(user, pass string) Authenticator
 func QueryAuth(name, value string) Authenticator
-func OAuth2ClientCredentials(cfg OAuth2Config) Authenticator
+func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error)
 ```
 
 `OAuth2ClientCredentials` caches the access token and refreshes it before expiry,
@@ -273,9 +273,14 @@ poll goes through `httpcore.Revalidator` so it is a conditional GET. Unrecognize
 `?opts` are passed through untouched, which is what the `providertest` `DecodeOption`
 case asserts.
 
-**Testing.** `providertest.Run` against an `httptest.Server` fake. `Fail` makes the
-fake return a chosen status so `ErrorClassification` runs; `Clear` makes it return
-404. `PointerRef` is supplied, since `#key` selects into a JSON payload.
+**Testing.** `providertest.Run` against an in-process `http.RoundTripper` fake, not
+an `httptest.Server`. The kit's `NoGoroutineLeak` case snapshots goroutines with
+`goleak.IgnoreCurrent` and a live server's accept goroutine does not survive it,
+which is why `providers/cloudflare-kv` uses a `RoundTripper` fake and this module
+follows. `Fail` maps the injected sentinel back to the HTTP status that produces it,
+so all five `ErrorClassification` cases round-trip through the real mapping rather
+than only the one a fixed status happens to hit. `Clear` cancels it. `PointerRef` is
+supplied, since `#key` selects into a JSON payload.
 
 ### Deferred out of PR1, but in the program
 
