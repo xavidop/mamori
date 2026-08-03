@@ -1818,6 +1818,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -1993,8 +1994,8 @@ func TestOAuth2RejectsMissingFields(t *testing.T) {
 		name string
 		cfg  OAuth2Config
 	}{
-		{"no token url", OAuth2Config{ClientID: "c", ClientSecret: "s"}},
-		{"no client id", OAuth2Config{TokenURL: "https://idp.test/token", ClientSecret: "s"}},
+		{"no token url", OAuth2Config{ClientID: "c", ClientSecret: clientSecretMarker}},
+		{"no client id", OAuth2Config{TokenURL: "https://idp.test/token", ClientSecret: clientSecretMarker}},
 		{"no client secret", OAuth2Config{TokenURL: "https://idp.test/token", ClientID: "c"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
