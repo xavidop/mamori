@@ -13,7 +13,7 @@ import (
 //
 // The mapping is:
 //
-//	400            -> mamori.ErrInvalid
+//	400, 422       -> mamori.ErrInvalid
 //	401            -> mamori.ErrUnauthenticated
 //	403            -> mamori.ErrPermissionDenied
 //	404            -> mamori.ErrNotFound
@@ -24,11 +24,30 @@ import (
 // mamori's behavior: it is what makes a field's default: or optional handling
 // apply instead of failing the whole snapshot.
 //
+// 422 Unprocessable Entity is named explicitly rather than left to the default,
+// because the default kind is transient: mamori would back off and retry a
+// request that was well formed and semantically wrong, which no amount of
+// retrying can fix. Infisical is one backend in this ecosystem that answers 422.
+//
 // detail is an optional, caller-chosen string appended to the message. Pass a
 // vendor error code or message only after deciding it cannot contain the
 // resolved value; pass "" when in doubt. ClassifyStatus never reads a response
-// body itself.
+// body itself: [Config.ErrorDetail] is the hook through which one reaches it.
 func ClassifyStatus(status int, detail string) error {
+	err := classify(status, detail)
+	if err == nil {
+		return nil
+	}
+	// Attribute the message, as every other error this package returns is
+	// attributed. A provider calling ClassifyStatus directly, which is the
+	// documented pattern, would otherwise get an unsourced "http 403 ...".
+	return fmt.Errorf("httpcore: %w", err)
+}
+
+// classify is ClassifyStatus without the package prefix, for Client.Do, which
+// adds its own. Splitting the two keeps one copy of the table while stopping the
+// prefix appearing twice in the same message.
+func classify(status int, detail string) error {
 	if status >= 200 && status < 300 {
 		return nil
 	}
@@ -38,7 +57,7 @@ func ClassifyStatus(status int, detail string) error {
 
 	var sentinel error
 	switch status {
-	case http.StatusBadRequest:
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		sentinel = mamori.ErrInvalid
 	case http.StatusUnauthorized:
 		sentinel = mamori.ErrUnauthenticated
@@ -52,10 +71,18 @@ func ClassifyStatus(status int, detail string) error {
 		sentinel = mamori.ErrUnavailable
 	}
 
-	if detail == "" {
-		return fmt.Errorf("http %d %s: %w", status, http.StatusText(status), sentinel)
+	// http.StatusText is "" for a vendor extension code, and the backends this
+	// package targets emit them: Cloudflare's 520 through 527, for one. Naming
+	// the status unconditionally would render "http 520 : mamori: unavailable",
+	// with an orphaned space where the text should be.
+	head := fmt.Sprintf("http %d", status)
+	if text := http.StatusText(status); text != "" {
+		head += " " + text
 	}
-	return fmt.Errorf("http %d %s: %s: %w", status, http.StatusText(status), detail, sentinel)
+	if detail == "" {
+		return fmt.Errorf("%s: %w", head, sentinel)
+	}
+	return fmt.Errorf("%s: %s: %w", head, detail, sentinel)
 }
 
 // StatusForKind is the inverse of ClassifyStatus: it returns an HTTP status that
@@ -72,6 +99,13 @@ func ClassifyStatus(status int, detail string) error {
 // one that is not mirrored in the other fails TestStatusForKindRoundTrips
 // immediately, rather than silently weakening the conformance test of every
 // provider that copied an older version of the mapping.
+//
+// The inverse is one status per kind, not every status that produces it. Both
+// 400 and 422 classify as KindInvalid, and 408 and 429 both as KindRateLimited;
+// this returns the canonical one, which is all a Fail hook needs and all
+// TestStatusForKindRoundTrips checks. Adding a status to the forward table
+// therefore only forces a change here when it introduces a kind this cannot
+// already produce.
 //
 // mamori.KindUnknown has no exact inverse, because ClassifyStatus never produces
 // it. It maps to 500, which is at least an honest failure.

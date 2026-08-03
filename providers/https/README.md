@@ -16,13 +16,38 @@ go get github.com/xavidop/mamori/providers/https
 ```
 
 ```go
-import _ "github.com/xavidop/mamori/providers/https"
+import (
+    "github.com/xavidop/mamori"
+    httpsprov "github.com/xavidop/mamori/providers/https"
+)
+
+p, err := httpsprov.New(httpsprov.Endpoint{
+    Name:    "billing",
+    BaseURL: "https://billing.internal.example.com/v1",
+})
+if err != nil {
+    return err
+}
+
+cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 ```
 
-Importing the package registers the `https` scheme. Unlike a zero-config
-provider, that registration alone resolves nothing: `https://` refs are only
-ever answered by endpoints you construct with `New` and hand to
-`mamori.WithProvider`, because there is no vendor default to fall back to.
+**This is an ordinary import, never a blank one, and there is no `init()`.**
+Every other provider in this repo registers itself from `init` so that
+`import _` is enough, because each has a vendor default: `New()` is valid with
+no arguments and reads its credentials from the environment at resolve time.
+This provider has no vendor and therefore no default. An `Endpoint`'s `Name`,
+`BaseURL`, `Auth`, `Query` and `Header` are all operator-supplied, `New`
+requires at least one endpoint, and `New` returns an error - none of which an
+`init` function has anything to pass or anywhere to report. Registering an
+endpointless provider globally would be worse than not registering one: it
+would advertise `https://` in `mamori.RegisteredSchemes()` and to
+`mamori doctor` while failing every ref, which is exactly the resolve-time
+failure `New` exists to turn into a startup-time one.
+
+Hand the constructed provider to `mamori.WithProvider`, which takes precedence
+over the global registry for its scheme, or to `mamori.Register` if you would
+rather register it globally once you have built it.
 
 ## Scheme
 
@@ -88,9 +113,16 @@ class of reason.
 
 ## Ref paths cannot escape their endpoint
 
-`Resolve` rejects a ref path containing a `.` or `..` segment, wrapping
-`mamori.ErrInvalid`, rather than joining it onto the endpoint's `BaseURL` and
-letting the backend see it.
+A ref path containing a `.` or `..` segment is rejected, wrapping
+`mamori.ErrInvalid`, rather than joined onto the endpoint's `BaseURL` and shown
+to the backend. The rejection happens before the round trip, so the backend
+never sees the path at all.
+
+**That check lives in [`providers/httpcore`](../httpcore/), not here.** Every
+provider built on `httpcore` inherits it, so none can forget it, which matters
+because the module exists to be built on: a check each provider has to remember
+is a check the next provider ships without. Nothing about the behaviour of an
+`https://` ref changes as a result.
 
 This is not theoretical. `expandRefVars` substitutes `${VAR}` from
 `WithRefVars` at runtime, so a ref of `https://billing/${TENANT}/cfg` carries
@@ -139,9 +171,17 @@ for _, raw := range []string{
 ```
 
 A backslash inside an ordinary key still works; only a traversal is refused.
-A percent-encoded traversal (`%2e%2e`) needs no separate check: `ParseRef`
-never decodes escapes, and `url.URL`'s own request-building re-encodes the `%`
-sign, so the backend receives `%252e%252e`, not a traversal.
+Segments of three or more dots are not matched either: RFC 3986 section 5.2.4
+defines dot-segment removal over exactly `.` and `..`, so `...` is an ordinary
+segment name.
+
+A percent-encoded traversal (`%2e%2e`) is refused exactly like a literal one,
+because the check runs on the **decoded** path. It used to need no check of its
+own: writing a path into `url.URL.Path` alone re-encoded the `%` sign, so the
+backend received the harmless literal `%252e%252e`. `httpcore` now preserves a
+caller's escapes all the way to the wire, since a backend whose key names may
+contain slashes cannot be addressed without an encoded slash surviving, and an
+encoded traversal would have survived with it.
 
 ## Endpoint options
 
@@ -192,18 +232,24 @@ to turn into a startup-time one.
 
 | HTTP status | mamori kind |
 | --- | --- |
-| 400 | `invalid` |
+| 400, 422 | `invalid` |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
 | 404 | `not_found` |
 | 408, 429 | `rate_limited` |
 | anything else | `unavailable` |
 
-The response body never reaches an error: `ClassifyStatus` takes only a
-caller-supplied `detail` string, and this provider passes none, because the
-body it just fetched can itself be the config value or secret a ref is
-resolving. A `403` on a ref pointing at a secret reports `permission_denied`
-with no part of that secret anywhere in the error text.
+422 Unprocessable Entity is named rather than left to fall through to the
+default, because the default kind is transient: mamori would back off and retry
+a request that was well formed and semantically wrong, and no number of
+retries can fix that.
+
+The response body never reaches an error. `ClassifyStatus` takes only a
+caller-supplied `detail` string, `httpcore.Config.ErrorDetail` is the hook that
+supplies one, and this provider leaves that hook nil, because the body it just
+fetched can itself be the config value or secret a ref is resolving. A `403` on
+a ref pointing at a secret reports `permission_denied` with no part of that
+secret anywhere in the error text.
 
 ## Conditional GET
 
@@ -246,9 +292,9 @@ every tick beyond what conditional GET already saves, compose
 | `Endpoint.Query` and `Endpoint.Header` are merged into every request | **Verified** (`TestResolveMergesEndpointQueryAndHeader`) |
 | `Endpoint.Sensitive` propagates to `Value.Sensitive` | **Verified** (`TestResolveMarksSensitive`) |
 | The second `Resolve` of the same ref sends a conditional GET and reuses the cached value on a 304 | **Verified** (`TestResolveUsesConditionalGetOnSecondCall`) |
-| A ref path with a `.`/`..` segment, including a backslash-separated one, is rejected as `mamori.ErrInvalid` | **Verified** (`TestResolveRejectsDotSegments`) |
+| A ref path with a `.`/`..` segment, including a backslash-separated one, is rejected as `mamori.ErrInvalid` | **Verified** (`TestResolveRejectsDotSegments`, plus `httpcore`'s `TestDoRejectsDotSegments`) |
 | A backslash inside an ordinary key still resolves; only a traversal is refused | **Verified** (`TestResolveAllowsBackslashInAnOrdinaryKey`) |
-| A percent-encoded traversal (`%2e%2e`) is never decoded into a real one | **Verified** (`TestResolveDoesNotDecodeEscapedDotSegments`) |
+| A percent-encoded traversal (`%2e%2e`) is rejected too, and never reaches the backend | **Verified** (`TestResolveRejectsEscapedDotSegments`) |
 | An unrecognized ref option (`?decode=`) passes through untouched; decoding is core's job | **Verified** (`TestResolvePassesThroughUnknownOptions`) |
 | Every classified HTTP status (400/401/403/404/408/429/5xx) maps to its documented `mamori.Kind` | **Verified** (`TestStatusToKind`, plus `providertest`'s `ErrorClassification` case) |
 | A failing response's body never reaches the returned error | **Verified** (`TestResolveErrorCarriesNoPayload`) |

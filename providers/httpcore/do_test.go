@@ -63,6 +63,139 @@ func TestDoJoinsPathAndQuery(t *testing.T) {
 	}
 }
 
+// TestDoPreservesEscapedSegment proves a caller can name one path segment whose
+// own name contains a slash. url.PathEscape("config/prod/log-level") must reach
+// the wire as a single %2F-bearing segment: not double-encoded to %252F, which
+// names a key no backend has, and not decoded into three real segments, which
+// names a different key. Workers KV keys routinely contain slashes, so a
+// provider for one cannot migrate onto httpcore without this.
+func TestDoPreservesEscapedSegment(t *testing.T) {
+	var gotURI, gotPath string
+	c, err := New(Config{
+		BaseURL: "https://api.test/v1",
+		HTTPClient: fakeClient(func(req *http.Request) (*http.Response, error) {
+			gotURI = req.URL.RequestURI()
+			gotPath = req.URL.Path
+			resp, _ := newResponse(http.StatusOK, []byte("ok"), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := c.Do(context.Background(), Request{Path: url.PathEscape("config/prod/log-level")}); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if want := "/v1/config%2Fprod%2Flog-level"; gotURI != want {
+		t.Fatalf("request URI = %q, want %q", gotURI, want)
+	}
+	// The decoded view must still be the decoded view: RawPath is a rendering
+	// hint, not a second path.
+	if want := "/v1/config/prod/log-level"; gotPath != want {
+		t.Fatalf("URL.Path = %q, want %q", gotPath, want)
+	}
+}
+
+// TestDoRejectsMalformedEscapedPath pins the cost of Request.Path being an
+// escaped path: a bare percent sign is not one. Guessing, by falling back to
+// treating the path as literal, would make what a ref means depend on whether
+// its escapes happened to parse, so it is refused instead.
+func TestDoRejectsMalformedEscapedPath(t *testing.T) {
+	sent := false
+	c, err := New(Config{
+		BaseURL: "https://api.test/v1",
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			sent = true
+			resp, _ := newResponse(http.StatusOK, nil, nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "100%"})
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	if sent {
+		t.Fatal("a malformed path reached the transport")
+	}
+}
+
+// TestDoRejectsDotSegments pins that no provider built on httpcore can send a
+// path that escapes the prefix its BaseURL declares.
+//
+// The check lives here rather than in each provider precisely so that a provider
+// author cannot omit it: seven more providers and sixteen migrations are meant
+// to be written against this package, and the one that forgets is the one that
+// ships a traversal. A ref path is not only what a struct tag says, since
+// ${VAR} interpolation substitutes application-supplied values at runtime.
+//
+// The encoded forms matter as much as the literal ones now that setPath
+// preserves a caller's escapes, and the backslash forms matter because IIS and
+// ASP.NET decode %5C and honour it as a directory separator.
+func TestDoRejectsDotSegments(t *testing.T) {
+	paths := []string{
+		"../secrets", "a/../../b", "./cfg", "a/./b",
+		`..\secrets`, `a\..\..\secrets`, `a/..\b`,
+		"%2e%2e/secrets", "a/%2E%2E/b", `a%5C..%5Cb`,
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			sent := false
+			c, err := New(Config{
+				BaseURL: "https://api.test/v1/tenants/acme",
+				HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+					sent = true
+					resp, _ := newResponse(http.StatusOK, nil, nil)
+					return resp, nil
+				}),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = c.Do(context.Background(), Request{Path: path})
+			if !errors.Is(err, mamori.ErrInvalid) {
+				t.Fatalf("Do(%q) err = %v, want ErrInvalid", path, err)
+			}
+			if errors.Is(err, mamori.ErrNotFound) {
+				t.Fatalf("Do(%q) reported ErrNotFound, which would hide the traversal behind a field default", path)
+			}
+			if sent {
+				t.Fatalf("Do(%q) reached the transport; the rejection must precede the round trip", path)
+			}
+		})
+	}
+}
+
+// TestDoAllowsBackslashInAnOrdinaryPath pins the scope of the backslash rule: a
+// backslash is a separator when looking for dot segments, but a path that merely
+// contains one is still an ordinary path. Rejecting every backslash outright
+// would be simpler and would break a legitimate Windows-style key name.
+//
+// Three-dot segments are here for the same reason: RFC 3986 section 5.2.4
+// defines dot-segment removal over exactly "." and "..", so "..." is an ordinary
+// name and matching it would be over-reach.
+func TestDoAllowsBackslashInAnOrdinaryPath(t *testing.T) {
+	for _, path := range []string{`a\b`, ".../cfg", "a/...b/c"} {
+		t.Run(path, func(t *testing.T) {
+			c, err := New(Config{
+				BaseURL: "https://api.test/v1",
+				HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+					resp, _ := newResponse(http.StatusOK, []byte("ok"), nil)
+					return resp, nil
+				}),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if _, err := c.Do(context.Background(), Request{Path: path}); err != nil {
+				t.Fatalf("Do(%q): %v", path, err)
+			}
+		})
+	}
+}
+
 func TestDoAppliesAuthAndUserAgent(t *testing.T) {
 	var gotAuth, gotUA string
 	c, err := New(Config{
@@ -168,6 +301,144 @@ func TestDoClassifiesStatus(t *testing.T) {
 	// The body must not leak into the message: it can contain the value itself.
 	if strings.Contains(err.Error(), bodyMarker) {
 		t.Fatalf("response body leaked into error %q", err.Error())
+	}
+}
+
+// TestDoErrorDetailReachesTheMessage proves Config.ErrorDetail is the channel
+// through which a provider's own error-envelope text reaches the classified
+// error. Without it there is no API at all for the detail ClassifyStatus
+// documents, and providers/doppler, providers/cloudflare-kv, providers/vercel-gc
+// and providers/scaleway-sm all embed a bounded error body today; a migration
+// onto httpcore has to be able to keep doing so.
+func TestDoErrorDetailReachesTheMessage(t *testing.T) {
+	var gotStatus int
+	var gotBody []byte
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		ErrorDetail: func(status int, body []byte) string {
+			gotStatus, gotBody = status, body
+			return "token lacks secrets:read"
+		},
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusForbidden, []byte(`{"message":"nope"}`), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if err == nil {
+		t.Fatal("Do with 403 returned nil error")
+	}
+	if !strings.Contains(err.Error(), "token lacks secrets:read") {
+		t.Fatalf("detail missing from %q", err.Error())
+	}
+	if !errors.Is(err, mamori.ErrPermissionDenied) {
+		t.Fatalf("err = %v, want ErrPermissionDenied", err)
+	}
+	if gotStatus != http.StatusForbidden {
+		t.Fatalf("ErrorDetail saw status %d, want 403", gotStatus)
+	}
+	if string(gotBody) != `{"message":"nope"}` {
+		t.Fatalf("ErrorDetail saw body %q, want the failing response's body", gotBody)
+	}
+}
+
+// TestDoWithoutErrorDetailLeaksNoBody pins the safe default. A nil ErrorDetail
+// must mean no detail, because a response body can be the resolved value
+// itself, and it must also mean the body is never even offered to anything that
+// could render it.
+func TestDoWithoutErrorDetailLeaksNoBody(t *testing.T) {
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusForbidden, []byte(bodyMarker), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if err == nil {
+		t.Fatal("Do with 403 returned nil error")
+	}
+	if strings.Contains(err.Error(), bodyMarker) {
+		t.Fatalf("response body reached the error %q with no ErrorDetail configured", err.Error())
+	}
+}
+
+// TestDoErrorDetailIsBoundedByMaxBody proves a huge error body cannot defeat the
+// ceiling MaxBody exists to enforce. The failing path reads a body that the
+// success path would have rejected outright, so without an explicit bound it
+// would be the one way to make httpcore hold an unbounded response in memory.
+func TestDoErrorDetailIsBoundedByMaxBody(t *testing.T) {
+	var seen int
+	var rb *recordingBody
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		MaxBody: 64,
+		ErrorDetail: func(_ int, body []byte) string {
+			seen = len(body)
+			return ""
+		},
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			var resp *http.Response
+			resp, rb = newResponse(http.StatusInternalServerError, []byte(strings.Repeat("x", 100000)), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if seen > 64 {
+		t.Fatalf("ErrorDetail saw %d bytes, want at most MaxBody (64)", seen)
+	}
+	// An oversized error body must not become a "response exceeds limit"
+	// error either: the status is the answer the caller needs.
+	if errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v: an oversized error body displaced the status classification", err)
+	}
+	// The drain-and-close guarantee, issue #107's subject, must survive the
+	// extra read on this path.
+	if rb == nil || !rb.closed {
+		t.Fatal("body not closed on the ErrorDetail path")
+	}
+}
+
+// TestDoErrorDetailNotCalledOnSuccess pins that the hook only ever sees a
+// failing response. Calling it on a 200 would consume the body the caller is
+// waiting for, and that body is the resolved value.
+func TestDoErrorDetailNotCalledOnSuccess(t *testing.T) {
+	called := false
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		ErrorDetail: func(int, []byte) string {
+			called = true
+			return "should not appear"
+		},
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusOK, []byte("payload"), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	resp, err := c.Do(context.Background(), Request{Path: "x"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if called {
+		t.Fatal("ErrorDetail was called for a 2xx")
+	}
+	if string(resp.Body) != "payload" {
+		t.Fatalf("Body = %q, want payload: the detail hook consumed it", resp.Body)
 	}
 }
 

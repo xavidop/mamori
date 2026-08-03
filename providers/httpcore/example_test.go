@@ -2,9 +2,13 @@ package httpcore_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/providers/httpcore"
@@ -31,6 +35,55 @@ func ExampleNew() {
 	}
 	fmt.Println(string(resp.Body))
 	// Output: {"level":"debug"}
+}
+
+// ExampleClient_Do_escapedSegment is the README's "Request.Path is an escaped
+// path" block, verbatim. The backend echoes the request URI it actually
+// received, which is the only thing that settles whether an escape survived.
+func ExampleClient_Do_escapedSegment() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, r.URL.RequestURI())
+	}))
+	defer srv.Close()
+
+	c, err := httpcore.New(httpcore.Config{BaseURL: srv.URL + "/v1"})
+	if err != nil {
+		panic(err)
+	}
+
+	resp, err := c.Do(context.Background(), httpcore.Request{
+		Path: url.PathEscape("config/prod/log-level"),
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(resp.Body))
+	// Output: /v1/config%2Fprod%2Flog-level
+}
+
+// ExampleClient_Do_dotSegments is the README's "Do refuses a path that escapes
+// the BaseURL" block, verbatim. No server is needed: every one of these is
+// refused before a request is built.
+func ExampleClient_Do_dotSegments() {
+	c, err := httpcore.New(httpcore.Config{
+		BaseURL: "https://api.example.com/v1/tenants/acme",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, path := range []string{
+		"../../other-tenant/cfg",
+		`a\..\..\secrets`,
+		"%2e%2e/secrets",
+	} {
+		_, err := c.Do(context.Background(), httpcore.Request{Path: path})
+		fmt.Println(errors.Is(err, mamori.ErrInvalid))
+	}
+	// Output:
+	// true
+	// true
+	// true
 }
 
 // ExampleOAuth2ClientCredentials is the README's "Authenticators" block,
@@ -70,6 +123,47 @@ func ExampleOAuth2ClientCredentials() {
 	}
 	fmt.Println(string(resp.Body))
 	// Output: Bearer abc123
+}
+
+// ExampleConfig_errorDetail is the README's "Supplying detail" block, verbatim
+// apart from the fake backend it is exercised against. It shows the shape the
+// hook is for: parse the envelope, return only the field you have decided
+// cannot carry the resolved value.
+func ExampleConfig_errorDetail() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"token_scope_missing","value":"s3cr3t"}}`))
+	}))
+	defer srv.Close()
+
+	c, err := httpcore.New(httpcore.Config{
+		BaseURL: srv.URL,
+		ErrorDetail: func(status int, body []byte) string {
+			// Only the fields you have decided cannot carry the resolved value.
+			var env struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &env) != nil {
+				return ""
+			}
+			return env.Error.Code
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = c.Do(context.Background(), httpcore.Request{Path: "/config"})
+	fmt.Println(errors.Is(err, mamori.ErrPermissionDenied))
+	fmt.Println(strings.Contains(err.Error(), "token_scope_missing"))
+	// The sibling field the hook did not select never reaches the message.
+	fmt.Println(strings.Contains(err.Error(), "s3cr3t"))
+	// Output:
+	// true
+	// true
+	// false
 }
 
 // ExampleStatusForKind is the README's "Error classification" block, verbatim.
@@ -132,6 +226,9 @@ func newConfigProvider(baseURL, token string) (*configProvider, error) {
 func (p *configProvider) Scheme() string { return "example-config" }
 
 // Resolve fetches ref.Path from the backend and selects ref.Key when present.
+//
+// ref.Path needs no traversal check here: Do rejects a "." or ".." segment,
+// literal or percent-encoded, before it sends anything.
 func (p *configProvider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
 	resp, err := p.client.Do(ctx, httpcore.Request{Path: ref.Path})
 	if err != nil {

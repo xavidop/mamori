@@ -40,7 +40,16 @@ go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
 go get github.com/xavidop/mamori/providers/https          # https:// (generic REST)
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
 # ... gcp, azure, consul, doppler, onepassword, sops
+
+go get github.com/xavidop/mamori/providers/httpcore       # no scheme: the shared HTTP core
 ```
+
+[`providers/httpcore`](providers/httpcore/) is a library rather than a provider:
+it registers no scheme and you never blank-import it. It is what you build a
+REST-backed provider **on** - request building, authenticators, status
+classification, conditional GET, and a bounded, always-drained response body,
+with no dependency outside the standard library. See
+[Write a provider: HTTP core](https://mamorigo.dev/docs/writing-a-provider/httpcore).
 
 ## Quick start
 

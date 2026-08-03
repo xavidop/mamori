@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"fmt"
 	"sync"
+
+	"github.com/xavidop/mamori"
 )
 
 // DefaultRevalidatorEntries is the entry ceiling used when NewRevalidator is
@@ -80,14 +83,31 @@ func (rv *Revalidator) Get(ctx context.Context, key string, r Request) (*Respons
 	if resp.NotModified {
 		etag, lastMod, body, ok := rv.cached(key)
 		if !ok {
-			// The backend answered 304 for a validator we no longer hold, which
-			// means the entry was evicted between the two halves of this call.
-			// Retry unconditionally rather than returning an empty body.
+			// The backend answered 304 with no cached body to pair it with,
+			// either because the entry was evicted between the two halves of
+			// this call or, on the very first poll of a key, because no entry
+			// ever existed. Retry unconditionally rather than returning an
+			// empty body.
 			r.IfNoneMatch, r.IfModifiedSince = "", ""
 			resp, err = rv.client.Do(ctx, r)
 			if err != nil {
 				rv.drop(key)
 				return nil, err
+			}
+			if resp.NotModified {
+				// A 304 to a request carrying no validators is a broken
+				// backend: RFC 7232 makes 304 a response to a conditional
+				// request, and this one was not conditional. Returning it
+				// would hand back Body nil with a nil error, which mamori
+				// applies as an empty value: the same silently wrong value
+				// that the cached-validator rule above exists to prevent, on
+				// the one path that rule cannot cover. Fail loudly instead.
+				//
+				// ErrUnavailable, so mamori treats it as the transient
+				// backend fault it is and retries with backoff, rather than
+				// as a permanently broken ref.
+				rv.drop(key)
+				return nil, fmt.Errorf("httpcore: backend answered 304 to a request carrying no validators, so there is no body to return: %w", mamori.ErrUnavailable)
 			}
 			rv.store(key, resp)
 			return resp, nil
@@ -143,6 +163,13 @@ func (rv *Revalidator) cached(key string) (etag, lastModified string, body []byt
 
 // store records resp under key, evicting the least recently used entry when the
 // cache is over its ceiling.
+//
+// It must not hold rv.mu when it calls drop, and it does not: the early return
+// below takes the lock only afterwards. sync.Mutex is not reentrant, so moving
+// the Lock above that branch, or moving the branch below it, self-deadlocks the
+// caller on a response that carries no validator. That is a live path, not a
+// hypothetical one: a backend that sends neither ETag nor Last-Modified takes it
+// on every single poll.
 func (rv *Revalidator) store(key string, resp *Response) {
 	if resp.ETag == "" && resp.LastModified == "" {
 		// Nothing to revalidate with next time; caching the body would only

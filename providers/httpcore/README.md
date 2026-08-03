@@ -54,8 +54,111 @@ fmt.Println(string(resp.Body))
 // Output: {"level":"debug"}
 ```
 
+### `Request.Path` is an escaped path
+
+`Path` is joined onto `BaseURL` in its **escaped** form, the one `net/url`
+calls `RawPath`, so a caller can name a single segment whose own name contains
+a slash. Here the backend echoes the request URI it actually received, which is
+the only thing that settles whether an escape survived:
+
+```go
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprint(w, r.URL.RequestURI())
+}))
+defer srv.Close()
+
+c, err := httpcore.New(httpcore.Config{BaseURL: srv.URL + "/v1"})
+if err != nil {
+    panic(err)
+}
+
+resp, err := c.Do(context.Background(), httpcore.Request{
+    Path: url.PathEscape("config/prod/log-level"),
+})
+if err != nil {
+    panic(err)
+}
+fmt.Println(string(resp.Body))
+// Output: /v1/config%2Fprod%2Flog-level
+```
+
+One segment, not three, and not the double-encoded
+`config%252Fprod%252Flog-level` that writing into `url.URL.Path` alone
+produces. Cloudflare Workers KV keys, to take the case that forced this, are up
+to 512 bytes of any printable non-whitespace characters, so
+`config/prod/log-level` is one ordinary key name and a provider for it cannot
+address a key at all without the distinction.
+
+The cost is that a literal percent sign must be written `%25`. A `Path` that is
+not a valid escaped path is rejected with `mamori.ErrInvalid` rather than
+guessed at, because guessing would make what a ref means depend on whether its
+escapes happened to parse.
+
+### `Do` refuses a path that escapes the `BaseURL`
+
+**`Do` rejects a `Request.Path` containing a `.` or `..` segment, wrapping
+`mamori.ErrInvalid`, before anything is sent.** Every provider built on
+`httpcore` inherits that, and none can forget it. That placement is the whole
+point: `joinPath` does not resolve dot segments, so `../..` in a
+caller-supplied path reaches outside the path prefix the `BaseURL` declares -
+for a client scoped to `https://api.example.com/v1/tenants/acme`, that is
+another tenant's configuration, reached without ever leaving the declared host
+and so without tripping whatever host or endpoint restriction the provider
+relies on to contain exactly this.
+
+It is reachable, not theoretical: a provider's path comes from a mamori ref,
+and a ref path is not only what the struct tag says. `${VAR}` interpolation
+substitutes values the application supplies at runtime, so a ref of
+`https://billing/${TENANT}/cfg` carries whatever `TENANT` holds.
+
+Four details are deliberate:
+
+- **It rejects rather than cleans.** Resolving `..` away would silently change
+  which value a ref names, and a ref that quietly means something other than
+  what it says is worse than one that fails. `mamori doctor` resolves every ref
+  before deployment, so a rejected ref surfaces there rather than in production.
+- **It splits on `\` as well as `/`.** Splitting on `/` alone leaves
+  `a\..\..\secrets` as one segment matching neither `.` nor `..`, so it would
+  pass, and the wire would carry `%5C` - which IIS and ASP.NET decode and honor
+  as a directory separator, the classic backslash traversal bypass. A `BaseURL`
+  is operator-supplied with no platform restriction, so this package cannot
+  assume the backend is not one of them. A backslash in an ordinary key still
+  works; only a traversal is refused.
+- **It runs on the decoded path**, so `%2e%2e` is refused exactly like `..`.
+  That check is needed precisely because `Path` is an escaped path: preserving
+  a caller's escapes so an encoded slash survives would otherwise preserve an
+  encoded traversal with it.
+- **`...` is not a traversal.** RFC 3986 section 5.2.4 defines dot-segment
+  removal over exactly `.` and `..`, so a three-dot segment is an ordinary name.
+
+No server is needed to show it: every one of these is refused before a request
+is even built.
+
+```go
+c, err := httpcore.New(httpcore.Config{
+    BaseURL: "https://api.example.com/v1/tenants/acme",
+})
+if err != nil {
+    panic(err)
+}
+
+for _, path := range []string{
+    "../../other-tenant/cfg",
+    `a\..\..\secrets`,
+    "%2e%2e/secrets",
+} {
+    _, err := c.Do(context.Background(), httpcore.Request{Path: path})
+    fmt.Println(errors.Is(err, mamori.ErrInvalid))
+}
+// Output:
+// true
+// true
+// true
+```
+
 `Do` can fail for several distinct reasons: request construction (a
-malformed method or path, or an `Authenticator` whose `Apply` itself errors),
+malformed or traversing path, or an `Authenticator` whose `Apply` itself
+errors),
 a transport failure (the request never got a response), a non-2xx/non-304
 status (classified through `ClassifyStatus`), or a response over `MaxBody`.
 The transport case gets special handling worth knowing about: `net/http`'s
@@ -164,12 +267,28 @@ successful conditional GET, not a failure):
 
 | HTTP status | mamori kind |
 | --- | --- |
-| 400 | `invalid` |
+| 400, 422 | `invalid` |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
 | 404 | `not_found` |
 | 408, 429 | `rate_limited` |
 | anything else | `unavailable` |
+
+422 Unprocessable Entity is named explicitly rather than left to the default,
+and the reason is worth stating: the default kind is *transient*, so mamori
+backs off and retries. A 422 means the request was well formed and
+semantically wrong, which retrying can never fix, and at least one backend in
+this ecosystem (Infisical) answers with it.
+
+A status `http.StatusText` does not know is rendered without its name rather
+than with an empty one, so a Cloudflare 520 reads `httpcore: http 520:
+mamori: unavailable` and not `http 520 : ...`. `ClassifyStatus` carries the
+`httpcore:` prefix, like every other error this package returns, because a
+provider calling it directly - the documented pattern - would otherwise
+surface an unattributed message; `Do` adds the prefix itself and so calls an
+unexported twin, keeping one copy of the table and one copy of the prefix.
+
+### Supplying `detail`
 
 `detail` is an optional string the *caller* supplies; `ClassifyStatus` never
 reads a response body to build it. A response body can itself contain the
@@ -177,6 +296,65 @@ value a ref is resolving - a config value, a secret, a token - so only the
 calling provider knows which field, if any, of its backend's own error shape
 is safe to surface. Pass a vendor error code or message once you have decided
 it cannot contain the resolved value, and pass `""` when in doubt.
+
+`Config.ErrorDetail` is how that string reaches `Do`, which would otherwise
+have no channel for it at all - the body is drained and the response is gone
+by the time `Do` returns:
+
+```go
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusForbidden)
+    w.Write([]byte(`{"error":{"code":"token_scope_missing","value":"s3cr3t"}}`))
+}))
+defer srv.Close()
+
+c, err := httpcore.New(httpcore.Config{
+    BaseURL: srv.URL,
+    ErrorDetail: func(status int, body []byte) string {
+        // Only the fields you have decided cannot carry the resolved value.
+        var env struct {
+            Error struct {
+                Code string `json:"code"`
+            } `json:"error"`
+        }
+        if json.Unmarshal(body, &env) != nil {
+            return ""
+        }
+        return env.Error.Code
+    },
+})
+if err != nil {
+    panic(err)
+}
+
+_, err = c.Do(context.Background(), httpcore.Request{Path: "/config"})
+fmt.Println(errors.Is(err, mamori.ErrPermissionDenied))
+fmt.Println(strings.Contains(err.Error(), "token_scope_missing"))
+// The sibling field the hook did not select never reaches the message.
+fmt.Println(strings.Contains(err.Error(), "s3cr3t"))
+// Output:
+// true
+// true
+// false
+```
+
+Three things about it:
+
+- **It is called only for a status `ClassifyStatus` rejects.** On a success the
+  body *is* the resolved value and belongs to the caller, not to an error
+  message.
+- **It sees at most `MaxBody` bytes**, truncated rather than rejected, so a
+  backend that answers `403` with a gigabyte of HTML can neither defeat the
+  memory ceiling nor turn its own `403` into a "response too large" error.
+- **Nil means no detail, and nil is the safe default.** A body can be the
+  secret. Leaving the hook unset is a guarantee that no response body ever
+  reaches an error, and it is what `providers/https` does.
+
+It exists because several providers already embed a bounded error body in
+their messages - a house convention shared by `providers/doppler`,
+`providers/cloudflare-kv`, `providers/vercel-gc` and `providers/scaleway-sm` -
+and a migration onto `httpcore` has to be able to preserve each provider's
+error mapping exactly.
 
 `StatusForKind(k mamori.Kind) int` is the exported inverse of
 `ClassifyStatus`: given a `mamori.Kind`, it returns an HTTP status that
@@ -260,6 +438,15 @@ otherwise assume went the other way:
   the `Revalidator` and every caller that has ever received a given body
   would share one backing array; a caller that decodes or trims its copy in
   place would silently corrupt what the next poll serves.
+- **A 304 with no cached body to pair it with is an error, never an empty
+  one.** If the entry was evicted mid-flight, `Get` retries unconditionally and
+  uses the fresh body. If the backend answers 304 to *that* retry, which
+  carried no validators at all, it is violating RFC 7232 and `Get` fails with
+  `mamori.ErrUnavailable` rather than returning `Body: nil` with a nil error.
+  That distinction matters most on the path it is easiest to overlook: the very
+  first poll of a key, where there is no cache entry by definition. Returning
+  the empty body there would have mamori apply an empty string as though it
+  were the resolved value.
 
 ## What this package does not do
 
@@ -278,7 +465,15 @@ otherwise assume went the other way:
 A provider built on `httpcore` typically holds one `*httpcore.Client`,
 implements `Scheme` and `Resolve`, and uses `mamori.SelectKey` for `#field`
 selection and `httpcore.Version` to derive `Value.Version` from whichever
-validator the response actually carried:
+validator the response actually carried.
+
+Handing `ref.Path` straight to `Request.Path`, as the example below does, is
+safe: `Do` rejects a `.` or `..` segment itself, in either its literal or its
+percent-encoded form, so a ref cannot escape the prefix your `BaseURL`
+declares. That is deliberately not something a provider has to remember - see
+"`Do` refuses a path that escapes the `BaseURL`" above. If your backend's key
+names may themselves contain slashes, escape the path first
+(`url.PathEscape(key)`) so the whole key stays one segment.
 
 ```go
 // configProvider is a minimal mamori.Provider built on httpcore.Client.
@@ -303,6 +498,9 @@ func newConfigProvider(baseURL, token string) (*configProvider, error) {
 func (p *configProvider) Scheme() string { return "example-config" }
 
 // Resolve fetches ref.Path from the backend and selects ref.Key when present.
+//
+// ref.Path needs no traversal check here: Do rejects a "." or ".." segment,
+// literal or percent-encoded, before it sends anything.
 func (p *configProvider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
     resp, err := p.client.Do(ctx, httpcore.Request{Path: ref.Path})
     if err != nil {

@@ -2,10 +2,13 @@ package httpcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"testing"
+
+	"github.com/xavidop/mamori"
 )
 
 // newCountingClient returns a Client whose transport records every request and
@@ -275,6 +278,54 @@ func TestRevalidatorRetriesWhenEntryEvictedDuringRequest(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("calls = %d, want 3: the seed, the 304 whose entry vanished, and the retry", calls)
+	}
+}
+
+// TestRevalidatorFailsOn304WithoutValidators pins that a 304 answering a request
+// that carried no validators fails loudly instead of returning an empty body.
+//
+// This is not only the eviction race. It is EVERY FIRST POLL of a key: with no
+// cache entry, Get sends an unconditional request, and a backend that answers
+// 304 anyway used to fall straight through to a Response with a nil Body and a
+// nil error. mamori applies that as an empty string, which is the same silently
+// wrong value the cached-validator rule exists to prevent, on the one path that
+// rule cannot cover.
+//
+// The kind is ErrUnavailable rather than ErrInvalid: a backend violating RFC
+// 7232 is a backend fault that may clear, so mamori should back off and retry
+// rather than treat the ref as permanently broken.
+func TestRevalidatorFailsOn304WithoutValidators(t *testing.T) {
+	calls := 0
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			calls++
+			resp, _ := newResponse(http.StatusNotModified, nil, nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rv := NewRevalidator(c, 8)
+
+	resp, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err == nil {
+		t.Fatalf("first Get returned %+v with a nil error; an empty body would be applied as an empty value", resp)
+	}
+	if !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if resp != nil {
+		t.Fatalf("Get returned a non-nil Response %+v alongside its error", resp)
+	}
+	// Two calls: the unconditional first poll, and the unconditional retry the
+	// no-cached-body branch makes before giving up.
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if got := rv.len(); got != 0 {
+		t.Fatalf("entries = %d after the failure, want 0", got)
 	}
 }
 

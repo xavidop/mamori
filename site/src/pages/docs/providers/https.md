@@ -22,10 +22,25 @@ go get github.com/xavidop/mamori/providers/https
 ```
 
 ```go
-import _ "github.com/xavidop/mamori/providers/https"
+import (
+	"github.com/xavidop/mamori"
+	httpsprov "github.com/xavidop/mamori/providers/https"
+)
+
+p, err := httpsprov.New(httpsprov.Endpoint{
+	Name:    "billing",
+	BaseURL: "https://billing.internal.example.com/v1",
+})
+if err != nil {
+	return err
+}
+
+cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 ```
 
-Importing the package registers the `https` scheme, but resolves nothing by itself: unlike a zero-config provider, `https://` refs are only ever answered by endpoints you construct with `New` and hand to `mamori.WithProvider`, since there is no vendor default to fall back to.
+**This is an ordinary import, never a blank one, and this provider has no `init()`.** Every other provider registers itself from `init`, so `import _` is enough, because each has a vendor default: `New()` is valid with no arguments and reads credentials from the environment at resolve time. This one has no vendor and therefore no default - `Name`, `BaseURL`, `Auth`, `Query` and `Header` are all operator-supplied, `New` requires at least one `Endpoint`, and `New` returns an error, none of which an `init` function has anything to pass or anywhere to report. Registering an endpointless provider globally would be worse than not registering one: it would advertise `https://` in `RegisteredSchemes()` and to `mamori doctor` while failing every ref.
+
+Hand the constructed provider to `mamori.WithProvider`, which takes precedence over the global registry for its scheme, or to `mamori.Register` once you have built it.
 
 ## Using the ref
 
@@ -65,9 +80,13 @@ A ref cannot carry credentials either, because a struct tag is source code; auth
 
 ## Ref paths cannot escape their endpoint
 
-`Resolve` rejects a ref path containing a `.` or `..` segment, wrapping `mamori.ErrInvalid`, rather than joining it onto the endpoint's `BaseURL`. This is not theoretical: `${VAR}` interpolation from `WithRefVars` means a ref like `https://billing/${TENANT}/cfg` carries whatever the application put in `TENANT` at runtime. Without this check, a `TENANT` of `../..` would reach another tenant's configuration without ever leaving the declared host, so the endpoint restriction above would never fire.
+A ref path containing a `.` or `..` segment is rejected with `mamori.ErrInvalid`, before it is joined onto the endpoint's `BaseURL` and before any request goes out. This is not theoretical: `${VAR}` interpolation from `WithRefVars` means a ref like `https://billing/${TENANT}/cfg` carries whatever the application put in `TENANT` at runtime. Without this check, a `TENANT` of `../..` would reach another tenant's configuration without ever leaving the declared host, so the endpoint restriction above would never fire.
 
-The check splits on **both** `/` and `\`, not `/` alone: splitting only on `/` would leave `a\..\..\secrets` as one segment matching neither `.` nor `..`, and the request would go out with its backslashes percent-encoded as `%5C` - which IIS and ASP.NET decode and honor as a directory separator, the classic backslash traversal bypass. A backslash inside an ordinary key still works; only a traversal is refused.
+**The check lives in `httpcore`, not here**, so that every provider built on it inherits the same guarantee and none can forget it. Nothing about the behaviour of an `https://` ref changes as a result.
+
+The check splits on **both** `/` and `\`, not `/` alone: splitting only on `/` would leave `a\..\..\secrets` as one segment matching neither `.` nor `..`, and the request would go out with its backslashes percent-encoded as `%5C` - which IIS and ASP.NET decode and honor as a directory separator, the classic backslash traversal bypass. A backslash inside an ordinary key still works; only a traversal is refused. Three-dot segments are not matched: RFC 3986 defines dot-segment removal over exactly `.` and `..`, so `...` is an ordinary name.
+
+It runs on the **decoded** path, so `%2e%2e` is refused exactly like `..`. `httpcore` preserves a caller's percent escapes to the wire, because a key whose own name contains a slash cannot be addressed otherwise, and an encoded traversal would be preserved with them.
 
 It rejects rather than cleans, deliberately: cleaning a path would silently change which value a ref names, and `mamori doctor` resolving every ref before deployment means a rejected ref surfaces there, not in production.
 
@@ -94,8 +113,8 @@ fmt.Println(errors.Is(err, mamori.ErrInvalid))
 
 ```go
 import (
-	httpsprov "github.com/xavidop/mamori/providers/https"
 	"github.com/xavidop/mamori/providers/httpcore"
+	httpsprov "github.com/xavidop/mamori/providers/https"
 )
 
 p, err := httpsprov.New(httpsprov.Endpoint{
@@ -104,7 +123,7 @@ p, err := httpsprov.New(httpsprov.Endpoint{
 	Auth:    httpcore.Bearer(os.Getenv("BILLING_API_TOKEN")),
 })
 if err != nil {
-	panic(err)
+	return err
 }
 
 cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
@@ -118,14 +137,16 @@ cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 
 | HTTP status | mamori kind |
 | --- | --- |
-| 400 | `invalid` |
+| 400, 422 | `invalid` |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
 | 404 | `not_found` |
 | 408, 429 | `rate_limited` |
 | anything else | `unavailable` |
 
-The response body never reaches an error: `ClassifyStatus` takes only a caller-supplied `detail` string, and this provider passes none, because the body it just fetched can itself be the config value or secret a ref is resolving.
+422 is named rather than left to the default because the default kind is transient: mamori would back off and retry a request that was well formed and semantically wrong, which retrying can never fix.
+
+The response body never reaches an error. `ClassifyStatus` takes only a caller-supplied `detail` string, `httpcore.Config.ErrorDetail` is the hook that supplies one, and this provider leaves it nil, because the body it just fetched can itself be the config value or secret a ref is resolving.
 
 ## Watch
 
@@ -135,16 +156,21 @@ mamori polls this provider - a generic, operator-declared endpoint exposes no pu
 
 ```go
 import (
-	httpsprov "github.com/xavidop/mamori/providers/https"
 	"github.com/xavidop/mamori/providers/httpcore"
+	httpsprov "github.com/xavidop/mamori/providers/https"
 )
 
-mamori.WithProvider(httpsprov.New(httpsprov.Endpoint{
+p, err := httpsprov.New(httpsprov.Endpoint{
 	Name:      "billing",
 	BaseURL:   "https://billing.internal.example.com/v1",
 	Auth:      httpcore.Bearer(os.Getenv("BILLING_API_TOKEN")),
 	Sensitive: true,
-}))
+})
+if err != nil {
+	return err
+}
+
+opt := mamori.WithProvider(p)
 ```
 
 There is no zero-config default: at least one `Endpoint` is required, each naming a `BaseURL` whose scheme is `http` or `https` (`http://` only with `AllowInsecure`). `Query` and `Header` cover a fixed target query string or header, since a ref itself cannot carry either.

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -221,22 +220,31 @@ func TestResolveAllowsBackslashInAnOrdinaryKey(t *testing.T) {
 	}
 }
 
-// TestResolveDoesNotDecodeEscapedDotSegments pins the other half: a
-// percent-encoded traversal needs no separate check, because ParseRef does not
-// decode escapes and url.URL.String re-encodes the percent sign. The request
-// must reach the backend as an ordinary, non-traversing path.
-func TestResolveDoesNotDecodeEscapedDotSegments(t *testing.T) {
+// TestResolveRejectsEscapedDotSegments pins the other half: a percent-encoded
+// traversal is refused exactly like a literal one, and no request goes out.
+//
+// This used to be a weaker guarantee. httpcore wrote a request path into
+// url.URL.Path alone, which re-escapes the percent sign, so "%2e%2e" reached the
+// backend as the harmless literal "%252e%252e" and needed no check of its own.
+// httpcore now preserves a caller's escapes, because a backend whose key names
+// contain slashes cannot be addressed without an encoded slash surviving to the
+// wire, and an encoded traversal would survive with it. The dot-segment check
+// therefore runs on the DECODED path, which catches both forms.
+func TestResolveRejectsEscapedDotSegments(t *testing.T) {
 	f := newFake()
 	p := newTestProvider(t, f, nil)
 
-	// Not found is the expected outcome: the point is that it is treated as a
-	// literal key rather than resolved into a parent directory.
 	_, err := p.Resolve(context.Background(), mustRef(t, "https://billing/%2e%2e/secrets"))
-	if !errors.Is(err, mamori.ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
-	if strings.Contains(f.lastPath, "../") {
-		t.Fatalf("request path %q traversed; the escape was decoded somewhere", f.lastPath)
+	if errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("err = %v reported ErrNotFound, which would hide the traversal behind a field default", err)
+	}
+	// The rejection happens before the round trip, so the backend never saw a
+	// path at all, traversing or otherwise.
+	if f.lastPath != "" {
+		t.Fatalf("request reached the backend as %q; the rejection must precede the round trip", f.lastPath)
 	}
 }
 

@@ -15,9 +15,10 @@
 // into twenty-five.
 //
 // It does not parse vendor error envelopes. [ClassifyStatus] takes the detail
-// string from its caller because a response body can contain the resolved value
-// itself, and only the provider knows which field of its backend's error shape
-// is safe to surface.
+// string from its caller, and [Config.ErrorDetail] is where a provider supplies
+// one, because a response body can contain the resolved value itself and only
+// the provider knows which field of its backend's error shape is safe to
+// surface. Leaving that hook nil means no body ever reaches an error.
 //
 // # Units
 //
@@ -59,6 +60,24 @@ type Config struct {
 	MaxBody int64
 	// UserAgent sets the User-Agent header. Empty leaves Go's default.
 	UserAgent string
+	// ErrorDetail turns a failing response's body into the detail string
+	// [ClassifyStatus] appends to its error. It is called only for a status
+	// ClassifyStatus rejects, and only ever with at most MaxBody bytes of that
+	// body, so a huge error body cannot defeat the ceiling.
+	//
+	// Nil means no detail, and nil is the safe default because a response body
+	// can be the resolved value itself: a config value, a secret, a token.
+	// Surfacing it unconditionally would put that value in an error message,
+	// a log line, and a mamori status page. Only the provider knows which
+	// field of its backend's error envelope, if any, cannot contain the value,
+	// which is exactly why this is a hook rather than something httpcore
+	// decides. Returning "" suppresses the detail for that one response.
+	//
+	// It exists because several providers already embed a bounded error body
+	// in their message, a house convention shared by providers/doppler,
+	// providers/cloudflare-kv, providers/vercel-gc, and providers/scaleway-sm,
+	// and a migration onto httpcore must be able to preserve it.
+	ErrorDetail func(status int, body []byte) string
 }
 
 // Client performs bounded, classified HTTP round trips against one backend. It
@@ -66,11 +85,12 @@ type Config struct {
 //
 // Client does not retry. See the package documentation for why.
 type Client struct {
-	base      *url.URL
-	http      *http.Client
-	auth      Authenticator
-	maxBody   int64
-	userAgent string
+	base        *url.URL
+	http        *http.Client
+	auth        Authenticator
+	maxBody     int64
+	userAgent   string
+	errorDetail func(status int, body []byte) string
 }
 
 // New validates cfg and returns a Client. It fails when BaseURL is empty or
@@ -98,10 +118,11 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		base:      base,
-		http:      hc,
-		auth:      cfg.Auth,
-		maxBody:   maxBody,
-		userAgent: cfg.UserAgent,
+		base:        base,
+		http:        hc,
+		auth:        cfg.Auth,
+		maxBody:     maxBody,
+		userAgent:   cfg.UserAgent,
+		errorDetail: cfg.ErrorDetail,
 	}, nil
 }

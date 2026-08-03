@@ -1,6 +1,7 @@
 package httpcore
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,6 +20,10 @@ func TestClassifyStatus(t *testing.T) {
 		{"created", http.StatusCreated, ""},
 		{"not modified", http.StatusNotModified, ""},
 		{"bad request", http.StatusBadRequest, mamori.KindInvalid},
+		// 422 must not fall through to the default. The default kind is
+		// transient, so mamori would back off and retry a request that was well
+		// formed and semantically wrong, which retrying can never fix.
+		{"unprocessable entity", http.StatusUnprocessableEntity, mamori.KindInvalid},
 		{"unauthorized", http.StatusUnauthorized, mamori.KindUnauthenticated},
 		{"forbidden", http.StatusForbidden, mamori.KindPermissionDenied},
 		{"not found", http.StatusNotFound, mamori.KindNotFound},
@@ -60,6 +65,65 @@ func TestClassifyStatusIncludesDetail(t *testing.T) {
 	}
 	if !errors.Is(err, mamori.ErrPermissionDenied) {
 		t.Fatalf("errors.Is(ErrPermissionDenied) = false for %v", err)
+	}
+}
+
+// TestClassifyStatusNamesAnUnknownVendorStatus pins that a status http.StatusText
+// does not know renders without an orphaned space. Cloudflare's 520 through 527
+// are exactly the codes the backends this package targets emit, so
+// "http 520 : mamori: unavailable" is reachable, not hypothetical.
+func TestClassifyStatusNamesAnUnknownVendorStatus(t *testing.T) {
+	err := ClassifyStatus(520, "")
+	if err == nil {
+		t.Fatal("ClassifyStatus(520) returned nil")
+	}
+	if strings.Contains(err.Error(), "520 :") {
+		t.Fatalf("orphaned space before the colon in %q", err.Error())
+	}
+	if want := "httpcore: http 520: mamori: unavailable"; err.Error() != want {
+		t.Fatalf("ClassifyStatus(520) = %q, want %q", err.Error(), want)
+	}
+	// A status http.StatusText DOES know must still be named.
+	known := ClassifyStatus(http.StatusForbidden, "")
+	if !strings.Contains(known.Error(), "403 Forbidden") {
+		t.Fatalf("known status lost its text: %q", known.Error())
+	}
+}
+
+// TestClassifyStatusIsAttributed pins the package prefix. Client.Do wraps its
+// own errors, so this is invisible there, but a provider calling ClassifyStatus
+// directly is the documented pattern and would otherwise surface an unsourced
+// "http 403 Forbidden" in a mamori status page.
+func TestClassifyStatusIsAttributed(t *testing.T) {
+	err := ClassifyStatus(http.StatusForbidden, "")
+	if err == nil {
+		t.Fatal("ClassifyStatus returned nil")
+	}
+	if !strings.HasPrefix(err.Error(), "httpcore: ") {
+		t.Fatalf("ClassifyStatus error %q is not attributed to this package", err.Error())
+	}
+}
+
+// TestDoDoesNotDoublePrefix pins the other half of that decision: Do adds the
+// package prefix itself, so it must not stack a second one. This is why the
+// table lives in an unexported classify that ClassifyStatus wraps.
+func TestDoDoesNotDoublePrefix(t *testing.T) {
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusForbidden, nil, nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = c.Do(context.Background(), Request{Path: "x"})
+	if err == nil {
+		t.Fatal("Do with 403 returned nil error")
+	}
+	if n := strings.Count(err.Error(), "httpcore: "); n != 1 {
+		t.Fatalf("%q carries the package prefix %d times, want 1", err.Error(), n)
 	}
 }
 

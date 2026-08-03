@@ -79,8 +79,10 @@ type Endpoint struct {
 }
 
 // endpoint is a validated Endpoint with its client and revalidator built.
+//
+// It does not keep the Name: the Provider's map is keyed by it, so the only
+// code that needs the name already has it in hand.
 type endpoint struct {
-	name      string
 	query     url.Values
 	header    http.Header
 	sensitive bool
@@ -153,7 +155,6 @@ func New(endpoints ...Endpoint) (*Provider, error) {
 		}
 
 		out[e.Name] = &endpoint{
-			name:      e.Name,
 			query:     e.Query,
 			header:    e.Header,
 			sensitive: e.Sensitive,

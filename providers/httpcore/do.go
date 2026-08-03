@@ -17,7 +17,23 @@ import (
 type Request struct {
 	// Method defaults to GET when empty.
 	Method string
-	// Path is joined onto the Client's BaseURL.
+	// Path is joined onto the Client's BaseURL. It is an ESCAPED path, the
+	// same form net/url calls RawPath, so a caller can name one segment whose
+	// own name contains a slash:
+	//
+	//	Path: url.PathEscape("config/prod/log-level")
+	//
+	// reaches the wire as config%2Fprod%2Flog-level, one segment, rather than
+	// as three segments or as a double-encoded config%252Fprod%252Flog-level.
+	// Backends whose keys may contain slashes, Cloudflare Workers KV among
+	// them, cannot address a key at all without that distinction.
+	//
+	// The cost of that contract is that a literal percent sign must be written
+	// "%25". A Path that is not a valid escaped path is rejected with
+	// mamori.ErrInvalid rather than guessed at, because guessing would make
+	// the meaning of a ref depend on whether its escapes happened to parse.
+	//
+	// A "." or ".." segment is rejected: see [Client.Do].
 	Path string
 	// Query is merged into the URL.
 	Query url.Values
@@ -47,13 +63,21 @@ type Response struct {
 }
 
 // Do performs one round trip. It applies Auth, bounds and always drains the
-// response body, and classifies the status through ClassifyStatus.
+// response body, and classifies the status through [ClassifyStatus].
 //
 // A 304 returns a Response with NotModified set and a nil Body, and no error: a
 // successful conditional GET is not a failure.
 //
-// The response body never appears in a returned error. A body can contain the
-// resolved value, so classification carries the status only.
+// A Request.Path containing a "." or ".." segment, literal or percent-encoded,
+// is rejected with mamori.ErrInvalid before anything is sent, so a path cannot
+// escape the prefix the BaseURL declares. That check lives here rather than in
+// each provider so no provider can forget it; the unexported hasDotSegment
+// carries the full reasoning, including why backslash counts as a separator.
+//
+// The response body reaches a returned error only through
+// [Config.ErrorDetail], and only on a failing status. A body can contain the
+// resolved value, so the default is that classification carries the status
+// alone.
 func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 	req, err := c.build(ctx, r)
 	if err != nil {
@@ -79,7 +103,13 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 		NotModified:  resp.StatusCode == http.StatusNotModified,
 	}
 
-	if err := ClassifyStatus(resp.StatusCode, ""); err != nil {
+	if err := classify(resp.StatusCode, ""); err != nil {
+		// Only now, on a status this package has already decided is a failure,
+		// is reading the body for a detail safe: on a success the body IS the
+		// resolved value and belongs to the caller, not to an error message.
+		if c.errorDetail != nil {
+			err = classify(resp.StatusCode, c.errorDetail(resp.StatusCode, readErrorBody(resp.Body, c.maxBody)))
+		}
 		return nil, fmt.Errorf("httpcore: %s %s: %w", req.Method, redactURL(req.URL), err)
 	}
 	if out.NotModified {
@@ -103,7 +133,9 @@ func (c *Client) build(ctx context.Context, r Request) (*http.Request, error) {
 	}
 
 	u := *c.base
-	u.Path = joinPath(c.base.Path, r.Path)
+	if err := setPath(&u, c.base.EscapedPath(), r.Path); err != nil {
+		return nil, err
+	}
 	if len(r.Query) > 0 {
 		q := u.Query()
 		for k, vs := range r.Query {
@@ -145,6 +177,101 @@ func (c *Client) build(ctx context.Context, r Request) (*http.Request, error) {
 	return req, nil
 }
 
+// setPath joins reqPath onto basePath and assigns the result to u, setting both
+// Path and RawPath so a percent escape the caller wrote survives to the wire.
+//
+// net/url stores a path twice: Path holds the decoded form, RawPath the encoded
+// one, and EscapedPath returns RawPath only when it is a valid encoding of Path,
+// falling back to escaping Path otherwise. Writing the joined path into Path
+// alone, as this package once did, therefore re-escapes every percent sign the
+// caller wrote, turning url.PathEscape("config/prod/log-level") into
+// "config%252Fprod%252Flog-level" on the wire: a key no backend has. Backends
+// whose key names may themselves contain slashes cannot be addressed at all
+// without this.
+//
+// It rejects before it assigns, because both rejections describe a path that
+// must not be sent at all.
+func setPath(u *url.URL, basePath, reqPath string) error {
+	decodedReq, err := url.PathUnescape(reqPath)
+	if err != nil {
+		return fmt.Errorf("httpcore: request path %q is not a valid escaped path, write a literal percent sign as %%25: %w: %w",
+			reqPath, mamori.ErrInvalid, err)
+	}
+	if hasDotSegment(decodedReq) {
+		return fmt.Errorf("httpcore: request path %q contains a dot segment, which would escape the path prefix the BaseURL declares: %w",
+			reqPath, mamori.ErrInvalid)
+	}
+
+	raw := joinPath(basePath, reqPath)
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return fmt.Errorf("httpcore: request path %q joined onto the BaseURL is not a valid escaped path: %w: %w",
+			reqPath, mamori.ErrInvalid, err)
+	}
+	u.Path = decoded
+	// Mirror net/url's own (*URL).setPath: keep RawPath only when the default
+	// escaping of Path would not reproduce it. A redundant RawPath is dead
+	// weight, and a RawPath that does not decode back to Path is silently
+	// ignored, so the two must be set together or not at all.
+	u.RawPath = ""
+	if (&url.URL{Path: decoded}).EscapedPath() != raw {
+		u.RawPath = raw
+	}
+	return nil
+}
+
+// hasDotSegment reports whether p, a DECODED path, contains a "." or ".."
+// segment.
+//
+// This check lives in httpcore, not in each provider, so that no provider can
+// forget it: every path any provider sends goes through [Client.Do]. joinPath
+// does not resolve dot segments, so "../.." in a caller-supplied path reaches
+// outside the path prefix the BaseURL declares. For a client scoped to
+// https://api/v1/tenants/acme that is another tenant's configuration, reached
+// without ever leaving the declared host, and therefore without tripping
+// whatever host or endpoint restriction the provider relies on to contain
+// exactly this.
+//
+// It is reachable rather than theoretical. A provider's path comes from a
+// mamori ref, and a ref path is not only what the struct tag says:
+// expandRefVars substitutes ${VAR} from WithRefVars (decode.go in the core
+// module), whose values the application supplies at runtime, so a ref of
+// https://billing/${TENANT}/cfg carries whatever TENANT holds.
+//
+// Rejecting is the loud option. Cleaning silently would change which value a ref
+// names, and a ref that quietly means something other than it says is worse than
+// one that fails. `mamori doctor` resolves every ref before deployment, so this
+// surfaces there rather than in production.
+//
+// Backslash counts as a separator here, not only '/'. Splitting on '/' alone
+// leaves `a\..\..\secrets` as a single segment that matches neither "." nor
+// "..", so the check passes and the request goes out. url.URL percent encodes
+// the backslashes, so the wire carries "%5C", which most backends treat as an
+// ordinary character. IIS and ASP.NET are the well known exceptions: they decode
+// it and honour '\' as a directory separator, which is the classic backslash
+// traversal bypass. A BaseURL is operator supplied with no platform restriction,
+// so this package cannot assume the backend is not one of them. Splitting on
+// both keeps `a\b` usable as an ordinary key while refusing `a\..\b`.
+//
+// The caller passes the DECODED path, which is what makes "%2e%2e" fail here
+// too. It did not have to before: writing a path into url.URL.Path alone
+// re-escaped the percent sign and left the backend with "%252e%252e". Now that
+// setPath preserves a caller's escapes, so that an encoded slash can name one
+// segment, an encoded traversal would be preserved with it.
+//
+// Segments of three or more dots are deliberately not matched. RFC 3986 section
+// 5.2.4 defines dot-segment removal over exactly "." and "..", so "..." is an
+// ordinary segment name rather than a traversal.
+func hasDotSegment(p string) bool {
+	isSep := func(r rune) bool { return r == '/' || r == '\\' }
+	for _, seg := range strings.FieldsFunc(p, isSep) {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // joinPath joins a base path and a request path with exactly one separator.
 func joinPath(base, p string) string {
 	switch {
@@ -169,6 +296,22 @@ func readBounded(r io.Reader, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("response exceeds %d byte limit: %w", max, mamori.ErrInvalid)
 	}
 	return b, nil
+}
+
+// readErrorBody reads at most max bytes of a failing response's body, for
+// Config.ErrorDetail.
+//
+// It truncates where readBounded rejects, and swallows a read error rather than
+// reporting it, because the status classification is the answer the caller
+// needs: a backend that answers 403 with a gigabyte of HTML must not be able to
+// turn that 403 into "response exceeds limit", nor to defeat the memory ceiling
+// MaxBody exists to enforce. A detail is a nicety; the kind is not.
+func readErrorBody(r io.Reader, max int64) []byte {
+	b, err := io.ReadAll(io.LimitReader(r, max))
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // redactURL renders a URL for an error message with its query and userinfo

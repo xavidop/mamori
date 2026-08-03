@@ -109,6 +109,7 @@ go get github.com/xavidop/mamori/providers/<name>
 
 - [Resolve and errors](/docs/writing-a-provider/resolve/) - implement `Resolve` and map backend errors to kinds.
 - [Watch and batch](/docs/writing-a-provider/capabilities/) - the optional `WatchableProvider` and `BatchProvider`.
+- [HTTP core](/docs/writing-a-provider/httpcore/) - if your backend is a REST API, do not hand-roll the HTTP: `providers/httpcore` does request building, auth, classification, conditional GET, and body hygiene.
 - [Conformance](/docs/writing-a-provider/conformance/) - the required `providertest.Run` case and the acceptance checklist.
 - [Providers](/docs/providers/) - the built-in provider catalog.
 
