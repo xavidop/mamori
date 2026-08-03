@@ -1,6 +1,7 @@
 package httpcore
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"sync"
@@ -77,7 +78,7 @@ func (rv *Revalidator) Get(ctx context.Context, key string, r Request) (*Respons
 	}
 
 	if resp.NotModified {
-		body, ok := rv.body(key)
+		etag, lastMod, body, ok := rv.cached(key)
 		if !ok {
 			// The backend answered 304 for a validator we no longer hold, which
 			// means the entry was evicted between the two halves of this call.
@@ -93,6 +94,15 @@ func (rv *Revalidator) Get(ctx context.Context, key string, r Request) (*Respons
 		}
 		out := *resp
 		out.Body = body
+		// Report the validators the cache holds, not the ones the 304 carried.
+		// RFC 7232 says a 304 should repeat them, but real backends, CDNs and
+		// proxies especially, sometimes omit them. Copying an empty ETag makes
+		// Version fall back to a body hash, so a genuinely unmodified poll
+		// reports a changed Version and mamori runs a spurious update: a
+		// needless PreApply, a needless OnChange, and for a rotating credential
+		// a needless reconnect.
+		out.ETag = etag
+		out.LastModified = lastMod
 		return &out, nil
 	}
 
@@ -113,16 +123,22 @@ func (rv *Revalidator) validators(key string) (etag, lastModified string, ok boo
 	return e.etag, e.lastModified, true
 }
 
-// body returns the cached body for key.
-func (rv *Revalidator) body(key string) ([]byte, bool) {
+// cached returns the entry's validators and a private copy of its body, marking
+// it recently used.
+//
+// The body is copied because the caller receives it. Without the copy the
+// Revalidator and every caller share one backing array, so a caller that decodes
+// or trims in place silently changes what the next poll returns.
+func (rv *Revalidator) cached(key string) (etag, lastModified string, body []byte, ok bool) {
 	rv.mu.Lock()
 	defer rv.mu.Unlock()
 	el, ok := rv.entries[key]
 	if !ok {
-		return nil, false
+		return "", "", nil, false
 	}
 	rv.lru.MoveToFront(el)
-	return el.Value.(*cacheEntry).body, true
+	e := el.Value.(*cacheEntry)
+	return e.etag, e.lastModified, bytes.Clone(e.body), true
 }
 
 // store records resp under key, evicting the least recently used entry when the
@@ -137,9 +153,12 @@ func (rv *Revalidator) store(key string, resp *Response) {
 	rv.mu.Lock()
 	defer rv.mu.Unlock()
 
+	// The body is copied on the way in for the same reason cached copies it on
+	// the way out: the cache must own its bytes outright, or the caller that
+	// received this same 200 response can write into what the cache will serve.
 	if el, ok := rv.entries[key]; ok {
 		e := el.Value.(*cacheEntry)
-		e.etag, e.lastModified, e.body = resp.ETag, resp.LastModified, resp.Body
+		e.etag, e.lastModified, e.body = resp.ETag, resp.LastModified, bytes.Clone(resp.Body)
 		rv.lru.MoveToFront(el)
 		return
 	}
@@ -147,7 +166,7 @@ func (rv *Revalidator) store(key string, resp *Response) {
 		key:          key,
 		etag:         resp.ETag,
 		lastModified: resp.LastModified,
-		body:         resp.Body,
+		body:         bytes.Clone(resp.Body),
 	})
 	rv.entries[key] = el
 

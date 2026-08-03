@@ -146,6 +146,85 @@ func TestRevalidatorDropsEntryOnError(t *testing.T) {
 	}
 }
 
+// TestRevalidatorKeepsCachedValidatorsOn304 pins that a 304 hit reports the
+// validators the cache holds, not whatever the 304 response happened to carry.
+//
+// RFC 7232 says a backend should repeat ETag on a 304, but real backends, CDNs
+// and proxies especially, sometimes omit it. Copying the 304's own empty ETag
+// makes Version fall back to a body hash, so a genuinely unmodified poll reports
+// a changed Version and mamori runs a spurious update.
+//
+// newCountingClient cannot express this, because it sets ETag on every response
+// and so cannot distinguish "validator from the cache" from "validator from the
+// response". That is exactly why this test builds its own backend.
+func TestRevalidatorKeepsCachedValidatorsOn304(t *testing.T) {
+	calls := 0
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if req.Header.Get("If-None-Match") == `"v1"` {
+				// Deliberately omit the validators, as a non-compliant backend does.
+				resp, _ := newResponse(http.StatusNotModified, nil, nil)
+				return resp, nil
+			}
+			h := http.Header{}
+			h.Set("ETag", `"v1"`)
+			h.Set("Last-Modified", "Wed, 21 Oct 2026 07:28:00 GMT")
+			resp, _ := newResponse(http.StatusOK, []byte("payload"), h)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rv := NewRevalidator(c, 8)
+
+	first, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+	second, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+	if second.ETag != first.ETag {
+		t.Fatalf("ETag on the 304 = %q, want the cached %q", second.ETag, first.ETag)
+	}
+	if second.LastModified != first.LastModified {
+		t.Fatalf("LastModified on the 304 = %q, want the cached %q", second.LastModified, first.LastModified)
+	}
+	if got, want := Version(second, second.Body), Version(first, first.Body); got != want {
+		t.Fatalf("Version changed across an unmodified poll: %q then %q", want, got)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+// TestRevalidatorDoesNotAliasCachedBody pins that a caller cannot corrupt the
+// cache by writing into a body it was handed. Without a copy on both sides, the
+// Revalidator and every caller share one backing array, so one caller decoding
+// in place silently changes what the next poll returns.
+func TestRevalidatorDoesNotAliasCachedBody(t *testing.T) {
+	c, _, _ := newCountingClient(t, `"v1"`, []byte("payload"))
+	rv := NewRevalidator(c, 8)
+
+	first, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+	first.Body[0] = 'X'
+
+	second, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+	if string(second.Body) != "payload" {
+		t.Fatalf("cached body = %q, want payload; a caller's write reached the cache", second.Body)
+	}
+}
+
 // TestRevalidatorRetriesWhenEntryEvictedDuringRequest covers the gap between
 // reading the validators and writing the response back. Get releases the lock
 // for the network call, so another caller can evict the entry in between. The
