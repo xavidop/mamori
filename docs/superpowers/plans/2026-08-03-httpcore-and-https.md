@@ -1386,6 +1386,85 @@ func TestRevalidatorDropsEntryOnError(t *testing.T) {
 	}
 }
 
+// TestRevalidatorKeepsCachedValidatorsOn304 pins that a 304 hit reports the
+// validators the cache holds, not whatever the 304 response happened to carry.
+//
+// RFC 7232 says a backend should repeat ETag on a 304, but real backends, CDNs
+// and proxies especially, sometimes omit it. Copying the 304's own empty ETag
+// makes Version fall back to a body hash, so a genuinely unmodified poll reports
+// a changed Version and mamori runs a spurious update.
+//
+// newCountingClient cannot express this, because it sets ETag on every response
+// and so cannot distinguish "validator from the cache" from "validator from the
+// response". That is exactly why this test builds its own backend.
+func TestRevalidatorKeepsCachedValidatorsOn304(t *testing.T) {
+	calls := 0
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if req.Header.Get("If-None-Match") == `"v1"` {
+				// Deliberately omit the validators, as a non-compliant backend does.
+				resp, _ := newResponse(http.StatusNotModified, nil, nil)
+				return resp, nil
+			}
+			h := http.Header{}
+			h.Set("ETag", `"v1"`)
+			h.Set("Last-Modified", "Wed, 21 Oct 2026 07:28:00 GMT")
+			resp, _ := newResponse(http.StatusOK, []byte("payload"), h)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rv := NewRevalidator(c, 8)
+
+	first, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+	second, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+	if second.ETag != first.ETag {
+		t.Fatalf("ETag on the 304 = %q, want the cached %q", second.ETag, first.ETag)
+	}
+	if second.LastModified != first.LastModified {
+		t.Fatalf("LastModified on the 304 = %q, want the cached %q", second.LastModified, first.LastModified)
+	}
+	if got, want := Version(second, second.Body), Version(first, first.Body); got != want {
+		t.Fatalf("Version changed across an unmodified poll: %q then %q", want, got)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+// TestRevalidatorDoesNotAliasCachedBody pins that a caller cannot corrupt the
+// cache by writing into a body it was handed. Without a copy on both sides, the
+// Revalidator and every caller share one backing array, so one caller decoding
+// in place silently changes what the next poll returns.
+func TestRevalidatorDoesNotAliasCachedBody(t *testing.T) {
+	c, _, _ := newCountingClient(t, `"v1"`, []byte("payload"))
+	rv := NewRevalidator(c, 8)
+
+	first, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+	first.Body[0] = 'X'
+
+	second, err := rv.Get(context.Background(), "k", Request{Path: "cfg"})
+	if err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+	if string(second.Body) != "payload" {
+		t.Fatalf("cached body = %q, want payload; a caller's write reached the cache", second.Body)
+	}
+}
+
 // TestRevalidatorRetriesWhenEntryEvictedDuringRequest covers the gap between
 // reading the validators and writing the response back. Get releases the lock
 // for the network call, so another caller can evict the entry in between. The
@@ -1502,6 +1581,7 @@ Create `providers/httpcore/revalidate.go`:
 package httpcore
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"sync"
@@ -1578,7 +1658,7 @@ func (rv *Revalidator) Get(ctx context.Context, key string, r Request) (*Respons
 	}
 
 	if resp.NotModified {
-		body, ok := rv.body(key)
+		etag, lastMod, body, ok := rv.cached(key)
 		if !ok {
 			// The backend answered 304 for a validator we no longer hold, which
 			// means the entry was evicted between the two halves of this call.
@@ -1594,6 +1674,15 @@ func (rv *Revalidator) Get(ctx context.Context, key string, r Request) (*Respons
 		}
 		out := *resp
 		out.Body = body
+		// Report the validators the cache holds, not the ones the 304 carried.
+		// RFC 7232 says a 304 should repeat them, but real backends, CDNs and
+		// proxies especially, sometimes omit them. Copying an empty ETag makes
+		// Version fall back to a body hash, so a genuinely unmodified poll
+		// reports a changed Version and mamori runs a spurious update: a
+		// needless PreApply, a needless OnChange, and for a rotating credential
+		// a needless reconnect.
+		out.ETag = etag
+		out.LastModified = lastMod
 		return &out, nil
 	}
 
@@ -1614,16 +1703,22 @@ func (rv *Revalidator) validators(key string) (etag, lastModified string, ok boo
 	return e.etag, e.lastModified, true
 }
 
-// body returns the cached body for key.
-func (rv *Revalidator) body(key string) ([]byte, bool) {
+// cached returns the entry's validators and a private copy of its body, marking
+// it recently used.
+//
+// The body is copied because the caller receives it. Without the copy the
+// Revalidator and every caller share one backing array, so a caller that decodes
+// or trims in place silently changes what the next poll returns.
+func (rv *Revalidator) cached(key string) (etag, lastModified string, body []byte, ok bool) {
 	rv.mu.Lock()
 	defer rv.mu.Unlock()
 	el, ok := rv.entries[key]
 	if !ok {
-		return nil, false
+		return "", "", nil, false
 	}
 	rv.lru.MoveToFront(el)
-	return el.Value.(*cacheEntry).body, true
+	e := el.Value.(*cacheEntry)
+	return e.etag, e.lastModified, bytes.Clone(e.body), true
 }
 
 // store records resp under key, evicting the least recently used entry when the
@@ -1638,9 +1733,12 @@ func (rv *Revalidator) store(key string, resp *Response) {
 	rv.mu.Lock()
 	defer rv.mu.Unlock()
 
+	// The body is copied on the way in for the same reason cached copies it on
+	// the way out: the cache must own its bytes outright, or the caller that
+	// received this same 200 response can write into what the cache will serve.
 	if el, ok := rv.entries[key]; ok {
 		e := el.Value.(*cacheEntry)
-		e.etag, e.lastModified, e.body = resp.ETag, resp.LastModified, resp.Body
+		e.etag, e.lastModified, e.body = resp.ETag, resp.LastModified, bytes.Clone(resp.Body)
 		rv.lru.MoveToFront(el)
 		return
 	}
@@ -1648,7 +1746,7 @@ func (rv *Revalidator) store(key string, resp *Response) {
 		key:          key,
 		etag:         resp.ETag,
 		lastModified: resp.LastModified,
-		body:         resp.Body,
+		body:         bytes.Clone(resp.Body),
 	})
 	rv.entries[key] = el
 
