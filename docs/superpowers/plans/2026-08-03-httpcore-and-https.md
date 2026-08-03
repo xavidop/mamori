@@ -2552,6 +2552,19 @@ func TestNewRejectsNameWithSlash(t *testing.T) {
 	}
 }
 
+// TestNewRejectsUnparsableBaseURL covers New's url.Parse branch.
+//
+// url.Parse is permissive, so most malformed input slips through it and is
+// caught later by httpcore.New's scheme and host checks instead. An invalid
+// percent escape is one of the few things it genuinely rejects, which makes it
+// the input that actually exercises this branch rather than a neighbouring one.
+func TestNewRejectsUnparsableBaseURL(t *testing.T) {
+	_, err := New(Endpoint{Name: "a", BaseURL: "https://%zz"})
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+}
+
 func TestNewRejectsInsecureBaseURL(t *testing.T) {
 	_, err := New(Endpoint{Name: "a", BaseURL: "http://api.test"})
 	if !errors.Is(err, mamori.ErrInvalid) {
@@ -2577,6 +2590,11 @@ func TestScheme(t *testing.T) {
 
 // TestProviderIsNotWatchable pins the deliberate absence of a native watch, so
 // removing that decision cannot happen silently.
+//
+// This test only discriminates once Resolve exists, which Task 8 adds:
+// WatchableProvider embeds Provider, so before Resolve is written the type
+// cannot satisfy the interface no matter what else is added to it, and adding a
+// Watch method alone would not fail this. Re-run the mutation after Task 8.
 func TestProviderIsNotWatchable(t *testing.T) {
 	p, err := New(Endpoint{Name: "a", BaseURL: "https://api.test"})
 	if err != nil {
