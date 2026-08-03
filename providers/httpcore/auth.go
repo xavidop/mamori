@@ -16,10 +16,11 @@ type Authenticator interface {
 	Apply(ctx context.Context, req *http.Request) error
 }
 
-// AuthenticatorFunc adapts a function to the Authenticator interface.
+// AuthenticatorFunc adapts a plain function to Authenticator, allowing a
+// callable to satisfy the interface without explicit methods.
 type AuthenticatorFunc func(ctx context.Context, req *http.Request) error
 
-// Apply calls f.
+// Apply calls f, allowing AuthenticatorFunc to satisfy the Authenticator interface.
 func (f AuthenticatorFunc) Apply(ctx context.Context, req *http.Request) error {
 	return f(ctx, req)
 }
@@ -42,7 +43,8 @@ func HeaderAuth(name, value string) Authenticator {
 	})
 }
 
-// BasicAuth authenticates with HTTP Basic credentials.
+// BasicAuth authenticates with HTTP Basic credentials, for backends that
+// require or prefer this standard scheme over other methods.
 func BasicAuth(user, pass string) Authenticator {
 	return AuthenticatorFunc(func(_ context.Context, req *http.Request) error {
 		req.SetBasicAuth(user, pass)
