@@ -53,6 +53,17 @@ func (f *fakeBackend) clearFail() {
 // transport returns an http.RoundTripper serving this backend.
 func (f *fakeBackend) transport() http.RoundTripper {
 	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		// Honor cancellation explicitly. http.Client delegates context handling
+		// to the transport (a real net/http.Transport notices a dead context
+		// deep in its dial and connection-reuse machinery), and this in-process
+		// fake has none of that machinery to fall back on. Skipping this check
+		// would answer a cancelled-context request as if it had succeeded and
+		// hide a provider that forgot to thread ctx through to the request it
+		// builds.
+		if err := req.Context().Err(); err != nil {
+			return nil, err
+		}
+
 		f.mu.Lock()
 		defer f.mu.Unlock()
 
@@ -95,4 +106,18 @@ func newResp(status int, body []byte, etag string) *http.Response {
 		Header:     h,
 		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
+}
+
+// provider builds a Provider serving this backend under the endpoint name
+// "test", with values rooted at /v1.
+func (f *fakeBackend) provider() *Provider {
+	p, err := New(Endpoint{
+		Name:    "test",
+		BaseURL: "https://api.test/v1",
+		Client:  &http.Client{Transport: f.transport()},
+	})
+	if err != nil {
+		panic("building fake provider: " + err.Error())
+	}
+	return p
 }
