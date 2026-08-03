@@ -61,8 +61,11 @@
 - Modify: `go.work`
 
 **Interfaces:**
-- Consumes: `mamori.ErrNotFound`, `mamori.ErrInvalid`, `mamori.ErrUnauthenticated`, `mamori.ErrPermissionDenied`, `mamori.ErrRateLimited`, `mamori.ErrUnavailable` (all from `errors.go`)
-- Produces: `func ClassifyStatus(status int, detail string) error`, plus the package itself
+- Consumes: `mamori.ErrNotFound`, `mamori.ErrInvalid`, `mamori.ErrUnauthenticated`, `mamori.ErrPermissionDenied`, `mamori.ErrRateLimited`, `mamori.ErrUnavailable`, `mamori.Kind`, `mamori.ErrorKind` (all from `errors.go`)
+- Produces:
+  - `func ClassifyStatus(status int, detail string) error`
+  - `func StatusForKind(k mamori.Kind) int`
+  - the package itself
 
 - [ ] **Step 1: Create the module**
 
@@ -150,6 +153,43 @@ func TestClassifyStatusIncludesDetail(t *testing.T) {
 	}
 	if !errors.Is(err, mamori.ErrPermissionDenied) {
 		t.Fatalf("errors.Is(ErrPermissionDenied) = false for %v", err)
+	}
+}
+
+// TestStatusForKindRoundTrips is the reason StatusForKind is exported rather
+// than hand-rolled per provider: it pins the two tables as exact inverses, so
+// neither can drift without this failing. A drifted inverse makes a conformance
+// Fail hook inject a status that maps to a different kind, which silently
+// exercises one classification case five times instead of five cases once.
+func TestStatusForKindRoundTrips(t *testing.T) {
+	kinds := []mamori.Kind{
+		mamori.KindInvalid,
+		mamori.KindUnauthenticated,
+		mamori.KindPermissionDenied,
+		mamori.KindNotFound,
+		mamori.KindRateLimited,
+		mamori.KindUnavailable,
+	}
+	for _, k := range kinds {
+		t.Run(string(k), func(t *testing.T) {
+			status := StatusForKind(k)
+			err := ClassifyStatus(status, "")
+			if err == nil {
+				t.Fatalf("StatusForKind(%s) = %d, which ClassifyStatus treats as success", k, status)
+			}
+			if got := mamori.ErrorKind(err); got != k {
+				t.Fatalf("round trip %s -> %d -> %s, want %s", k, status, got, k)
+			}
+		})
+	}
+}
+
+// TestStatusForKindUnknown pins the fallback. ClassifyStatus never produces
+// KindUnknown, so the inverse has no exact answer and must pick a status that
+// is at least an honest failure.
+func TestStatusForKindUnknown(t *testing.T) {
+	if got := StatusForKind(mamori.KindUnknown); got < 500 {
+		t.Fatalf("StatusForKind(unknown) = %d, want a 5xx", got)
 	}
 }
 ```
@@ -257,6 +297,42 @@ func ClassifyStatus(status int, detail string) error {
 		return fmt.Errorf("http %d %s: %w", status, http.StatusText(status), sentinel)
 	}
 	return fmt.Errorf("http %d %s: %s: %w", status, http.StatusText(status), detail, sentinel)
+}
+
+// StatusForKind is the inverse of ClassifyStatus: it returns an HTTP status that
+// ClassifyStatus maps back to k.
+//
+// It exists for conformance tests. providertest's ErrorClassification case
+// injects a mamori sentinel, but an HTTP backend's fake can only fail a request
+// with a status code, so the test has to turn the sentinel back into the status
+// that produces it. Injecting one fixed status instead would exercise a single
+// classification case five times rather than five cases once, and the test would
+// still pass.
+//
+// Exporting it keeps the table and its inverse in one file, where a change to
+// one that is not mirrored in the other fails TestStatusForKindRoundTrips
+// immediately, rather than silently weakening the conformance test of every
+// provider that copied an older version of the mapping.
+//
+// mamori.KindUnknown has no exact inverse, because ClassifyStatus never produces
+// it. It maps to 500, which is at least an honest failure.
+func StatusForKind(k mamori.Kind) int {
+	switch k {
+	case mamori.KindInvalid:
+		return http.StatusBadRequest
+	case mamori.KindUnauthenticated:
+		return http.StatusUnauthorized
+	case mamori.KindPermissionDenied:
+		return http.StatusForbidden
+	case mamori.KindNotFound:
+		return http.StatusNotFound
+	case mamori.KindRateLimited:
+		return http.StatusTooManyRequests
+	case mamori.KindUnavailable:
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 ```
 
@@ -1948,7 +2024,7 @@ Required sections and their content:
 2. **`## Install`** with `go get github.com/xavidop/mamori/providers/httpcore`.
 3. **`## Client`** showing `New` and `Do` with a complete, compiling example that resolves one value.
 4. **`## Authenticators`** with a table of `Bearer`, `HeaderAuth`, `BasicAuth`, `QueryAuth`, `OAuth2ClientCredentials`, each with one line on when to use it. State that `QueryAuth` puts the credential in the request line where proxy logs can see it, and to prefer a header form.
-5. **`## Error classification`** with the exact status table from `classify.go`, and one paragraph on why `detail` is caller-supplied: a response body can contain the resolved value, so `httpcore` never reads one into an error.
+5. **`## Error classification`** with the exact status table from `classify.go`, and one paragraph on why `detail` is caller-supplied: a response body can contain the resolved value, so `httpcore` never reads one into an error. Document `StatusForKind` here as the exported inverse, stating that it exists so a provider's conformance `Fail` hook turns an injected sentinel back into a status, and that hand-rolling it per provider is what lets the two tables drift.
 6. **`## Conditional GET`** explaining `Revalidator`, the LRU bound, and that a 304 returns the cached body with `NotModified` set.
 7. **`## What this package does not do`**: no retry (mamori's reconciler owns it, and a second layer multiplies), no vendor error-envelope parsing, no SSE (planned separately).
 8. **`## Writing a provider on httpcore`** with a complete example implementing `mamori.Provider` end to end, including `Scheme`, `Resolve`, `mamori.SelectKey`, and `Version`.
@@ -2713,7 +2789,7 @@ git commit -m "feat(https): resolve refs against registered endpoints"
 - Modify: `providers/https/fake_test.go` (add `provider()` helper)
 
 **Interfaces:**
-- Consumes: `providertest.Run`, `providertest.Config`, `Provider`, `fakeBackend`
+- Consumes: `providertest.Run`, `providertest.Config`, `Provider`, `fakeBackend`, `httpcore.StatusForKind` (Task 1), `mamori.ErrorKind`
 - Produces: nothing consumed by code
 
 - [ ] **Step 1: Add the provider helper to the fake**
@@ -2745,33 +2821,12 @@ package https
 
 import (
 	"context"
-	"errors"
-	"net/http"
 	"testing"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 	"github.com/xavidop/mamori/providertest"
 )
-
-// statusForFailure maps the mamori sentinel providertest.RunErrorClassification
-// injects to the HTTP status that produces it through httpcore.ClassifyStatus.
-// The backend surfaces a failure as a status code, not as a mamori error, so
-// the Fail hook inverts that mapping. Injecting one fixed status would only
-// ever exercise the single case that status maps to.
-func statusForFailure(err error) int {
-	switch {
-	case errors.Is(err, mamori.ErrPermissionDenied):
-		return http.StatusForbidden
-	case errors.Is(err, mamori.ErrUnauthenticated):
-		return http.StatusUnauthorized
-	case errors.Is(err, mamori.ErrRateLimited):
-		return http.StatusTooManyRequests
-	case errors.Is(err, mamori.ErrInvalid):
-		return http.StatusBadRequest
-	default: // mamori.ErrUnavailable and anything unrecognized
-		return http.StatusServiceUnavailable
-	}
-}
 
 // TestConformance runs the shared providertest kit against this provider,
 // built through fakeBackend's in-process RoundTripper rather than a real
@@ -2800,8 +2855,13 @@ func TestConformance(t *testing.T) {
 			f.set("/v1/"+key, []byte(val))
 			return nil
 		},
+		// The backend surfaces a failure as a status code, not as a mamori
+		// error, so the injected sentinel is turned back into the status that
+		// produces it via httpcore.StatusForKind, the exported inverse of
+		// ClassifyStatus. Injecting one fixed status instead would exercise a
+		// single classification case five times rather than five cases once.
 		Fail: func(_ context.Context, _ string, err error) error {
-			f.fail(statusForFailure(err))
+			f.fail(httpcore.StatusForKind(mamori.ErrorKind(err)))
 			return nil
 		},
 		Clear: func(_ context.Context, _ string) error {

@@ -162,7 +162,16 @@ status classification.
 
 ```go
 func ClassifyStatus(status int, detail string) error
+func StatusForKind(k mamori.Kind) int
 ```
+
+`StatusForKind` is the exported inverse. A provider's conformance `Fail` hook is
+handed a mamori sentinel but can only fail an HTTP request with a status code, so it
+has to invert the mapping; `providers/cloudflare-kv` hand-rolls that inverse today and
+every HTTP provider after it would copy the copy. Keeping both directions in one file
+means a change to one that is not mirrored in the other fails a round-trip test
+immediately, instead of silently weakening the conformance test of every provider
+carrying a stale copy.
 
 Returns nil for 2xx and 304. Otherwise a wrapped `mamori` sentinel: 400 to
 `ErrInvalid`, 401 to `ErrUnauthenticated`, 403 to `ErrPermissionDenied`, 404 to
