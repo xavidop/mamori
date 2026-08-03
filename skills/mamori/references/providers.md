@@ -34,6 +34,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `etcd` | `etcd://` | `etcd://app/config` |
 | `vercel-gc` | `vercel-gc://` | `vercel-gc://my-flag`, `vercel-gc://ecfg_abc/my-flag` |
 | `cloudflare-kv` | `cloudflare-kv://` | `cloudflare-kv://log-level`, `cloudflare-kv://log-level?namespace=abcd1234` |
+| `https` | `https://` | generic REST config/secrets. The authority is a **registered `Endpoint.Name`, not a hostname** - `https://billing/cfg#/db/pass` resolves against whatever `BaseURL` the endpoint named `billing` was registered with via `httpsprov.New`, never against a host literally named `billing`. |
 | `postgres` | `postgres://` | connection-string backed |
 | `mysql` | `mysql://` | connection-string backed |
 | `sqlite` | `sqlite://` | file-backed |

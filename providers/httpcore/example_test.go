@@ -13,7 +13,7 @@ import (
 // ExampleNew is the README's "Client" block, verbatim.
 func ExampleNew() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"level":"debug"}`))
+		_, _ = w.Write([]byte(`{"level":"debug"}`))
 	}))
 	defer srv.Close()
 
@@ -38,7 +38,7 @@ func ExampleNew() {
 func ExampleOAuth2ClientCredentials() {
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"access_token":"abc123","expires_in":3600}`))
+		_, _ = w.Write([]byte(`{"access_token":"abc123","expires_in":3600}`))
 	}))
 	defer tokenSrv.Close()
 
@@ -52,7 +52,7 @@ func ExampleOAuth2ClientCredentials() {
 	}
 
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, r.Header.Get("Authorization"))
+		_, _ = fmt.Fprint(w, r.Header.Get("Authorization"))
 	}))
 	defer apiSrv.Close()
 
@@ -87,7 +87,7 @@ func ExampleNewRevalidator() {
 			return
 		}
 		w.Header().Set("ETag", "v1")
-		w.Write([]byte(`{"level":"debug"}`))
+		_, _ = w.Write([]byte(`{"level":"debug"}`))
 	}))
 	defer srv.Close()
 
@@ -157,7 +157,7 @@ func (p *configProvider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Va
 func ExampleClient_writingAProvider() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", "v1")
-		w.Write([]byte(`{"level":"debug"}`))
+		_, _ = w.Write([]byte(`{"level":"debug"}`))
 	}))
 	defer srv.Close()
 
