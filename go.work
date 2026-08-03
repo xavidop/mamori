@@ -23,6 +23,7 @@ use (
 	./providers/goff
 	./providers/growthbook
 	./providers/httpcore
+	./providers/https
 	./providers/k8s
 	./providers/launchdarkly
 	./providers/mamori
