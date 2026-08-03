@@ -159,6 +159,18 @@ updates:
     directory: "/providers/cloudflare-kv"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:cloudflare-kv]
+  # Not a provider: the shared HTTP resolve core the REST-backed providers build
+  # on. Standard library only, so this entry will rarely fire, and it stays for
+  # the same reason as cloudflare-kv above.
+  - package-ecosystem: gomod
+    directory: "/providers/httpcore"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:httpcore]
+  # Standard library only, on top of httpcore. Same reasoning again.
+  - package-ecosystem: gomod
+    directory: "/providers/https"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:https]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.
