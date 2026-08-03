@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -179,8 +180,8 @@ func TestOAuth2RejectsMissingFields(t *testing.T) {
 		name string
 		cfg  OAuth2Config
 	}{
-		{"no token url", OAuth2Config{ClientID: "c", ClientSecret: clientSecretMarker}},
-		{"no client id", OAuth2Config{TokenURL: "https://idp.test/token", ClientSecret: clientSecretMarker}},
+		{"no token url", OAuth2Config{ClientID: "c", ClientSecret: "s"}},
+		{"no client id", OAuth2Config{TokenURL: "https://idp.test/token", ClientSecret: "s"}},
 		{"no client secret", OAuth2Config{TokenURL: "https://idp.test/token", ClientID: "c"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,6 +189,91 @@ func TestOAuth2RejectsMissingFields(t *testing.T) {
 				t.Fatal("OAuth2ClientCredentials returned nil error")
 			}
 		})
+	}
+}
+
+// TestOAuth2WaiterReleasedByOwnContext pins that a caller blocked on someone
+// else's in-flight exchange leaves when its OWN context expires.
+//
+// A plain mutex held across the network call would serialize correctly but
+// ignore the waiter's ctx entirely, and mamori's reconciler is single-goroutine:
+// one Apply wedged behind a hung identity provider would stall reconciliation
+// for every field. The test hangs the token endpoint until released, so the
+// waiter can only return by honouring its own deadline.
+func TestOAuth2WaiterReleasedByOwnContext(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+
+	auth, err := OAuth2ClientCredentials(OAuth2Config{
+		TokenURL:     "https://idp.test/token",
+		ClientID:     "cid",
+		ClientSecret: clientSecretMarker,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			resp, _ := newResponse(http.StatusOK,
+				[]byte(`{"access_token":"at","token_type":"Bearer","expires_in":3600}`), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("OAuth2ClientCredentials: %v", err)
+	}
+
+	// Owner: starts the exchange and blocks in the transport.
+	ownerDone := make(chan struct{})
+	go func() {
+		defer close(ownerDone)
+		_ = auth.Apply(context.Background(), newTestRequest(t))
+	}()
+	<-entered
+
+	// Waiter: arrives while the exchange is in flight, with a context that dies.
+	ctx, cancel := context.WithCancel(context.Background())
+	waiterErr := make(chan error, 1)
+	go func() { waiterErr <- auth.Apply(ctx, newTestRequest(t)) }()
+	cancel()
+
+	select {
+	case err := <-waiterErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter err = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter did not return after its own context was cancelled; it is blocked on the exchange")
+	}
+
+	close(release)
+	<-ownerDone
+}
+
+// TestOAuth2DoesNotExposeSecretByReflection pins that the client secret is not
+// reachable through fmt's reflection walk.
+//
+// The four authenticators in auth.go are immune because they capture their
+// credentials in closures. This one holds state, so it must reach the same
+// result deliberately: a secret in a struct field would print in cleartext from
+// any %+v debug dump or panic trace, and fmt cannot call a String method on a
+// value reached through an unexported field, so a redaction method would not
+// save it.
+func TestOAuth2DoesNotExposeSecretByReflection(t *testing.T) {
+	exchanges := 0
+	auth, err := OAuth2ClientCredentials(OAuth2Config{
+		TokenURL:     "https://idp.test/token",
+		ClientID:     "cid",
+		ClientSecret: clientSecretMarker,
+		HTTPClient:   fakeClient(tokenServer(t, 3600, &exchanges)),
+	})
+	if err != nil {
+		t.Fatalf("OAuth2ClientCredentials: %v", err)
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		if dump := fmt.Sprintf(verb, auth); strings.Contains(dump, clientSecretMarker) {
+			t.Fatalf("client secret reachable via %s: %q", verb, dump)
+		}
 	}
 }
 
