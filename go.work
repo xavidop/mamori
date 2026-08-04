@@ -33,6 +33,7 @@ use (
 	./providers/nacos
 	./providers/onepassword
 	./providers/openfeature
+	./providers/posthog
 	./providers/postgres
 	./providers/redis
 	./providers/s3

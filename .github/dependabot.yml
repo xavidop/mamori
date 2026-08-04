@@ -150,6 +150,10 @@ updates:
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:goff]
   - package-ecosystem: gomod
+    directory: "/providers/posthog"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:posthog]
+  - package-ecosystem: gomod
     directory: "/providers/viper"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:viper]
