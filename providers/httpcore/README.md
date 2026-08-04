@@ -465,11 +465,103 @@ otherwise assume went the other way:
   the empty body there would have mamori apply an empty string as though it
   were the resolved value.
 
+## Long polling
+
+`LongPoll` drives the watch loop for a backend that answers a *held-open*
+request: one where the server keeps the connection until something changes or a
+hold deadline elapses. It returns the `<-chan mamori.Update` a
+`mamori.WatchableProvider` hands back from `Watch`.
+
+It exists because that loop is almost entirely lifecycle code with nothing
+backend-specific in it: bind each round to the caller's context, tell the backend
+how long to hold and give the client a deadline strictly longer than that,
+deliver a change, deliver a failure without letting a fast-failing backend spin,
+and close the channel exactly once when the context ends. The vendor-specific
+part is the `Round` hook and nothing else.
+
+```go
+func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Update, error) {
+    var known string // this watch's belief about the current value; one goroutine touches it
+
+    return httpcore.LongPoll(ctx, httpcore.LongPollConfig{
+        Hold: 30 * time.Second,
+        // Baseline establishes that belief and emits the current value.
+        Baseline: func(ctx context.Context) (httpcore.LongPollResult, error) {
+            v, digest, err := p.read(ctx, ref)
+            if err != nil {
+                return httpcore.LongPollResult{}, err
+            }
+            known = digest
+            return httpcore.LongPollResult{Changed: true, Value: v}, nil
+        },
+        // Round performs one held-open request.
+        Round: func(ctx context.Context, hold time.Duration) (httpcore.LongPollResult, error) {
+            changed, err := p.poll(ctx, ref, known, hold)
+            if err != nil || !changed {
+                return httpcore.LongPollResult{}, err
+            }
+            v, digest, err := p.read(ctx, ref)
+            if err != nil {
+                return httpcore.LongPollResult{}, err
+            }
+            known = digest
+            return httpcore.LongPollResult{Changed: true, Value: v}, nil
+        },
+    })
+}
+```
+
+What it guarantees:
+
+- **The channel closes when, and only when, the watch has ended.** Exactly one
+  goroutine is started and it has returned by the time the channel closes, which
+  is what `providertest`'s `NoGoroutineLeak` case checks with `goleak`. A
+  cancellation is never delivered as an `Update`: an in-flight request fails with
+  a context error on every clean shutdown, and reporting that would make every
+  shutdown look like a backend fault.
+- **A transient failure never closes the channel.** mamori does not resubscribe a
+  closed watch (see `watchRef` in the core module), so closing on the first 503
+  would silently downgrade a native watch to nothing at all. Every failure is
+  delivered as an `Update` with a non-nil `Err` and the loop continues.
+- **The client always outlasts the server.** `Hold` is passed to `Round` rather
+  than read from the config by the implementation, so the number that goes into
+  the request (Nacos's `Long-Pulling-Timeout` header, Consul's `wait` parameter)
+  and the number that bounds the round are the same number. Two independent
+  declarations drift, and the direction they drift in is silent: a client
+  deadline shorter than the hold the server was asked for fails every idle round
+  with a timeout indistinguishable from an unhealthy backend. `Grace` is what is
+  added on top, and `DefaultLongPollGrace` is ten seconds, never zero.
+- **`Round` returning `Changed: false` emits nothing.** That is the ordinary
+  outcome of a hold elapsing, several times an hour for every watched value.
+- **`Baseline` runs strictly before the first `Round`, on the loop's own
+  goroutine.** That ordering is what lets a provider honestly declare
+  `providertest.Config.WatchDeliversBaseline`: for a comparison-based protocol,
+  the emitted baseline and the state the first round subscribes with are read
+  from the same observation, so a write landing between them is answered rather
+  than dropped. `Baseline` is bounded by `Grace` alone, since it is an ordinary
+  request rather than a held-open one.
+
+**`ErrorPause` is pacing, not retry**, and the distinction matters because this
+package promises no retry anywhere. A retry re-attempts a failed operation and
+reports only the last outcome, which is what would multiply against the
+reconciler's backoff. `LongPoll` does neither: it delivers every failure to the
+caller before it pauses, and it never re-attempts a round it already reported.
+The pause exists so a backend that rejects a round instantly - a 401 from an
+expired token, a connection refused during a restart - cannot turn the watch into
+a hot loop, and it is a fixed floor that never grows, so it cannot behave like a
+backoff schedule either.
+
+`providers/nacos` is the worked example. `providers/consul` hand-rolls the same
+loop shape against `hashicorp/consul/api` blocking queries and is the intended
+second consumer; it is deliberately not migrated yet, because in this repository
+an abstraction lands *with* its second consumer rather than ahead of it.
+
 ## What this package does not do
 
 - **No retry.** mamori's reconciler already backs off and retries a failed
   resolve; a second retry layer inside `httpcore` would multiply against it,
-  turning a configured five attempts into twenty-five.
+  turning a configured five attempts into twenty-five. `LongPoll.ErrorPause` is
+  not an exception: see above.
 - **No vendor error-envelope parsing.** `ClassifyStatus` takes its `detail`
   string from the caller because a response body can contain the resolved
   value itself, and only the provider knows which field of its backend's

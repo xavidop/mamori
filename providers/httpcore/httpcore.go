@@ -26,6 +26,7 @@
 //   - [Authenticator] injects credentials.
 //   - [ClassifyStatus] maps an HTTP status onto a mamori error sentinel.
 //   - [Revalidator] turns a repeated poll into a conditional GET.
+//   - [LongPoll] drives the watch loop for a backend that holds a request open.
 package httpcore
 
 import (
