@@ -97,6 +97,16 @@ func openSnapshot(b, key []byte) (snapshot, error) {
 		return snapshot{}, fmt.Errorf("mamori: bootstrap snapshot format version %d, this build understands %d: %w",
 			s.Version, snapshotFormatVersion, ErrInvalid)
 	}
+	// A snapshot with no write time is refused rather than restored. Age is
+	// computed from WrittenAt, and every reader of a zero one treats the age as
+	// zero: the snapshot would look brand new forever, BootstrapMaxAge could
+	// never expire it, and each restored field would report LastOK at the zero
+	// time. The version check above does not cover this - a document sealed with
+	// the right key and carrying version 1 but no written_at parses cleanly - so
+	// it is checked here, at the one boundary both the restore and Doctor cross.
+	if s.WrittenAt.IsZero() {
+		return snapshot{}, fmt.Errorf("mamori: bootstrap snapshot carries no write time, so its age cannot be bounded: %w", ErrInvalid)
+	}
 	return s, nil
 }
 

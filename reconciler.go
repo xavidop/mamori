@@ -1507,8 +1507,31 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 	// happens after one.
 	//
 	// It runs inline on the reconciler goroutine, like the PreApply gate a few
-	// lines above, and unlike that gate it is a local file write rather than a
-	// network round trip. It cannot fail the update: see persistBootstrap.
+	// lines above, and it costs an fsync (writeSnapshotFile, bootstrapfile.go).
+	// On a loaded disk that can block for a long time, and while it does, every
+	// other field's reconciliation waits behind it and so does any Pin, Unpin or
+	// Refresh in the control channel. That cost is accepted here rather than
+	// moved to a writer goroutine, for three reasons:
+	//
+	// It is paid only when the configuration actually CHANGES - flush returns
+	// early on an empty diff - not once per poll, and the same goroutine has
+	// just blocked on the PreApply hook, a caller-supplied network round trip
+	// bounded only by WithPreApplyTimeout. An fsync of a few kilobytes is the
+	// smaller of the two, and the larger one is already there by design.
+	//
+	// A background writer would need its own ordering: two flushes in quick
+	// succession must not land out of order and leave the older configuration on
+	// disk as the newest known-good one, so it would take a serialized
+	// latest-wins queue, not a goroutine per write.
+	//
+	// And it would have to be reconciled with Close. Waiting for the in-flight
+	// write reintroduces the same block at the one moment it cannot be skipped;
+	// abandoning it discards the newest known-good configuration precisely when
+	// the next start is the one that will want it. Meanwhile a queued write that
+	// has not landed makes Bootstrap.WrittenAt a claim about a file that does
+	// not exist yet, so Report would report a fallback the process does not have.
+	//
+	// It cannot fail the update either way: see persistBootstrap.
 	e.persistBootstrap()
 
 	if e.pinned {

@@ -87,19 +87,33 @@ type Report struct {
 	GeneratedAt time.Time // when this report was built
 
 	// Source names where the configuration being served came from. It is
-	// SourceBackend for every ordinary process and SourceBootstrapCache only
-	// while WithBootstrapCache is covering for a backend this process has not
-	// reached since it started.
+	// SourceBackend while WithBootstrapCache is configured and every value came
+	// from its provider, and SourceBootstrapCache while the cache is covering for
+	// a backend this process has not reached since it started. It is empty for a
+	// process that does not use the option at all, exactly as Bootstrap is nil
+	// for one.
 	//
 	// It is reported from the first second rather than only once the situation
 	// turns unhealthy, because "we booted off disk" is the single fact an
 	// operator most needs during an outage and it is invisible otherwise: a
 	// process serving a restored config looks identical to a healthy one.
-	Source ConfigSource
+	//
+	// The omitempty is a compatibility promise, not a formatting preference. A
+	// Report is served over HTTP to a separately released CLI, and the mamori
+	// 1.9 CLI validates the admin body by its exact top-level key set: any key
+	// it does not know makes it refuse the response as "not a Report". Emitting
+	// these two unconditionally would therefore have broken `mamori doctor` for
+	// every process that merely linked a newer mamori, cache or no cache. Kept
+	// off the wire unless the option is configured, the payload of a process not
+	// using the cache stays byte-for-byte what that CLI expects. A process that
+	// does use it is a break that CLI cannot avoid, and one its operator opted
+	// into.
+	Source ConfigSource `json:",omitempty"`
 
 	// Bootstrap describes the WithBootstrapCache snapshot, and is nil when the
-	// option is not configured. See BootstrapStatus.
-	Bootstrap *BootstrapStatus
+	// option is not configured. See BootstrapStatus, and see Source above for
+	// why it is omitted from the JSON rather than serialised as null.
+	Bootstrap *BootstrapStatus `json:",omitempty"`
 }
 
 // ConfigSource names where the configuration a Report describes came from.
@@ -107,8 +121,8 @@ type ConfigSource string
 
 const (
 	// SourceBackend means every value was resolved from its provider. This is
-	// the ordinary case, and the only one for a process not using
-	// WithBootstrapCache.
+	// the ordinary case for a process using WithBootstrapCache; a process not
+	// using it reports no source at all (see Report.Source).
 	SourceBackend ConfigSource = "backend"
 	// SourceBootstrapCache means the cold-start resolve failed with a transient
 	// kind and the configuration came off disk instead. It reverts to

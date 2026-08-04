@@ -92,7 +92,7 @@ if rep.Source == mamori.SourceBootstrapCache {
 }
 ```
 
-`Source` is `backend` for every ordinary process, and `bootstrap_cache` only while the snapshot is still deciding what is served. `Bootstrap` carries whether a snapshot exists, when it was written, how old it is, whether it still fits this build's config struct, and whether this process booted from it. See [Observability](/docs/observability/#the-bootstrap-cache-block) for the full shape.
+`Source` is `backend` whenever the cache is configured and the backends are answering, and `bootstrap_cache` only while the snapshot is still deciding what is served. A process without the option set reports no source at all. `Bootstrap` carries whether a snapshot exists, when it was written, how old it is, whether it still fits this build's config struct, and whether this process booted from it. See [Observability](/docs/observability/#the-bootstrap-cache-block) for the full shape.
 
 The same block reaches the [admin endpoint](/docs/observability/admin/) and `mamori status` / `mamori doctor`:
 

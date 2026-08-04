@@ -130,6 +130,22 @@ func TestOpenRejectsAFutureFormatVersion(t *testing.T) {
 	}
 }
 
+// TestOpenRejectsASnapshotWithNoWriteTime pins that a snapshot which parses but
+// carries no write time is refused rather than restored. Its age would read as
+// zero forever, so BootstrapMaxAge could never expire it and a process would
+// serve an arbitrarily old configuration while reporting a fresh one.
+func TestOpenRejectsASnapshotWithNoWriteTime(t *testing.T) {
+	s := sampleSnapshot()
+	s.WrittenAt = time.Time{}
+	sealed, err := sealSnapshot(s, testKey(t))
+	if err != nil {
+		t.Fatalf("sealSnapshot: %v", err)
+	}
+	if _, err := openSnapshot(sealed, testKey(t)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid for a snapshot with no write time", err)
+	}
+}
+
 func TestWriteSnapshotFileIsAtomicAndPrivate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snap")

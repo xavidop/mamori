@@ -101,7 +101,7 @@ Only a [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) report 
 
 ### The bootstrap cache block
 
-`Source` and `Bootstrap` are `backend` and `nil` for every process not using [`WithBootstrapCache`](/docs/usage/bootstrap-cache/). With it configured, they say whether this process is serving what its backends answered or what a file on its disk held.
+`Source` and `Bootstrap` are both empty for a process not using [`WithBootstrapCache`](/docs/usage/bootstrap-cache/), and are left out of the admin endpoint's JSON entirely, so that body stays exactly what a mamori 1.9 `mamori doctor` expects. With the cache configured, they say whether this process is serving what its backends answered or what a file on its disk held.
 
 ```go
 type BootstrapStatus struct {

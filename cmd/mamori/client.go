@@ -104,15 +104,14 @@ func parseEndpoint(endpoint string, insecure bool) (baseURL string, transport *h
 }
 
 // reportFields is the set of top-level JSON keys every mamori.Report has
-// carried since the admin endpoint existed: Report has no struct json tags
-// and none of these fields carries "omitempty" (see status.go in the core
-// module), so encoding/json emits all six unconditionally, regardless of
-// value. That makes their presence a reliable sentinel for "this body is a
-// Report", including the all-zero-value case: a genuine, all-unhealthy
-// Report still has all six keys, while a bare {} has none and an unrelated
-// document (e.g. {"hello":"world"}) has the wrong ones. decodeReport uses
-// this to reject both without mistaking either for a real (if unhealthy)
-// Report.
+// carried since the admin endpoint existed: none of these six carries a json
+// struct tag (see status.go in the core module), so encoding/json emits all
+// six unconditionally, regardless of value. That makes their presence a
+// reliable sentinel for "this body is a Report", including the all-zero-value
+// case: a genuine, all-unhealthy Report still has all six keys, while a bare
+// {} has none and an unrelated document (e.g. {"hello":"world"}) has the
+// wrong ones. decodeReport uses this to reject both without mistaking either
+// for a real (if unhealthy) Report.
 var reportFields = map[string]struct{}{
 	"Fields": {}, "Snapshot": {}, "Live": {}, "Pinned": {}, "Healthy": {}, "GeneratedAt": {},
 }

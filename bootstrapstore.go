@@ -1,7 +1,9 @@
 package mamori
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"time"
 )
@@ -133,11 +135,25 @@ func persistBootstrap(o *options, specs []fieldSpec, res []resolved, now time.Ti
 // The two failures it distinguishes are the two an operator acts on differently:
 // there is no snapshot at all (nothing was ever written, or the volume it lived
 // on did not survive the restart), or there is one that will not open (the key
-// is wrong, or the file was altered).
+// is wrong, the file was altered, or it could not be read at all).
+//
+// Neither message names the file, and the read error's cause is deliberately
+// dropped rather than wrapped, which is the one place in this package that a
+// cause is not carried alongside its sentinel. os.ReadFile returns an
+// *fs.PathError whose message is "open /var/lib/app/mamori.snap: permission
+// denied", and this error reaches Report.Bootstrap.Problem (bootstrapStatusFor,
+// below), which the admin endpoint serves. Telling an unauthenticated reader
+// exactly where the encrypted credential file lives is the one thing
+// BootstrapStatus promises not to do; see its doc comment in status.go. The
+// caller configured the path themselves, so naming it here buys them nothing
+// they do not already have.
 func readBootstrapSnapshot(o *options) (snapshot, error) {
 	b, err := os.ReadFile(o.bootstrap.path)
 	if err != nil {
-		return snapshot{}, fmt.Errorf("mamori: reading the bootstrap snapshot: %w: %w", ErrUnavailable, err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return snapshot{}, fmt.Errorf("mamori: no bootstrap snapshot has been written at the configured path: %w", ErrUnavailable)
+		}
+		return snapshot{}, fmt.Errorf("mamori: the bootstrap snapshot exists but could not be read; check the file's ownership and mode: %w", ErrUnavailable)
 	}
 	return openSnapshot(b, o.bootstrap.key)
 }
@@ -348,9 +364,27 @@ func (e *engine[T]) bootstrapStatus(now time.Time) *BootstrapStatus {
 
 // bootstrapSource names where the configuration this engine is serving came
 // from, for a Report.
+//
+// It is empty, not SourceBackend, for a process with no bootstrap cache: Source
+// is a fact about the cache, and a Report that names neither key is the payload
+// a mamori 1.9 CLI accepts (see Report.Source).
 func (e *engine[T]) bootstrapSource() ConfigSource {
-	if e.bootstrapServing {
+	switch {
+	case e.o.bootstrap == nil:
+		return ""
+	case e.bootstrapServing:
 		return SourceBootstrapCache
+	default:
+		return SourceBackend
+	}
+}
+
+// doctorSource is bootstrapSource for a probe, which resolves every field live
+// and restores nothing, so the only question left is whether a cache is
+// configured at all.
+func doctorSource(o *options) ConfigSource {
+	if o.bootstrap == nil {
+		return ""
 	}
 	return SourceBackend
 }

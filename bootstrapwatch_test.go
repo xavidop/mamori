@@ -2,6 +2,7 @@ package mamori
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -660,6 +661,119 @@ func TestBootstrapStatusNeverCarriesTheSnapshot(t *testing.T) {
 		if contains(rendered, forbidden) {
 			t.Fatalf("Status() rendered %q, which must never leave the process", forbidden)
 		}
+	}
+}
+
+// TestReportPayloadStaysV1WithoutTheBootstrapCache pins the wire promise behind
+// Report.Source's omitempty: the mamori 1.9 CLI validates an admin body by its
+// exact top-level key set, so a process that merely links a newer mamori must
+// keep serving the six keys that CLI knows and nothing else. A process that
+// does configure the cache carries both new keys, which is the break its
+// operator opted into.
+func TestReportPayloadStaysV1WithoutTheBootstrapCache(t *testing.T) {
+	v1 := []string{"Fields", "Snapshot", "Live", "Pinned", "Healthy", "GeneratedAt"}
+	clk := NewFakeClock(time.Time{})
+	p := newBootProvider()
+	plain := []Option{WithProvider(p), WithClock(clk)}
+
+	watched := func(t *testing.T, opts []Option) Report {
+		t.Helper()
+		w, err := Watch[bootConfig](context.Background(), opts...)
+		if err != nil {
+			t.Fatalf("Watch: %v", err)
+		}
+		defer func() { _ = w.Close() }()
+		return w.Status()
+	}
+	probed := func(t *testing.T, opts []Option) Report {
+		t.Helper()
+		rep, err := Doctor[bootConfig](context.Background(), opts...)
+		if err != nil {
+			t.Fatalf("Doctor: %v", err)
+		}
+		return rep
+	}
+	tests := []struct {
+		name   string
+		report func(*testing.T, []Option) Report
+		cached bool
+	}{
+		{"Status without the cache", watched, false},
+		{"Status with the cache", watched, true},
+		{"Doctor without the cache", probed, false},
+		{"Doctor with the cache", probed, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := plain
+			want := v1
+			if tt.cached {
+				opts = bootOpts(p, filepath.Join(t.TempDir(), "snap"), clk)
+				want = append(append([]string(nil), v1...), "Source", "Bootstrap")
+			}
+			b, err := json.Marshal(tt.report(t, opts))
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			wanted := make(map[string]struct{}, len(want))
+			for _, k := range want {
+				wanted[k] = struct{}{}
+				if _, ok := got[k]; !ok {
+					t.Errorf("the payload is missing top-level key %q", k)
+				}
+			}
+			for k := range got {
+				if _, ok := wanted[k]; !ok {
+					t.Errorf("the payload carries top-level key %q, which a 1.9 CLI refuses the whole response for", k)
+				}
+			}
+		})
+	}
+}
+
+// TestBootstrapProblemNeverNamesTheSnapshotPath pins the other half of the rule
+// above: not only do the snapshot's bytes stay out of a Report, so does its
+// path. Report.Bootstrap.Problem is served by the admin endpoint, and a
+// snapshot that cannot be read is the case whose error used to carry the
+// *fs.PathError, and with it the full path, verbatim.
+func TestBootstrapProblemNeverNamesTheSnapshotPath(t *testing.T) {
+	// A directory standing where the snapshot should be is an unreadable
+	// snapshot that needs no permission games: os.ReadFile answers "is a
+	// directory" for every user, root included, so this holds in a container too.
+	path := filepath.Join(t.TempDir(), "leakmarker-snap")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	clk := NewFakeClock(time.Time{})
+	p := newBootProvider()
+
+	rep, err := Doctor[bootConfig](context.Background(), bootOpts(p, path, clk)...)
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if rep.Bootstrap == nil {
+		t.Fatal("Bootstrap is nil with the cache configured")
+	}
+	if rep.Bootstrap.Problem == "" {
+		t.Fatal("Bootstrap.Problem is empty for a snapshot that cannot be read; the trouble was not reported at all")
+	}
+	for _, forbidden := range []string{"leakmarker", path} {
+		if contains(rep.Bootstrap.Problem, forbidden) {
+			t.Fatalf("Bootstrap.Problem = %q, which names the snapshot path", rep.Bootstrap.Problem)
+		}
+	}
+
+	// The same read failure is what a boot during an outage returns to the
+	// caller, so the path must be absent from that error too.
+	p.fail(unavailable())
+	if _, err := Load[bootConfig](context.Background(), bootOpts(p, path, clk)...); err == nil {
+		t.Fatal("Load succeeded with an unreadable snapshot and an unreachable backend")
+	} else if contains(err.Error(), "leakmarker") {
+		t.Fatalf("Load error = %v, which names the snapshot path", err)
 	}
 }
 

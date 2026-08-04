@@ -145,8 +145,9 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 		// Doctor resolves every field live and restores nothing, so what it
 		// reports always came from the backends themselves. The Bootstrap block
 		// beside it describes the file this config would fall back to, not where
-		// these values came from.
-		Source:      SourceBackend,
+		// these values came from. Empty, like Bootstrap itself, when there is no
+		// cache configured to have a source worth naming: see Report.Source.
+		Source:      doctorSource(o),
 		GeneratedAt: now,
 		// Inspected, never restored: a preflight's job is to tell an operator
 		// whether the fallback they believe they have is real - it exists, it

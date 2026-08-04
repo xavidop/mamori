@@ -5,7 +5,7 @@ title: Prometheus
 
 # Prometheus
 
-The `github.com/xavidop/mamori/x/prom` bridge (package `prom`) implements `mamori.Meter` directly against `prometheus/client_golang`, registering seven instruments up front: resolve latency, refresh, watch-error, stale, dropped-change, rejected-apply, and bootstrap-write-failure, all labeled with the provider scheme and, on failure, an `error_kind` classification. Reach for it when you run Prometheus without OpenTelemetry and want `client_golang` to be the only metrics dependency in your build.
+The `github.com/xavidop/mamori/x/prom` bridge (package `prom`) implements `mamori.Meter` directly against `prometheus/client_golang`, registering seven instruments up front: resolve latency, labeled with the provider scheme, a status, and an `error_kind` classification on failure; refresh, watch-error and stale counts, each labeled with the provider scheme; a rejected-apply count labeled with a `reason`; and dropped-change and bootstrap-write-failure counts, which carry no labels at all. Reach for it when you run Prometheus without OpenTelemetry and want `client_golang` to be the only metrics dependency in your build.
 
 Already on OpenTelemetry? Use [`x/otel`](/docs/telemetry/opentelemetry/) with a Prometheus exporter instead of this module: it gives you the same `/metrics` endpoint plus spans, through one metrics pipeline rather than two. `x/prom` exists specifically for shops using `client_golang` directly.
 
