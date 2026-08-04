@@ -37,24 +37,15 @@ go get github.com/xavidop/mamori/providers/vault          # vault://
 go get github.com/xavidop/mamori/providers/k8s            # k8s-secret://  k8s-cm://
 go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
-go get github.com/xavidop/mamori/providers/heroku         # heroku:// (config vars, batched)
-go get github.com/xavidop/mamori/providers/https          # https:// (generic REST)
+go get github.com/xavidop/mamori/providers/heroku         # heroku://
+go get github.com/xavidop/mamori/providers/https          # https://
 go get github.com/xavidop/mamori/providers/hcp-vault-secrets # hcp-vs://
 go get github.com/xavidop/mamori/providers/infisical      # infisical://
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
-go get github.com/xavidop/mamori/providers/supabase       # supabase:// (Supabase Vault)
+go get github.com/xavidop/mamori/providers/supabase       # supabase://
 go get github.com/xavidop/mamori/providers/bitwarden      # bitwarden-sm://
 # ... gcp, azure, consul, doppler, nacos, onepassword, sops
-
-go get github.com/xavidop/mamori/providers/httpcore       # no scheme: the shared HTTP core
 ```
-
-[`providers/httpcore`](providers/httpcore/) is a library rather than a provider:
-it registers no scheme and you never blank-import it. It is what you build a
-REST-backed provider **on** - request building, authenticators, status
-classification, conditional GET, and a bounded, always-drained response body,
-with no dependency outside the standard library. See
-[Write a provider: HTTP core](https://mamorigo.dev/docs/writing-a-provider/httpcore).
 
 ## Quick start
 
@@ -152,8 +143,8 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/nacos` | `nacos://` | **native** (long-poll listener) | ✅ |
 | `providers/vercel-gc` | `vercel-gc://` | poll (digest) | ✅ |
 | `providers/cloudflare-kv` | `cloudflare-kv://` | poll | ✅ |
-| `providers/heroku` | `heroku://` (batched: one request per app) | poll | ✅ |
-| `providers/https` | `https://` (generic, operator-declared endpoints) | poll (conditional GET) | ✅ |
+| `providers/heroku` | `heroku://` | poll | ✅ |
+| `providers/https` | `https://` | poll | ✅ |
 | `providers/firestore` | `firestore://` | **native** (snapshot listeners) | ✅ |
 | `providers/firebase-rc` | `firebase-rc://` | poll | ✅ |
 | `providers/firebase-rtdb` | `firebase-rtdb://` | **native** (streaming) | no (chain preserved) |
