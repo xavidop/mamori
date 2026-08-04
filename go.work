@@ -32,6 +32,7 @@ use (
 	./providers/mysql
 	./providers/onepassword
 	./providers/openfeature
+	./providers/posthog
 	./providers/postgres
 	./providers/redis
 	./providers/s3
