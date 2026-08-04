@@ -37,6 +37,7 @@ go get github.com/xavidop/mamori/providers/vault          # vault://
 go get github.com/xavidop/mamori/providers/k8s            # k8s-secret://  k8s-cm://
 go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
+go get github.com/xavidop/mamori/providers/heroku         # heroku:// (config vars, batched)
 go get github.com/xavidop/mamori/providers/https          # https:// (generic REST)
 go get github.com/xavidop/mamori/providers/hcp-vault-secrets # hcp-vs://
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
@@ -145,6 +146,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/nacos` | `nacos://` | **native** (long-poll listener) | ✅ |
 | `providers/vercel-gc` | `vercel-gc://` | poll (digest) | ✅ |
 | `providers/cloudflare-kv` | `cloudflare-kv://` | poll | ✅ |
+| `providers/heroku` | `heroku://` (batched: one request per app) | poll | ✅ |
 | `providers/https` | `https://` (generic, operator-declared endpoints) | poll (conditional GET) | ✅ |
 | `providers/firestore` | `firestore://` | **native** (snapshot listeners) | ✅ |
 | `providers/firebase-rc` | `firebase-rc://` | poll | ✅ |
