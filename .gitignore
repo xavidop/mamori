@@ -33,3 +33,7 @@ site/.astro/
 cmd/mamori/mamori
 # Agent scratch: SDD ledgers, briefs, reports. Never part of a deliverable.
 .superpowers/
+
+# Agent worktrees. Each is a full checkout with its own .git, so an unqualified
+# `git add -A` from the repo root otherwise stages them as embedded repositories.
+.claude/worktrees/
