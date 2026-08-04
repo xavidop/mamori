@@ -48,6 +48,13 @@ var defaultSecretSchemes = []string{
 	"supabase",   // Supabase Vault (vault.decrypted_secrets, over PostgREST)
 	"k8s-secret", // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
 
+	// Not a secret manager, but every value it resolves is marked sensitive
+	// and this list is about what a field HOLDS, not what the backend calls
+	// itself. Heroku hands back an app's whole config var namespace with no
+	// per-var classification, and add-ons write DATABASE_URL and REDIS_URL,
+	// live credentials, into it.
+	"heroku", // Heroku config vars
+
 	// Conditionally secret, listed for the reason given above.
 	"aws-ps", // SSM Parameter Store: only SecureString params are secret
 	"exec",   // core marks all exec output Sensitive (builtin_exec.go)

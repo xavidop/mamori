@@ -56,11 +56,14 @@ The secret-bearing schemes are the ones that resolve to secret material:
 | `doppler`    | Doppler                     | yes                           |
 | `supabase`   | Supabase Vault              | yes                           |
 | `k8s-secret` | Kubernetes Secret           | yes                           |
+| `heroku`     | Heroku config vars          | treated as yes, see below     |
 | `aws-ps`     | AWS SSM Parameter Store     | only `SecureString` params    |
 | `exec`       | Command output              | mamori marks all of it secret |
 | `mamori`     | A mamori config server      | whatever the server marks     |
 
 The last three carry secrets only sometimes, and are flagged anyway. A false positive costs you a `secret.String` on a value that did not need one; a miss costs a leaked credential. For a security check, the cheap mistake is the right one to make.
+
+`heroku` is the one row that is not a secret manager. It is listed because [Heroku config vars](/docs/providers/heroku/) are one unclassified namespace per app - nothing in the API separates `LOG_LEVEL` from `DATABASE_URL` - and Heroku add-ons write live credentials into it without the operator typing them: provisioning Heroku Postgres creates `DATABASE_URL`, password and all. The provider marks every value `Sensitive`, and this list agrees with it.
 
 Config-style schemes (`env`, `file`, `consul`, `k8s-cm`, and the like) never carry secret material, so fields using them are left alone. Fields with no `source` tag, and fields that already use `secret.String` / `secret.Bytes`, are considered correct.
 
