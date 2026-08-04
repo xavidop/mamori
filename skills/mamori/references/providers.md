@@ -34,6 +34,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `bitwarden` | `bitwarden-sm://` | Bitwarden **Secrets Manager** (the `bws` machine-account product), not the consumer password manager. A secret is addressed by its **UUID**, never its name, because the list endpoint returns names as ciphertext and omits values: `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d`, `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d#password`. Reads `BWS_ACCESS_TOKEN`. Decrypts client side with the Go standard library alone. |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
+| `supabase` | `supabase://` | `supabase://db-password`, `supabase://api-creds#/stripe/key` (needs project-side setup SQL) |
 | `k8s` | `k8s-secret://` `k8s-cm://` | `k8s-secret://ns/name#key` |
 | `consul` | `consul://` | `consul://app/config` |
 | `etcd` | `etcd://` | `etcd://app/config` |
