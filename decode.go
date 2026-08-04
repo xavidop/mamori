@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/xavidop/mamori/secret"
 	"gopkg.in/yaml.v3"
 )
@@ -20,7 +21,7 @@ type fieldSpec struct {
 	Refs       []Ref  // parsed source refs, in precedence order (len >= 1)
 	Default    string // value used on ErrNotFound
 	HasDefault bool
-	Flatten    string       // "", "json", "yaml", or "env"
+	Flatten    string       // "", "json", "yaml", "toml", or "env"
 	Optional   bool         // not-found tolerated without a default
 	Index      []int        // reflect field index path from the root struct
 	Type       reflect.Type // field type
@@ -140,7 +141,7 @@ func walkSpecs(t reflect.Type, prefix string, index []int, vars map[string]strin
 		}
 
 		if isLeafStruct && flatten == "" {
-			return nil, fmt.Errorf("mamori: field %s is a struct with a source but no flatten tag; add flatten:\"json|yaml|env\"", path)
+			return nil, fmt.Errorf("mamori: field %s is a struct with a source but no flatten tag; add flatten:\"json|yaml|toml|env\"", path)
 		}
 
 		// Per-field debounce override travels on the ref opts (?debounce=...).
@@ -259,9 +260,9 @@ func decodeScalar(fv reflect.Value, spec fieldSpec, raw []byte) error {
 }
 
 // decodeFlatten decodes a single provider payload into a (possibly nested)
-// struct field, per the flatten tag. It supports json, yaml, and env (KEY=VALUE
-// lines). Secret and duration fields inside the flattened struct are handled via
-// mapstructure decode hooks.
+// struct field, per the flatten tag. It supports json, yaml, toml, and env
+// (KEY=VALUE lines). Secret and duration fields inside the flattened struct are
+// handled via mapstructure decode hooks.
 func decodeFlatten(fv reflect.Value, spec fieldSpec, raw []byte, hooks []mapstructure.DecodeHookFunc) error {
 	var m map[string]any
 	switch spec.Flatten {
@@ -272,6 +273,10 @@ func decodeFlatten(fv reflect.Value, spec fieldSpec, raw []byte, hooks []mapstru
 	case "yaml":
 		if err := yaml.Unmarshal(raw, &m); err != nil {
 			return fmt.Errorf("mamori: field %s: yaml flatten: %w", spec.Path, err)
+		}
+	case "toml":
+		if err := toml.Unmarshal(raw, &m); err != nil {
+			return fmt.Errorf("mamori: field %s: toml flatten: %w", spec.Path, err)
 		}
 	case "env":
 		m = parseEnvPayload(raw)

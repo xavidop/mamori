@@ -125,7 +125,7 @@ func WithProvider(p Provider) Option {
 func WithValidator(v Validator) Option { return func(o *options) { o.validator = v } }
 
 // WithDecodeHook adds a mapstructure decode hook applied when decoding a
-// flatten:"json|yaml|env" payload into a nested struct. Hooks run after the
+// flatten:"json|yaml|toml|env" payload into a nested struct. Hooks run after the
 // built-in secret/duration hook, in the order registered, so you can convert
 // custom field types (a time.Time layout, a net.IP, an enum, ...).
 func WithDecodeHook(h mapstructure.DecodeHookFunc) Option {

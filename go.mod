@@ -6,6 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	go.uber.org/goleak v1.3.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1

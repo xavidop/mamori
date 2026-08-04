@@ -1,9 +1,13 @@
 package mamori
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/xavidop/mamori/secret"
 )
 
 // TestWalkSpecsChain covers Task 1's fieldSpec plumbing: a multi-ref source
@@ -146,5 +150,78 @@ func TestFieldSpecsAcceptsKnownDecodeCodings(t *testing.T) {
 	}
 	if _, err := fieldSpecs(reflect.TypeOf(cfg{}), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadFlattenTOML(t *testing.T) {
+	type Redis struct {
+		Host     string        `mapstructure:"host"`
+		Port     int           `mapstructure:"port"`
+		Password secret.String `mapstructure:"password"`
+		Timeout  time.Duration `mapstructure:"timeout"`
+	}
+	type Config struct {
+		Redis Redis `source:"env:REDIS_TOML" flatten:"toml"`
+	}
+
+	t.Setenv("REDIS_TOML", "host = \"cache.internal\"\nport = 6379\npassword = \"hunter2\"\ntimeout = \"5s\"\n")
+
+	cfg, err := Load[Config](context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Redis.Host != "cache.internal" {
+		t.Errorf("Host = %q, want cache.internal", cfg.Redis.Host)
+	}
+	if cfg.Redis.Port != 6379 {
+		t.Errorf("Port = %d, want 6379", cfg.Redis.Port)
+	}
+	if cfg.Redis.Password.Reveal() != "hunter2" {
+		t.Errorf("Password did not decode through flattenHook")
+	}
+	if cfg.Redis.Timeout != 5*time.Second {
+		t.Errorf("Timeout = %v, want 5s", cfg.Redis.Timeout)
+	}
+}
+
+func TestLoadFlattenTOMLNestedTable(t *testing.T) {
+	type Inner struct {
+		User string `mapstructure:"user"`
+	}
+	type Outer struct {
+		Name  string `mapstructure:"name"`
+		Creds Inner  `mapstructure:"creds"`
+	}
+	type Config struct {
+		App Outer `source:"env:APP_TOML" flatten:"toml"`
+	}
+
+	t.Setenv("APP_TOML", "name = \"svc\"\n\n[creds]\nuser = \"admin\"\n")
+
+	cfg, err := Load[Config](context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.App.Creds.User != "admin" {
+		t.Errorf("nested table did not decode: Creds.User = %q", cfg.App.Creds.User)
+	}
+}
+
+func TestLoadFlattenTOMLMalformedIsLoud(t *testing.T) {
+	type Inner struct {
+		Host string `mapstructure:"host"`
+	}
+	type Config struct {
+		App Inner `source:"env:BAD_TOML" flatten:"toml"`
+	}
+
+	t.Setenv("BAD_TOML", "this is not = = valid toml")
+
+	_, err := Load[Config](context.Background())
+	if err == nil {
+		t.Fatal("malformed TOML decoded silently; want an error")
+	}
+	if !strings.Contains(err.Error(), "toml flatten") {
+		t.Errorf("error %q does not name the toml flatten stage", err)
 	}
 }
