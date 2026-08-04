@@ -23,7 +23,7 @@ use (
 	./providers/gcs
 	./providers/goff
 	./providers/growthbook
-	./providers/hcp-vault-secrets
+	./providers/heroku
 	./providers/httpcore
 	./providers/https
 	./providers/infisical
