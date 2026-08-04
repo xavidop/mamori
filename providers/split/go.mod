@@ -9,6 +9,7 @@ require (
 
 require (
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
+	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
