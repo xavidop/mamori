@@ -136,6 +136,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/scaleway-sm` | `scaleway-sm://` | poll | ✅ |
 | `providers/onepassword` | `op://` | poll | ✅ |
 | `providers/sops` | `sops://` | fsnotify | ✅ |
+| `providers/supabase` | `supabase://` | poll | ✅ |
 | `providers/postgres` | `postgres://` | **native** (LISTEN/NOTIFY) | ✅ |
 | `providers/mysql` | `mysql://` | poll | ✅ |
 | `providers/sqlite` | `sqlite://` | fsnotify | ✅ |

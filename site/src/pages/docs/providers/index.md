@@ -39,6 +39,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `scaleway-sm://` | Scaleway Secret Manager | yes | poll | ✅ |
 | `op://` | 1Password | yes | poll | ✅ |
 | `sops://` | SOPS | yes | fsnotify | ✅ |
+| `supabase://` | Supabase Vault | yes | poll | ✅ |
 | `postgres://` | PostgreSQL | no | **native** (LISTEN/NOTIFY) | ✅ |
 | `mysql://` | MySQL | no | poll | ✅ |
 | `sqlite://` | SQLite | no | fsnotify | ✅ |

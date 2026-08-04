@@ -54,7 +54,7 @@ The secret-bearing schemes are the ones that resolve to secret material:
 | `op`         | 1Password                   | yes                           |
 | `sops`       | Mozilla SOPS                | yes                           |
 | `doppler`    | Doppler                     | yes                           |
-| `hcp-vs`     | HCP Vault Secrets           | yes                           |
+| `supabase`   | Supabase Vault              | yes                           |
 | `k8s-secret` | Kubernetes Secret           | yes                           |
 | `heroku`     | Heroku config vars          | treated as yes, see below     |
 | `aws-ps`     | AWS SSM Parameter Store     | only `SecureString` params    |
