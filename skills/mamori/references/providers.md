@@ -29,6 +29,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
+| `infisical` | `infisical://` | `infisical://DB_PASSWORD`, `infisical://DB_PASSWORD?env=staging&path=/backend`, `infisical://DB_CREDS#/creds/password`. The whole ref path is the secret NAME; project/environment/folder come from options or `?project=`/`?env=`/`?path=`, never from the path. Machine identity Universal Auth via `INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET`. |
 | `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
 | `bitwarden` | `bitwarden-sm://` | Bitwarden **Secrets Manager** (the `bws` machine-account product), not the consumer password manager. A secret is addressed by its **UUID**, never its name, because the list endpoint returns names as ciphertext and omits values: `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d`, `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d#password`. Reads `BWS_ACCESS_TOKEN`. Decrypts client side with the Go standard library alone. |
 | `onepassword` | `op://` | `op://vault/item/field` |
