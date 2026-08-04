@@ -29,6 +29,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
+| `infisical` | `infisical://` | `infisical://DB_PASSWORD`, `infisical://DB_PASSWORD?env=staging&path=/backend`, `infisical://DB_CREDS#/creds/password`. The whole ref path is the secret NAME; project/environment/folder come from options or `?project=`/`?env=`/`?path=`, never from the path. Machine identity Universal Auth via `INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET`. |
 | `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
@@ -61,7 +62,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
 
 - Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
-  `doppler`, `scaleway-sm`, `k8s-secret`.
+  `doppler`, `infisical`, `scaleway-sm`, `k8s-secret`.
 - Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).

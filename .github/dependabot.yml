@@ -171,6 +171,13 @@ updates:
     directory: "/providers/https"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:https]
+  # Standard library only, on top of httpcore, and deliberately NOT Infisical's
+  # own Go SDK. Same reasoning as https above: this entry will rarely fire, and
+  # the coverage check requires every module to be listed regardless.
+  - package-ecosystem: gomod
+    directory: "/providers/infisical"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:infisical]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.
