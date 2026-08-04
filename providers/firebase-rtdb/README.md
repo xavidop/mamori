@@ -114,14 +114,11 @@ The Realtime Database opens **every** stream with a `put` of the whole watched
 node, so this ceiling is in practice the largest node the provider can watch. A
 node whose pushed frame is over it never gets past the first frame of a
 connection: each attempt reports an `Update{Err: ...}` and reconnects, so the
-watch keeps running but never delivers a change, and `Resolve` keeps working
-because it reads through the Admin SDK and has never had this ceiling.
+watch keeps running but never delivers a change. `Resolve` reads through the
+Admin SDK and is unaffected.
 
-Set it to the size of the largest node you watch, plus headroom. Expect the
-process to hold roughly **twice** that many bytes per open watch at the instant
-such a frame arrives - the line being read and the frame assembled out of it
-both hold it - which is why it defaults to 1 MiB rather than to no limit. Values
-that are not positive are ignored.
+Set it to the size of the largest node you watch, plus headroom. Values that are
+not positive are ignored.
 
 #### `WithReconnectBackoff`
 
@@ -129,11 +126,10 @@ This is the **floor**, not a fixed delay. Each consecutive attempt that delivers
 nothing doubles the wait, up to 30 seconds (or up to your value, if you set one
 longer than that), and the wait drops straight back to the floor as soon as a
 stream delivers anything. Every wait is jittered into the upper half of its
-range, so many processes dropped by the same database do not all reconnect on
-the same millisecond.
+range.
 
-If you leave it alone, a database that is down is retried at 2s, 4s, 8s, ... up
-to every 30s, and a healthy stream that drops is retried after about 2s.
+Left alone, a database that is down is retried at 2s, 4s, 8s, ... up to every
+30s, and a healthy stream that drops is retried after about 2s.
 
 ## Native watch (SSE streaming)
 
@@ -154,12 +150,10 @@ ticker:
    `auth_revoked` reconnects with a fresh token; a dropped connection is surfaced
    as `Update{Err: ...}` and reconnected after a wait that starts at
    `WithReconnectBackoff` and doubles, capped at 30s, until a stream delivers
-   something.
-   The stream is parsed by `httpcore`'s bounded SSE decoder, which caps a single
-   line and one frame's total data at `WithMaxFrameBytes` each, 1 MiB by default.
-   A node whose pushed frame exceeds that ceiling is surfaced as
-   `Update{Err: ...}` and the connection is re-established, rather than the
-   payload growing without limit.
+   something. The stream is parsed by `httpcore`'s bounded SSE decoder, which
+   caps a single line and one frame's total data at `WithMaxFrameBytes` each,
+   1 MiB by default; a frame over that ceiling is surfaced as `Update{Err: ...}`
+   and the connection re-established.
 5. When the watch context is cancelled the in-flight request is aborted, the
    goroutine exits, and the channel is closed - no goroutine leaks (verified with
    `goleak`).
@@ -182,9 +176,8 @@ stays open.
 The unit and conformance tests use an in-memory fake that reproduces the database's
 ETag bump-on-write and push-on-change behavior, so `go test ./...` requires **no**
 Firebase project and **no** credentials. The REST streaming half of the live
-backend is covered by unit tests that drive it against a local HTTP server with a
-static token, also without credentials; only the Admin SDK read path is exercised
-solely by the integration test.
+backend is covered without credentials too; only the Admin SDK read path needs
+the integration test.
 
 ### Live integration test
 

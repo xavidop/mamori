@@ -580,8 +580,8 @@ for {
 
 | Field | Default | Bounds |
 | --- | --- | --- |
-| `MaxLine` | `DefaultSSEMaxLine`, 1 MiB | One line. An SSE line has no length prefix, so nothing obliges a server to ever send the newline that ends it. |
-| `MaxFrame` | `DefaultSSEMaxFrame`, 1 MiB | One frame's total accumulated `data`, joining newlines included. Bounding a line only bounds a line: a server can send `data: x` forever and never a blank line. |
+| `MaxLine` | `DefaultSSEMaxLine`, 1 MiB | One line, including one the server never terminates with a newline. |
+| `MaxFrame` | `DefaultSSEMaxFrame`, 1 MiB | One frame's total accumulated `data`, joining newlines included, however many lines it took. |
 
 They are two roofs, not one. `MaxFrame` counts a frame's data only, so an
 `event` name is bounded by `MaxLine` instead - a 900-byte name passes a
@@ -589,9 +589,9 @@ They are two roofs, not one. `MaxFrame` counts a frame's data only, so an
 `MaxLine`, not `MaxFrame` alone.
 
 Crossing either bound returns `ErrSSELineTooLong` or `ErrSSEFrameTooLong`. Both
-carry `mamori.ErrUnavailable`, not `mamori.ErrInvalid`: an over-long frame is a
-stream to tear down and re-establish, not a fault that should mark a field
-permanently unhealthy.
+carry `mamori.ErrUnavailable`, not `mamori.ErrInvalid`, so the stream is torn
+down and re-established rather than the field being marked permanently
+unhealthy.
 
 Raise both together if a backend legitimately sends larger frames. Raising only
 one still rejects the payload, since a large frame usually arrives as a single
@@ -608,8 +608,7 @@ large line.
   value itself, and only the provider knows which field of its backend's
   error shape is safe to surface.
 - **No SSE reconnect loop.** `SSEDecoder`/`SSEStream` decode one connection.
-  Deciding when to redial, and how long to wait first, stays with the provider,
-  for the same reason retry does.
+  Deciding when to redial, and how long to wait first, stays with the provider.
 
 ## Writing a provider on httpcore
 

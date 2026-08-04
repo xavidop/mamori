@@ -139,13 +139,13 @@ for {
 
 You write the request and decide what each event name means. The framing, and the two bounds below, are the part that is the same for every SSE backend.
 
-- **Two bounds, not one, and they guard different attacks.** `MaxLine` stops a server that opens a line and never sends a newline. `MaxFrame` stops one that sends `data:` forever and never the blank line that would dispatch the frame. Per-line bounding alone does not prevent the second: every line stays small while the accumulated frame grows without limit. Both default to 1 MiB.
+- **Two bounds, not one.** `MaxLine` bounds a single line, including one the server never terminates with a newline. `MaxFrame` bounds a frame's total accumulated `data`, however many lines it took. Both default to 1 MiB, and the zero `SSEConfig` selects both defaults.
 - **Peak memory is `MaxFrame + MaxLine`, not `MaxFrame`.** The line buffer exists alongside the accumulating frame. `MaxFrame` also does not count the event name, which arrives on a line and is bounded by `MaxLine`.
-- **A breach is retryable, not terminal.** Both bound errors wrap `mamori.ErrUnavailable` rather than `ErrInvalid`, because `Report` treats an invalid field as terminal: a hostile or misconfigured server would otherwise mark the field permanently unhealthy instead of letting your loop reconnect.
-- **`ev.Data` is yours to keep.** It is freshly allocated per frame and never reused, so you can retain it past the next `Next` without copying. A decoder that recycled one buffer would be faster and would corrupt any consumer that decodes JSON out of a frame it still holds.
+- **A breach is retryable, not terminal.** Both bound errors wrap `mamori.ErrUnavailable` rather than `ErrInvalid`, so your loop reconnects instead of the field being marked permanently unhealthy.
+- **`ev.Data` is yours to keep.** It is freshly allocated per frame and never reused, so you can retain it past the next `Next` without copying.
 - **No goroutine, and the body is closed exactly once.** `Close` is safe to call alongside a blocked `Next`, and cancelling the context ends the stream.
 
-**There is no reconnect loop here, deliberately.** The two providers that stream disagree about every part of one: a fixed versus an exponential backoff, one endpoint versus rotation, whether a disconnect is reported to the caller, whether a freshness guard outlives the connection. A shared loop would need a hook for each and end up larger than either. Write the loop in your provider, and give it a growing, capped wait so a stream that fails identically every time cannot become a hot loop.
+**There is no reconnect loop here.** Write it in your provider, with a growing, capped wait so a stream that fails identically every time cannot become a hot loop.
 
 [`providers/firebase-rtdb`](/docs/providers/firebase-rtdb/) is the worked example.
 
@@ -175,7 +175,7 @@ Fail: func(ctx context.Context, key string, err error) error {
 
 - **No retry.** mamori's reconciler already backs off and retries a failed resolve. A second retry layer inside the provider would multiply against it, turning a configured five attempts into twenty-five.
 - **No vendor error-envelope parsing.** Only you know which field of your backend's error shape is safe to surface, hence the `ErrorDetail` hook rather than a built-in guess.
-- **No reconnect loop.** The framing is here (`SSEDecoder` / `SSEStream`, above) and so is the long-poll loop (`LongPoll`), but reconnecting a dropped stream is your provider's job, for the reason given in that section.
+- **No reconnect loop.** The framing is here (`SSEDecoder` / `SSEStream`, above) and so is the long-poll loop (`LongPoll`), but reconnecting a dropped stream is your provider's job.
 
 ## Next
 
