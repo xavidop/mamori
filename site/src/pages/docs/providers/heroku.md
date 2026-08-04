@@ -137,7 +137,10 @@ The Platform API exposes no streaming or blocking read of config vars, so this p
 | 403 | `forbidden`, `suspended` | `permission_denied` |
 | 404 | `not_found` | `not_found` |
 | 406 | `not_acceptable` | `unavailable` |
-| 422 | `invalid_params` | `invalid` |
+| 409 | `conflict` | `unavailable` |
+| 410 | `gone` | `unavailable` |
+| 416 | `requested_range_not_satisfiable` | `unavailable` |
+| 422 | `invalid_params`, `verification_needed` | `invalid` |
 | 429 | `rate_limit` | `rate_limited` |
 | 500, 503 | | `unavailable` |
 
