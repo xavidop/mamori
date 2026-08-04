@@ -33,45 +33,45 @@ const features = [
 
 // Providers are summarized on the landing by category; the full gallery lives in
 // the docs. Each card links to a representative provider page.
+//
+// A category's count is DERIVED from its own items list rather than written out
+// beside it. Kept by hand the two drift: "Secret managers" long displayed 9 over
+// a list of 8, and every provider added to a category is one more chance to
+// update one and not the other.
 const categories = [
   {
     name: "Local sources",
-    count: 5,
     items: "env · dotenv · file · exec · Viper",
     href: `${base}docs/providers/env`,
   },
   {
     name: "Secret managers",
-    count: 9,
     items: "AWS · Vault · GCP · Azure · Scaleway · Doppler · 1Password · SOPS",
     href: `${base}docs/providers/aws`,
   },
   {
     name: "Feature flags",
-    count: 9,
     items: "LaunchDarkly · Unleash · Flagsmith · ConfigCat · Split · GrowthBook · Flipt · GO Feature Flag · OpenFeature",
     href: `${base}docs/providers/launchdarkly`,
   },
   {
     name: "Databases",
-    count: 7,
     items: "Postgres · MySQL · SQLite · MongoDB · Redis · DynamoDB · Cosmos",
     href: `${base}docs/providers/postgres`,
   },
   {
     name: "KV, app config & Kubernetes",
-    count: 10,
     items: "Consul · etcd · AWS AppConfig · Azure AppConfig · Vercel Global Config · Cloudflare Workers KV · Heroku Config Vars · Generic HTTPS · Kubernetes Secret · ConfigMap",
     href: `${base}docs/providers/kubernetes`,
   },
   {
     name: "Object storage & Firebase",
-    count: 6,
     items: "S3 · GCS · Azure Blob · Firestore · Firebase RTDB · Remote Config",
     href: `${base}docs/providers/s3`,
   },
 ];
-const totalProviders = categories.reduce((n, c) => n + c.count, 0);
+const catCount = (c: { items: string }) => c.items.split(" \u00b7 ").length;
+const totalProviders = categories.reduce((n, c) => n + catCount(c), 0);
 
 // The operational layer beyond loading: serve, inspect, observe, and hand to an
 // agent. Each card links to its docs.
@@ -234,7 +234,7 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
             <a class="card cat" href={c.href}>
               <div class="cat__top">
                 <h3 class="cat__name">{c.name}</h3>
-                <span class="cat__count">{c.count}</span>
+                <span class="cat__count">{catCount(c)}</span>
               </div>
               <p class="cat__items">{c.items}</p>
             </a>
