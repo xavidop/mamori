@@ -97,6 +97,11 @@ records measurements against `context.Background()`.
 - `reason` on the apply-rejected counter is `mamori.RejectReason`, a closed set
   of three values (`validation`, `preapply`, `derive`) so it stays a safe,
   bounded metric label.
+- `mamori.bootstrap.write.failed.count` is fed through `mamori.BootstrapMeter`,
+  an optional interface mamori type-asserts for rather than a method on
+  `mamori.Meter` itself. This bridge implements it, so the counter is recorded
+  with nothing extra to do; a hand-written sink that implements only
+  `mamori.Meter` keeps working and simply never sees this event.
 
 The instrument names and metric attribute keys are also exported as constants
 (`MetricResolveDuration`, `MetricRefreshCount`, `MetricWatchErrors`,

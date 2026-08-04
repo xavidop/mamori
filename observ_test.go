@@ -9,7 +9,10 @@ import (
 )
 
 // recordingMeter counts every Meter call, so a test can assert an engine event
-// reached the metrics sink without needing a real backend.
+// reached the metrics sink without needing a real backend. It also implements
+// the optional BootstrapMeter, which is what lets a bootstrap test assert the
+// write-failure counter; meterWithoutBootstrap (bootstrapwatch_test.go) is the
+// deliberate counterpart that does not.
 type recordingMeter struct {
 	mu             sync.Mutex
 	resolves       int

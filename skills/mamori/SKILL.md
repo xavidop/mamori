@@ -175,8 +175,11 @@ mamori.WithBootstrapCache("/var/lib/app/mamori.snap", key,
   revocation. An expired `Value.NotAfter` is refused for the same reason.
 - Written on every applied update, after validation, every `WithDerive` hook and
   `PreApply`. A write failure never fails the update: it reaches `OnError`, the
-  logger, and a `bootstrap_write_failed` counter. A restore does not rewrite the
-  file, so its age is not reset.
+  logger, and a `bootstrap_write_failed` counter. That counter goes through
+  `mamori.BootstrapMeter`, an OPTIONAL interface adding
+  `RecordBootstrapWriteFailed()` to `Meter`; `x/otel` and `x/prom` implement it,
+  a hand-written `Meter` need not. A restore does not rewrite the file, so its
+  age is not reset.
 - A restored config is replayed through the ordinary decode, derive, validate
   and `PreApply` path. Resolved values are cached rather than `T` because
   `secret.String` marshals to `[REDACTED]`, so a snapshot of `T` would lose
@@ -184,10 +187,13 @@ mamori.WithBootstrapCache("/var/lib/app/mamori.snap", key,
 - `Health()` passes inside `BootstrapMaxAge` (default 24h) so the pod serves
   traffic, and returns a `*BootstrapStaleError` past it. Set it to the rotation
   window of the shortest-lived credential; `0` is unbounded and must be written
-  explicitly.
+  explicitly, and a negative duration is rejected with `ErrInvalid` rather than
+  clamped.
 - `Report.Source` reads `bootstrap_cache` while the snapshot is deciding what is
-  served, and `Report.Bootstrap` carries its presence, age, and fingerprint
-  match. Neither the file's contents nor its path ever appear.
+  served, and `Report.Bootstrap` carries its presence, age, fingerprint match,
+  and `Restored` (how the process booted, which never changes back, so `doctor`
+  still reports the restore after every field is live again). Neither the file's
+  contents nor its path ever appear.
 - Changing the config struct invalidates an older snapshot (schema fingerprint).
   Put the file on a volume that outlives the container, and give each replica
   its own path.

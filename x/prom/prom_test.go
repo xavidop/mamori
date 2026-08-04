@@ -150,8 +150,15 @@ func TestRecordBootstrapWriteFailedHasNoLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	m.RecordBootstrapWriteFailed()
-	m.RecordBootstrapWriteFailed()
+	// Reached through the optional mamori.BootstrapMeter, exactly as mamori
+	// reaches it: a bridge that stopped implementing it would go on compiling
+	// everywhere and simply never record this counter.
+	bm, ok := m.(mamori.BootstrapMeter)
+	if !ok {
+		t.Fatal("New's result does not implement mamori.BootstrapMeter, so mamori would never record a bootstrap write failure through it")
+	}
+	bm.RecordBootstrapWriteFailed()
+	bm.RecordBootstrapWriteFailed()
 
 	families, err := reg.Gather()
 	if err != nil {

@@ -34,7 +34,7 @@ Groups below are ordered by what you are trying to do, not alphabetically, becau
 | Option | What it does | Default |
 | --- | --- | --- |
 | `WithBootstrapCache` | Keeps an encrypted, on-disk snapshot of the last known-good resolved values and boots from it when a cold start cannot reach the backend; see [Bootstrap cache](/docs/usage/bootstrap-cache/). | disabled (no snapshot is ever written) |
-| `BootstrapMaxAge` | A `BootstrapOption` passed to `WithBootstrapCache`: how old a restored snapshot may be while `Health` still reports the process ready. `0` means unbounded. | 24h (`DefaultBootstrapMaxAge`) |
+| `BootstrapMaxAge` | A `BootstrapOption` passed to `WithBootstrapCache`: how old a restored snapshot may be while `Health` still reports the process ready. `0` means unbounded; a negative value is refused with `ErrInvalid`. | 24h (`DefaultBootstrapMaxAge`) |
 
 ### The snapshot is a credential at rest
 

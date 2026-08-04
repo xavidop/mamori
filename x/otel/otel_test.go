@@ -421,8 +421,15 @@ func keys[V any](m map[string]V) []string {
 // there is nothing to break it down by.
 func TestMeter_RecordBootstrapWriteFailed(t *testing.T) {
 	rm := collect(t, func(m mamori.Meter) {
-		m.RecordBootstrapWriteFailed()
-		m.RecordBootstrapWriteFailed()
+		// Reached through the optional mamori.BootstrapMeter, exactly as
+		// mamori reaches it: a bridge that stopped implementing it would go on
+		// compiling everywhere and simply never record this counter.
+		bm, ok := m.(mamori.BootstrapMeter)
+		if !ok {
+			t.Fatal("NewMeter's result does not implement mamori.BootstrapMeter, so mamori would never record a bootstrap write failure through it")
+		}
+		bm.RecordBootstrapWriteFailed()
+		bm.RecordBootstrapWriteFailed()
 	})
 
 	failed := findMetric(t, rm, mamoriotel.MetricBootstrapWriteFailedCount)

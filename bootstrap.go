@@ -39,6 +39,13 @@ type BootstrapOption func(*bootstrapConfig)
 // Zero means unbounded. It has to be written explicitly, because a config that
 // is stale forever and silent about it is not a default anyone should get by
 // accident.
+//
+// A negative duration is rejected at construction, the same way a wrong-sized
+// key is: Load and Watch fail with ErrInvalid before anything resolves. It is
+// not clamped, because both clamps are worse than the error. Clamping to zero
+// would turn a sign typo into the unbounded mode this doc insists on writing
+// out, silently. Clamping up would expire every snapshot on sight, taking a
+// process out of the load balancer during the outage the cache exists for.
 func BootstrapMaxAge(d time.Duration) BootstrapOption {
 	return func(c *bootstrapConfig) { c.maxAge = d }
 }
@@ -68,12 +75,18 @@ func WithBootstrapCache(path string, key []byte, opts ...BootstrapOption) Option
 	for _, opt := range opts {
 		opt(c)
 	}
-	// Both failures are parked on c rather than returned: an Option has no error
-	// to return, and Load and Watch surface this before resolving anything.
-	if c.path == "" {
+	// Every failure below is parked on c rather than returned: an Option has no
+	// error to return, and Load and Watch surface this before resolving
+	// anything.
+	switch {
+	case c.path == "":
 		c.err = fmt.Errorf("mamori: WithBootstrapCache path is required: %w", ErrInvalid)
-	} else if _, err := newGCM(c.key); err != nil {
-		c.err = err
+	case c.maxAge < 0:
+		c.err = fmt.Errorf("mamori: BootstrapMaxAge %s is negative; use 0 for unbounded: %w", c.maxAge, ErrInvalid)
+	default:
+		if _, err := newGCM(c.key); err != nil {
+			c.err = err
+		}
 	}
 	return func(o *options) { o.bootstrap = c }
 }

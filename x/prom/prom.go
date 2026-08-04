@@ -86,7 +86,8 @@ const (
 )
 
 // meter implements mamori.Meter on top of Prometheus client_golang
-// instruments registered against a single prometheus.Registerer.
+// instruments registered against a single prometheus.Registerer, plus the
+// optional mamori.BootstrapMeter.
 //
 // It is safe for concurrent use: every underlying Prometheus instrument is
 // concurrency-safe, and the struct is immutable after construction.
@@ -100,6 +101,12 @@ type meter struct {
 	bootstrapFailedTotal prometheus.Counter
 }
 
+// mamori only reaches RecordBootstrapWriteFailed through a type assertion for
+// the optional mamori.BootstrapMeter, so dropping or renaming that method would
+// not break any build: the counter would just silently stop being recorded.
+// This turns that into a compile error.
+var _ mamori.BootstrapMeter = (*meter)(nil)
+
 // New builds a mamori.Meter backed by Prometheus client_golang, creating and
 // registering seven instruments against reg up front:
 //
@@ -111,7 +118,8 @@ type meter struct {
 //   - a CounterVec "mamori_watch_errors_total" labeled "scheme";
 //   - a CounterVec "mamori_stale_total" labeled "scheme";
 //   - a bare Counter "mamori_change_dropped_total", with no labels;
-//   - a CounterVec "mamori_apply_rejected_total" labeled "reason".
+//   - a CounterVec "mamori_apply_rejected_total" labeled "reason";
+//   - a bare Counter "mamori_bootstrap_write_failed_total", with no labels.
 //
 // An error is returned (rather than a panic) if any instrument cannot be
 // registered against reg, so a caller registering twice, or against a

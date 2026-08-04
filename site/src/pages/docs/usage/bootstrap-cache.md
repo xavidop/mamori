@@ -74,6 +74,8 @@ If the snapshot cannot be written, the configuration is applied anyway. It resol
 
 You still find out. The failure goes to `OnError`, to the [logger](/docs/telemetry/logging/), and to the `mamori_bootstrap_write_failed_total` / `mamori.bootstrap.write.failed.count` counter. Alert on that counter: nothing else breaks at the moment it happens, and the damage shows up later, at a restart that finds no fallback.
 
+The counter reaches your metrics sink through `mamori.BootstrapMeter`, an optional interface that adds `RecordBootstrapWriteFailed()` to `mamori.Meter`. [`x/otel`](/docs/telemetry/opentelemetry/) and [`x/prom`](/docs/telemetry/prometheus/) implement it, so with either bridge there is nothing to do. If you wrote your own `Meter`, add the method or this one event passes it by; `OnError` and the log line still fire either way.
+
 ### A restored config is still validated
 
 The snapshot stores *resolved values*, not the decoded struct, and a restore replays them through the ordinary decode, derive, validate and `PreApply` path. If any of those reject the restored configuration, the start fails, and the error names both the outage and the rejection.
@@ -94,6 +96,8 @@ if err := w.Health(); err != nil {
 ```
 
 **Set `BootstrapMaxAge` to the rotation window of the shortest-lived credential in your config.** A process serving credentials older than that will fail against the backend that rotated them, and failing readiness is the better outcome. `BootstrapMaxAge(0)` means unbounded; you have to write it, because a configuration that is stale forever and silent about it is not a default anyone should get by accident.
+
+A negative duration is refused: `Load` and `Watch` return an error wrapping `ErrInvalid` before anything resolves, the same as a wrong-sized key. It is not quietly clamped, because both ways of clamping it are worse than the error. Rounding up to zero would turn a sign typo into the unbounded mode you are supposed to write out; rounding the other way would expire every snapshot on sight and drop the pod from rotation during the outage the cache exists for.
 
 Once every field has been answered by its own backend, the bound stops applying: a pod that booted during a two-minute outage and has been reconciling normally for twenty hours is no longer serving anything the snapshot decided, and would otherwise fail its own readiness probe over a file it no longer reads.
 
@@ -116,6 +120,15 @@ The same block reaches the [admin endpoint](/docs/observability/admin/) and `mam
 HEALTHY: 4 field(s), snapshot 1 (live 1), generated 2026-08-04T09:12:33Z
 BOOTSTRAP CACHE: serving a snapshot written 2h0m0s ago; the backend has not been reached for every field since this process started
 ```
+
+After the backend comes back and every field resolves live again, `Source` returns to `backend` and the shouting line becomes a quiet one that still records how this process started:
+
+```text
+HEALTHY: 4 field(s), snapshot 2 (live 2), generated 2026-08-04T11:41:07Z
+bootstrap cache: this process booted from a snapshot and has since resolved every field live; snapshot written 3m0s ago, matching this config
+```
+
+That is what makes a post-mortem possible an hour later. A process that never restored says only `bootstrap cache: snapshot written 3m0s ago, matching this config`.
 
 Neither the snapshot's contents nor its path ever appear there. A `Report` is designed to be served over HTTP, and telling an unauthenticated reader where the encrypted credential file lives buys them a step for nothing in return.
 

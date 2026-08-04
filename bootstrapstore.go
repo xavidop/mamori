@@ -101,15 +101,22 @@ func writeBootstrapSnapshot(o *options, specs []fieldSpec, res []resolved, now t
 // resolved, decoded, derived, validated and passed the gate. Refusing it because
 // a cache file could not be written would invert the whole point of the feature,
 // turning a fallback meant to survive an outage into a new way to fail during
-// one. So the failure goes to the logger, to the meter, and to OnError, which is
-// the only channel a caller has for a problem that cannot be returned anywhere.
+// one. So the failure goes to the logger, to the meter (when it implements
+// BootstrapMeter), and to OnError, which is the only channel a caller has for a
+// problem that cannot be returned anywhere.
 //
 // emit is the caller's OnError delivery: the engine's emitErr on the reconciler
 // goroutine (which arms the reentrancy guard), or a direct call on the load
 // path, where no reconciler goroutine exists yet for a callback to reenter.
 func persistBootstrap(o *options, specs []fieldSpec, res []resolved, now time.Time, emit func(error)) time.Time {
 	if err := writeBootstrapSnapshot(o, specs, res, now); err != nil {
-		o.meter.RecordBootstrapWriteFailed()
+		// Type-asserted rather than called through Meter, because the counter
+		// lives on the optional BootstrapMeter (observ.go): a Meter written
+		// before this feature existed, or by anyone not using the cache, is
+		// still a valid sink and simply records nothing here.
+		if bm, ok := o.meter.(BootstrapMeter); ok {
+			bm.RecordBootstrapWriteFailed()
+		}
 		o.log().Error("the bootstrap snapshot could not be written; this configuration was applied anyway, but a restart during an outage will have nothing to fall back to",
 			errAttrs(err)...)
 		if emit != nil {

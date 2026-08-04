@@ -88,6 +88,7 @@ The seven instruments and their labels:
 - `error_kind` carries the same classification as `mamori.ErrorKind(err)`. Unlike `x/otel`, which omits its equivalent attribute entirely on success, `error_kind` here is the **empty string** on a successful resolve rather than absent - a Prometheus `HistogramVec` requires every series to share the same label set, so there is no "attribute not present" to fall back on. Filter on `status="error"` to select failures.
 - `mamori_change_dropped_total` carries no labels at all: the bounded `OnChange` dispatch queue it reports on is a process-wide property, not a per-scheme one. **This is the counter to alert on**: a non-zero rate means an `OnChange` handler is not keeping up with the rate of applied changes, and the oldest change events are being silently discarded as a result.
 - `reason` on the apply-rejected counter carries `mamori.RejectReason`, a closed set of exactly three values (`validation`, `preapply`, `derive`) so it stays a safe, bounded metric label rather than an unbounded free-form string.
+- `mamori_bootstrap_write_failed_total` arrives through `mamori.BootstrapMeter`, an optional interface rather than a method on `mamori.Meter`. This bridge implements it, so the counter records itself; see [Writing your own sink](#writing-your-own-sink) if you do not use a bridge.
 
 The instrument names are also exported as constants (`MetricResolveDuration`, `MetricRefreshTotal`, `MetricWatchErrorsTotal`, `MetricStaleTotal`, `MetricChangeDroppedTotal`, `MetricApplyRejectedTotal`).
 
@@ -110,7 +111,20 @@ The core module takes no Prometheus dependency. `WithMeter` accepts the tiny int
 
 `New` returns an error if any instrument fails to register (a duplicate registration against the same `Registerer`, for instance), rather than panicking, matching `x/otel`'s `NewMeter`. The meter is safe for concurrent use.
 
+## Writing your own sink
+
 Because both bridges only implement the small `mamori.Meter` interface, you can also write your own sink (to statsd, a test recorder, or anything else) without pulling in either dependency. `mamori.Meter` has six methods (`RecordResolve`, `RecordRefresh`, `RecordWatchError`, `RecordStale`, `RecordChangeDropped`, `RecordApplyRejected`); a hand-written implementation must provide all six.
+
+One event lives outside that set. `mamori.BootstrapMeter` is an optional interface adding a seventh method, `RecordBootstrapWriteFailed()`, for the [bootstrap cache](/docs/usage/bootstrap-cache/) snapshot-write failure:
+
+```go
+type BootstrapMeter interface {
+	mamori.Meter
+	RecordBootstrapWriteFailed()
+}
+```
+
+mamori type-asserts for it where the write fails, so implementing it is opt-in: a sink that provides only the six `Meter` methods keeps compiling and simply never sees this event. Implement it if you use `WithBootstrapCache`, since nothing else tells you the process is running without the fallback it was configured to have. Both bridges implement it already.
 
 ## See also
 

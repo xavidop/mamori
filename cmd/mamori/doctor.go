@@ -183,6 +183,11 @@ func writeReportTable(stdout io.Writer, rep *mamori.Report) {
 // process serving what its backends say, or what a file on its disk says. A
 // process that booted from a snapshot looks identical to a healthy one in
 // every other line of this output, which is exactly why it gets its own.
+//
+// It keeps saying so after the recovery, too. Once every field resolves live
+// again, Source flips back to backend and only BootstrapStatus.Restored still
+// records how this process started; an operator asking why a pod restarted an
+// hour ago is asking exactly that.
 func writeBootstrapLine(stdout io.Writer, rep *mamori.Report) {
 	bs := rep.Bootstrap
 	if bs == nil {
@@ -197,6 +202,14 @@ func writeBootstrapLine(stdout io.Writer, rep *mamori.Report) {
 	case !bs.FingerprintMatch:
 		_, _ = fmt.Fprintf(stdout, "bootstrap cache: snapshot written %s ago, but for a DIFFERENT config struct, so it cannot be restored%s\n",
 			bs.Age.Round(time.Second), bootstrapProblemSuffix(bs))
+	case bs.Restored:
+		// Source has already flipped back to backend here: this process booted
+		// from the snapshot and has since reached the backend for every field.
+		// Restored is the only thing left that still says so, and it is what an
+		// operator looking at a pod that restarted during an outage came for.
+		// Lower case, like the other recovered states: nothing is wrong now.
+		_, _ = fmt.Fprintf(stdout, "bootstrap cache: this process booted from a snapshot and has since resolved every field live; snapshot written %s ago, matching this config\n",
+			bs.Age.Round(time.Second))
 	default:
 		_, _ = fmt.Fprintf(stdout, "bootstrap cache: snapshot written %s ago, matching this config\n", bs.Age.Round(time.Second))
 	}

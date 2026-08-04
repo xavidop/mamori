@@ -106,6 +106,11 @@ panic.
 - `reason` on the apply-rejected counter is `mamori.RejectReason`, a closed set
   of three values (`validation`, `preapply`, `derive`) so it stays a safe,
   bounded metric label.
+- `mamori_bootstrap_write_failed_total` is fed through `mamori.BootstrapMeter`,
+  an optional interface mamori type-asserts for rather than a method on
+  `mamori.Meter` itself. This bridge implements it, so the counter is recorded
+  with nothing extra to do; a hand-written sink that implements only
+  `mamori.Meter` keeps working and simply never sees this event.
 
 **Seconds, not milliseconds.** `mamori_resolve_duration_seconds` records in
 seconds, following Prometheus convention for a duration histogram
@@ -137,8 +142,9 @@ This matters for two reasons at once:
 
 `x/prom` never accepts a ref or a resolved value as an argument in the first
 place: `mamori.Meter`'s methods take only a `scheme`, a `time.Duration`, an
-`error`, or a `mamori.RejectReason`, so there is no plumbing through which
-either could reach a label.
+`error`, or a `mamori.RejectReason` (and `mamori.BootstrapMeter`'s takes
+nothing at all), so there is no plumbing through which either could reach a
+label.
 
 ## Development
 

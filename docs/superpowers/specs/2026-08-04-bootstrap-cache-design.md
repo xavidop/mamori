@@ -85,7 +85,7 @@ mamori's own backends are unreachable at the moment it is needed.
 
 ## On-disk format
 
-```
+```text
 nonce (12 bytes) || AES-256-GCM ciphertext
 ```
 

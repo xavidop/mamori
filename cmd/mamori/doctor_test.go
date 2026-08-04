@@ -493,6 +493,25 @@ func TestDoctorTableReportsTheBootstrapCache(t *testing.T) {
 			want: "for a DIFFERENT config struct",
 		},
 		{
+			// The state an operator investigating a restart lands in: the
+			// outage is over and Source has flipped back, so nothing else in
+			// this output remembers that the process started off a file.
+			name: "restored, then recovered",
+			report: mamori.Report{
+				Healthy: true, Source: mamori.SourceBackend,
+				Bootstrap: &mamori.BootstrapStatus{Present: true, Restored: true, Age: 90 * time.Second, FingerprintMatch: true},
+			},
+			want: "this process booted from a snapshot and has since resolved every field live",
+		},
+		{
+			name: "never restored",
+			report: mamori.Report{
+				Healthy: true, Source: mamori.SourceBackend,
+				Bootstrap: &mamori.BootstrapStatus{Present: true, Age: time.Minute, FingerprintMatch: true},
+			},
+			want: "bootstrap cache: snapshot written 1m0s ago, matching this config",
+		},
+		{
 			name:   "not configured at all",
 			report: mamori.Report{Healthy: true, Source: mamori.SourceBackend},
 			want:   "",

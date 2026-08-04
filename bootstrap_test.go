@@ -67,6 +67,21 @@ func TestBootstrapMaxAgeZeroIsUnbounded(t *testing.T) {
 	}
 }
 
+// TestBootstrapMaxAgeRejectsANegativeDuration pins that a negative bound fails
+// at construction rather than being clamped. Clamping it to zero would turn a
+// sign typo into the unbounded mode BootstrapMaxAge insists on writing out.
+func TestBootstrapMaxAgeRejectsANegativeDuration(t *testing.T) {
+	for _, d := range []time.Duration{-time.Nanosecond, -time.Hour} {
+		o := applyOpts(t, WithBootstrapCache("/tmp/snap", testKey(t), BootstrapMaxAge(d)))
+		if o.bootstrap == nil || o.bootstrap.err == nil {
+			t.Fatalf("a %s max age was accepted", d)
+		}
+		if !errors.Is(o.bootstrap.err, ErrInvalid) {
+			t.Fatalf("err = %v, want ErrInvalid", o.bootstrap.err)
+		}
+	}
+}
+
 // TestBootstrapKeyIsCopied pins that mutating the caller's key slice after the
 // option is built cannot change what the snapshot is sealed with.
 func TestBootstrapKeyIsCopied(t *testing.T) {

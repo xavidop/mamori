@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,6 +316,53 @@ func TestBootstrapWriteFailureDoesNotFailTheUpdate(t *testing.T) {
 	}
 	if !errors.Is(got[0], ErrUnavailable) {
 		t.Fatalf("OnError got %v, want it to wrap ErrUnavailable", got[0])
+	}
+}
+
+// meterWithoutBootstrap implements Meter and stops there, as every Meter
+// written before the bootstrap cache existed does. Counts are atomic because
+// the resolve path calls into a meter from more than one goroutine.
+type meterWithoutBootstrap struct{ resolves atomic.Int64 }
+
+func (m *meterWithoutBootstrap) RecordResolve(string, time.Duration, error) { m.resolves.Add(1) }
+func (m *meterWithoutBootstrap) RecordRefresh(string)                       {}
+func (m *meterWithoutBootstrap) RecordWatchError(string)                    {}
+func (m *meterWithoutBootstrap) RecordStale(string)                         {}
+func (m *meterWithoutBootstrap) RecordChangeDropped()                       {}
+func (m *meterWithoutBootstrap) RecordApplyRejected(RejectReason)           {}
+
+// TestBootstrapWriteFailureWithAPlainMeter pins that the write-failure counter
+// lives on the optional BootstrapMeter and not on Meter itself. Meter is
+// implemented by callers, so a sink that provides only its six methods must
+// keep compiling against WithMeter, and a failing snapshot write must record
+// nothing rather than panic on a method that sink never had.
+func TestBootstrapWriteFailureWithAPlainMeter(t *testing.T) {
+	var m Meter = &meterWithoutBootstrap{}
+	// Guards the double: if it ever grows the method, this test would go on
+	// passing while covering nothing.
+	if _, ok := m.(BootstrapMeter); ok {
+		t.Fatal("the double implements BootstrapMeter, so this test no longer covers a meter that does not")
+	}
+
+	// The same unwritable path the sibling test above uses: a directory that
+	// does not exist, so the temporary file cannot be created.
+	path := filepath.Join(t.TempDir(), "no-such-dir", "snap")
+	clk := NewFakeClock(time.Time{})
+	p := newBootProvider()
+	var got []error
+
+	cfg, err := Load[bootConfig](context.Background(),
+		append(bootOpts(p, path, clk), WithMeter(m), OnError(func(e error) { got = append(got, e) }))...)
+	if err != nil {
+		t.Fatalf("Load failed with a meter that does not implement BootstrapMeter: %v", err)
+	}
+	if cfg.Token.Reveal() != "s3cr3t" {
+		t.Fatalf("Token = %q, want the resolved value", cfg.Token.Reveal())
+	}
+	// The failure still has to reach the channels that do not depend on the
+	// meter, or dropping the counter would have dropped the report with it.
+	if len(got) != 1 {
+		t.Fatalf("OnError received %d errors, want 1: %v", len(got), got)
 	}
 }
 

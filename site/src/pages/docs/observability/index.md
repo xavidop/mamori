@@ -114,7 +114,7 @@ type BootstrapStatus struct {
 }
 ```
 
-`Source` is what to watch, and it is not the same as `Restored`. `Restored` stays true for the life of a process that booted from the snapshot, which is what a post-mortem wants. `Source` reverts to `backend` once every field has been answered by its own backend, because at that point nothing being served is still the snapshot's decision.
+`Source` is what to watch, and it is not the same as `Restored`. `Restored` stays true for the life of a process that booted from the snapshot, which is what a post-mortem wants. `Source` reverts to `backend` once every field has been answered by its own backend, because at that point nothing being served is still the snapshot's decision. `mamori doctor` renders both, so a pod that booted during an outage and has been healthy ever since still says so.
 
 Neither the snapshot's contents nor its path ever appear. The status carries metadata only, and `Problem` names a failure (a wrong key, an altered file, a drifted schema) and never any part of the file.
 

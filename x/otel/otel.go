@@ -99,7 +99,8 @@ const (
 	spanAttrRef    = "mamori.ref"
 )
 
-// meter implements mamori.Meter on top of an OpenTelemetry metric.Meter.
+// meter implements mamori.Meter on top of an OpenTelemetry metric.Meter, plus
+// the optional mamori.BootstrapMeter.
 //
 // It is safe for concurrent use: the underlying OTel instruments are
 // concurrency-safe and the struct is immutable after construction.
@@ -113,6 +114,12 @@ type meter struct {
 	applyRejected   metric.Int64Counter
 	bootstrapFailed metric.Int64Counter
 }
+
+// mamori only reaches RecordBootstrapWriteFailed through a type assertion for
+// the optional mamori.BootstrapMeter, so dropping or renaming that method would
+// not break any build: the counter would just silently stop being recorded.
+// This turns that into a compile error.
+var _ mamori.BootstrapMeter = (*meter)(nil)
 
 // NewMeter builds a mamori.Meter backed by the given OpenTelemetry meter. It
 // creates seven instruments up front:
