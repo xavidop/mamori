@@ -79,7 +79,10 @@ func TestResolveErrorMessagePreservesContext(t *testing.T) {
 	if !errors.Is(err, mamori.ErrPermissionDenied) {
 		t.Fatalf("classification lost: %v", err)
 	}
-	for _, want := range []string{"db-password", "403"} {
+	for _, want := range []string{"db-password", "403", "injected failure"} {
+		// "injected failure" is the fake's response body. Without it the
+		// comment above promises the upstream body reaches the message while
+		// nothing checks it, so a regression dropping only the body passes.
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error message lost %q: %v", want, err)
 		}

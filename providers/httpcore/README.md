@@ -556,6 +556,47 @@ loop shape against `hashicorp/consul/api` blocking queries and is the intended
 second consumer; it is deliberately not migrated yet, because in this repository
 an abstraction lands *with* its second consumer rather than ahead of it.
 
+## Server-sent events
+
+`SSEDecoder` turns a byte stream into discrete SSE frames under a memory bound;
+`SSEStream` is the thin `net/http` binding that ties one response body to a
+context. `providers/mamori` and `providers/firebase-rtdb` both read their watch
+streams through them.
+
+```go
+s := httpcore.NewSSEStream(ctx, resp, httpcore.SSEConfig{}) // resp status already accepted
+defer func() { _ = s.Close() }()
+
+for {
+    ev, err := s.Next() // ev.Name is the "event" field, ev.Data the joined "data" fields
+    if err != nil {
+        return err // io.EOF on a clean end, ctx.Err() once the context is cancelled
+    }
+    // ev.Data is freshly allocated per frame and safe to retain.
+}
+```
+
+`SSEConfig` carries **two** bounds, and the zero value selects both defaults:
+
+| Field | Default | Bounds |
+| --- | --- | --- |
+| `MaxLine` | `DefaultSSEMaxLine`, 1 MiB | One line, including one the server never terminates with a newline. |
+| `MaxFrame` | `DefaultSSEMaxFrame`, 1 MiB | One frame's total accumulated `data`, joining newlines included, however many lines it took. |
+
+They are two roofs, not one. `MaxFrame` counts a frame's data only, so an
+`event` name is bounded by `MaxLine` instead - a 900-byte name passes a
+`MaxFrame` of 16. Peak memory while one frame accumulates is `MaxFrame` plus
+`MaxLine`, not `MaxFrame` alone.
+
+Crossing either bound returns `ErrSSELineTooLong` or `ErrSSEFrameTooLong`. Both
+carry `mamori.ErrUnavailable`, not `mamori.ErrInvalid`, so the stream is torn
+down and re-established rather than the field being marked permanently
+unhealthy.
+
+Raise both together if a backend legitimately sends larger frames. Raising only
+one still rejects the payload, since a large frame usually arrives as a single
+large line.
+
 ## What this package does not do
 
 - **No retry.** mamori's reconciler already backs off and retries a failed
@@ -566,8 +607,8 @@ an abstraction lands *with* its second consumer rather than ahead of it.
   string from the caller because a response body can contain the resolved
   value itself, and only the provider knows which field of its backend's
   error shape is safe to surface.
-- **No SSE.** Server-sent events are a planned, separate capability, not part
-  of this package.
+- **No SSE reconnect loop.** `SSEDecoder`/`SSEStream` decode one connection.
+  Deciding when to redial, and how long to wait first, stays with the provider.
 
 ## Writing a provider on httpcore
 

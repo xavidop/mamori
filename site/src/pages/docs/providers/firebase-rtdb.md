@@ -61,6 +61,10 @@ Beyond the not-found case above, this provider has no SDK-specific error taxonom
 
 `Watch` uses the Realtime Database streaming endpoint (server-sent events): the server pushes `put` and `patch` events as the data changes, and mamori emits an update on each. This is a genuine realtime subscription.
 
+One streamed change is capped at 1 MiB by default. The database opens every stream with a `put` of the whole watched node, so that cap is in practice the largest node you can watch: a bigger node reports `Update{Err: ...}` on every attempt instead of ever delivering a change. Raise it with `WithMaxFrameBytes(n)` to watch a node that is legitimately larger. `Resolve` is unaffected either way.
+
+A dropped connection is reconnected after a wait that starts at `WithReconnectBackoff` (default 2s), doubles on each attempt that delivers nothing, caps at 30s, and drops back to the floor as soon as a stream delivers something.
+
 ## Configuration
 
 ```go
@@ -68,6 +72,8 @@ import rtdbprov "github.com/xavidop/mamori/providers/firebase-rtdb"
 
 mamori.WithProvider(rtdbprov.New(
 	rtdbprov.WithDatabaseURL("https://my-project-default-rtdb.firebaseio.com"),
+	rtdbprov.WithReconnectBackoff(2*time.Second), // optional; base reconnect wait
+	rtdbprov.WithMaxFrameBytes(4<<20),            // optional; ceiling on one streamed change
 ))
 ```
 

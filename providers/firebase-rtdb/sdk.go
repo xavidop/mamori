@@ -1,7 +1,6 @@
 package firebasertdb
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/db"
+	"github.com/xavidop/mamori/providers/httpcore"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -40,6 +40,9 @@ type sdkBackend struct {
 	dbURL       string
 	tokenSource oauth2.TokenSource
 	httpClient  *http.Client
+	// sse bounds the decoder every stream is read through. Its zero value
+	// selects httpcore's one-megabyte defaults; WithMaxFrameBytes replaces it.
+	sse httpcore.SSEConfig
 }
 
 // compile-time check that sdkBackend satisfies the provider's backend contract.
@@ -48,7 +51,7 @@ var _ backend = (*sdkBackend)(nil)
 // newSDKBackend builds the live backend from Application Default Credentials and
 // the configured (or FIREBASE_DATABASE_URL) database URL. It is the default
 // Provider.newBackend and is invoked lazily on first use.
-func newSDKBackend(ctx context.Context, dbURL, projectID string) (backend, error) {
+func newSDKBackend(ctx context.Context, dbURL, projectID string, sse httpcore.SSEConfig) (backend, error) {
 	if dbURL == "" {
 		dbURL = os.Getenv("FIREBASE_DATABASE_URL")
 	}
@@ -78,6 +81,7 @@ func newSDKBackend(ctx context.Context, dbURL, projectID string) (backend, error
 		dbURL:       strings.TrimRight(dbURL, "/"),
 		tokenSource: creds.TokenSource,
 		httpClient:  &http.Client{},
+		sse:         sse,
 	}, nil
 }
 
@@ -122,88 +126,29 @@ func (b *sdkBackend) Stream(ctx context.Context, path string) (changeStream, err
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 	}
-	return &sseStream{resp: resp, dec: newSSEDecoder(resp.Body)}, nil
+	// b.sse bounds the read. Its zero value selects httpcore's one-megabyte
+	// ceilings on a single line and on one frame's accumulated data, and
+	// WithMaxFrameBytes moves both for a caller who watches a larger node.
+	//
+	// This provider's own decoder had NEITHER bound: it read a line with
+	// bufio.Reader.ReadBytes, which grows until a newline arrives and nothing
+	// obliges a Realtime Database endpoint (or anything impersonating one) to
+	// ever send one, and it appended data: lines into one payload with no total.
+	// Either shape was an unbounded allocation driven entirely by the far end of
+	// the socket.
+	return &sseStream{s: httpcore.NewSSEStream(ctx, resp, b.sse)}, nil
 }
 
-// sseStream adapts an HTTP Server-Sent-Events response to changeStream.
-type sseStream struct {
-	resp *http.Response
-	dec  *sseDecoder
+// sseStream adapts httpcore's bounded SSE stream to changeStream.
+//
+// The adapter exists rather than changeStream being redefined in httpcore's
+// terms because changeStream is what the in-memory test fake implements too, and
+// that fake has no HTTP response to hand out.
+type sseStream struct{ s *httpcore.SSEStream }
+
+func (s *sseStream) Recv() (string, []byte, error) {
+	ev, err := s.s.Next()
+	return ev.Name, ev.Data, err
 }
 
-func (s *sseStream) Recv() (string, []byte, error) { return s.dec.next() }
-
-func (s *sseStream) Close() error { return s.resp.Body.Close() }
-
-// sseDecoder parses a Server-Sent-Events byte stream into discrete events. It is
-// deliberately independent of net/http so the parsing logic is unit-testable
-// against any io.Reader.
-type sseDecoder struct {
-	r *bufio.Reader
-}
-
-func newSSEDecoder(r io.Reader) *sseDecoder {
-	return &sseDecoder{r: bufio.NewReader(r)}
-}
-
-// next reads and returns the next complete event (its "event" name and
-// concatenated "data" payload). A blank line dispatches the accumulated event.
-// It returns io.EOF at the end of the stream.
-func (d *sseDecoder) next() (event string, data []byte, err error) {
-	var (
-		name      string
-		payload   []byte
-		haveField bool
-	)
-	for {
-		line, err := d.r.ReadBytes('\n')
-		if len(line) == 0 && err != nil {
-			// EOF (or read error) with no trailing data.
-			return "", nil, err
-		}
-		line = bytes.TrimRight(line, "\r\n")
-
-		if len(line) == 0 {
-			// Blank line: dispatch if we have accumulated an event, else keep
-			// reading (leading/duplicate blank lines are ignored).
-			if haveField {
-				return name, payload, nil
-			}
-			if err != nil {
-				return "", nil, err
-			}
-			continue
-		}
-		if line[0] == ':' {
-			// Comment / heartbeat line; ignore.
-			if err != nil {
-				return "", nil, err
-			}
-			continue
-		}
-
-		field, value, _ := bytes.Cut(line, []byte(":"))
-		value = bytes.TrimPrefix(value, []byte(" "))
-		switch string(field) {
-		case "event":
-			name = string(value)
-			haveField = true
-		case "data":
-			if payload != nil {
-				payload = append(payload, '\n')
-			}
-			payload = append(payload, value...)
-			haveField = true
-		default:
-			// "id", "retry", and unknown fields are ignored.
-		}
-
-		if err != nil {
-			// Stream ended mid-event; dispatch what we have if anything.
-			if haveField {
-				return name, payload, nil
-			}
-			return "", nil, err
-		}
-	}
-}
+func (s *sseStream) Close() error { return s.s.Close() }
