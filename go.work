@@ -22,6 +22,7 @@ use (
 	./providers/gcs
 	./providers/goff
 	./providers/growthbook
+	./providers/hcp-vault-secrets
 	./providers/httpcore
 	./providers/https
 	./providers/infisical

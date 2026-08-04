@@ -35,7 +35,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `azure-kv://` | Azure | yes | poll | ✅ |
 | `azure-appconfig://` | Azure AppConfig | no | poll | ✅ |
 | `doppler://` | Doppler | yes | poll | ✅ |
-| `infisical://` | Infisical | yes | poll | ✅ |
+| `hcp-vs://` | HCP Vault Secrets | yes | poll | ✅ |
 | `scaleway-sm://` | Scaleway Secret Manager | yes | poll | ✅ |
 | `op://` | 1Password | yes | poll | ✅ |
 | `sops://` | SOPS | yes | fsnotify | ✅ |

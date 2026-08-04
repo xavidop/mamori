@@ -178,6 +178,13 @@ updates:
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:httpcore]
   # Standard library only, on top of httpcore. Same reasoning again.
+  # Standard library only, on top of httpcore, and deliberately NOT HashiCorp's
+  # hcp-sdk-go. Same reasoning as https below: this entry will rarely fire, and
+  # the coverage check requires every module to be listed regardless.
+  - package-ecosystem: gomod
+    directory: "/providers/hcp-vault-secrets"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:hcp-vault-secrets]
   - package-ecosystem: gomod
     directory: "/providers/https"
     schedule: { interval: weekly }
