@@ -54,6 +54,31 @@ HEALTHY: 2 field(s), snapshot 3 (live 3), generated 2026-07-26T10:00:00Z
 # ...re-renders every 5s until Ctrl-C
 ```
 
+## The bootstrap cache line
+
+When the target process uses the [bootstrap cache](/docs/usage/bootstrap-cache/), both commands print one extra line under the summary saying whether this process is serving live values or a snapshot off its disk. A process without the cache prints nothing here.
+
+```bash
+$ mamori doctor --endpoint https://svc.internal:9090
+PATH            SCHEME  REF                     VERSION  STALE  LAST_KIND  LAST_ERROR  SENSITIVE  DERIVED
+Redis.Password  aws-sm  aws-sm://prod/redis-pw  1        false  -          -           true       false
+
+HEALTHY: 1 field(s), snapshot 1 (live 1), generated 2026-07-26T10:00:00Z
+BOOTSTRAP CACHE: serving a snapshot written 2h0m0s ago; the backend has not been reached for every field since this process started
+```
+
+| Line | What it means |
+| --- | --- |
+| `BOOTSTRAP CACHE: serving a snapshot written <age> ago` | Right now this process is answering from disk. The only upper-case form, because it is the only one where something is still wrong. |
+| `bootstrap cache: this process booted from a snapshot and has since resolved every field live` | It restarted during an outage and has recovered. Nothing to do. |
+| `bootstrap cache: snapshot written <age> ago, matching this config` | Healthy, with a usable fallback in place. |
+| `bootstrap cache: no snapshot` | There is nothing to fall back on, so a restart during an outage would fail. |
+| `bootstrap cache: ... for a DIFFERENT config struct, so it cannot be restored` | The snapshot predates a change to your config struct. Deploy has not written a new one yet. |
+
+The last two are the reason to run this *before* an incident: a fallback is otherwise exercised only during the outage it exists for.
+
+A snapshot never changes the exit code. Serving from the cache is still exit `0`, because every field is fresh and none has a terminal error, so read this line rather than branching on the status alone.
+
 ## Exit codes
 
 Both live commands share one exit-code table, so a script can tell "my config is broken" (`1`) apart from "I couldn't even see my config" (`2`/`3`/`4`).
@@ -100,4 +125,4 @@ The flag is validated before any network call, so a typo fails immediately rathe
 
 ## See also
 
-[CLI overview](/docs/cli/). [Observability](/docs/observability/) covers the `Report` shape these render; [Config server](/docs/server/) shares the same endpoint forms and auth schemes.
+[CLI overview](/docs/cli/). [Observability](/docs/observability/) covers the `Report` shape these render; [Config server](/docs/server/) shares the same endpoint forms and auth schemes; [Bootstrap cache](/docs/usage/bootstrap-cache/) explains the snapshot line above.

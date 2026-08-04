@@ -32,6 +32,21 @@ Blocking is all-or-nothing: mamori cannot tell which fields a hook reads, so one
 
 `Doctor` executes your hook code, so a hook with a side effect runs for real on every `Doctor` run.
 
+## Your fallback is checked while the backends are still up
+
+If you configure the [bootstrap cache](/docs/usage/bootstrap-cache/), `Doctor` also inspects the snapshot on disk and fills in `Report.Bootstrap`: whether one exists, whether it decrypts with the key this build is configured with, and whether it still fits this build's config struct.
+
+It never restores from it. Every value a `Doctor` report describes came from the backend it just called, so `Report.Source` stays `backend`; the `Bootstrap` block beside it describes the file this process *would* fall back to, not where these values came from.
+
+```go
+if bs := rep.Bootstrap; bs != nil && (!bs.Present || !bs.FingerprintMatch) {
+	t.Fatalf("no usable bootstrap snapshot (present=%v, matches this build=%v): %s",
+		bs.Present, bs.FingerprintMatch, bs.Problem)
+}
+```
+
+That check earns its place in a preflight because a bootstrap cache is otherwise exercised only during the outage it exists for, which is the worst possible moment to discover the key is wrong or that the snapshot predates your last config-struct change. Both fields are absent on a process that does not configure the cache.
+
 ## Run it before a watcher starts
 
 ```go
@@ -80,3 +95,4 @@ That catches a rotated-away secret, a missing IAM permission, or a typo'd ref be
 - [Observability overview](/docs/observability/) - `Status` and `Health` for a running watcher, and the `Report` shape.
 - [HTTP exposure](/docs/observability/admin/) - serve the same `Report` over HTTP.
 - [Error kinds](/docs/concepts/error-kinds/) - what each `LastKind` value means.
+- [Bootstrap cache](/docs/usage/bootstrap-cache/) - the snapshot this preflight inspects.

@@ -20,6 +20,35 @@ Every other path, and every other method, is `404`.
 
 **`WithRefVars` values must not be secrets.** After [`${VAR}` interpolation](/docs/concepts/ref-interpolation/) expands a ref, that ref's `Raw` holds the expanded string - and this endpoint's `Report` is exactly where it becomes visible, alongside `Status()` and `mamori doctor` output. Variables are for environment names, regions, service names, and tenant identifiers, not for anything that itself needs to stay confidential.
 
+## Telling a live pod from one that booted on a snapshot
+
+With the [bootstrap cache](/docs/usage/bootstrap-cache/) configured, `GET /` answers the question you actually have during an incident: is this pod serving what its backends said, or what a file on its disk held?
+
+```json
+{
+  "Source": "bootstrap_cache",
+  "Bootstrap": {
+    "Present": true,
+    "Restored": true,
+    "WrittenAt": "2026-08-04T17:47:40Z",
+    "Age": 7200000000000,
+    "FingerprintMatch": true,
+    "Problem": ""
+  },
+  "Healthy": true,
+  "Snapshot": 1,
+  "Live": 1
+}
+```
+
+**Alert on `Source`.** It reads `bootstrap_cache` only while the snapshot is still covering for at least one field, and returns to `backend` on its own once every field has been resolved live, so the alert clears when the outage does.
+
+**Check `Restored` afterwards.** It stays `true` for the whole life of a pod that booted from disk, which is how you tell an hour later that this pod restarted *during* the outage rather than after it. `Age` is the snapshot's age in nanoseconds and `WrittenAt` the instant it was written, so "how old is the config this pod is serving" is one field. `Problem` names the reason when a snapshot exists but could not be used, a wrong key being the common one, and `FingerprintMatch` is `false` when the snapshot was written by a build whose config struct no longer matches this one.
+
+`Healthy` describes fields, not the snapshot, so it stays `true` while serving a restored config. That is deliberate: the pod joins the load balancer instead of the outage becoming total. What drops it out once the snapshot passes `BootstrapMaxAge` is `GET /healthz`, which returns `503` for a config frozen longer than you allowed.
+
+On a process that does not configure the cache both keys are absent from the body entirely, so anything already parsing this endpoint sees exactly what it saw before.
+
 ## Mount Handler on your own mux
 
 ```go
@@ -121,3 +150,4 @@ An unauthenticated caller, such as a kubelet probe, always gets a bare status (`
 - [Rotation safety](/docs/usage/rotation/) - `PreApply` and `w.Refresh`, which a hand-rolled `/refresh` route above would call.
 - [Config server](/docs/server/) - serves resolved config *values*, not metadata.
 - [Auth](/docs/auth/) - `WithAuth`, the shipped schemes, and credential rotation.
+- [Bootstrap cache](/docs/usage/bootstrap-cache/) - the option behind the `Source` and `Bootstrap` fields above.
