@@ -21,7 +21,7 @@ start.
 
 ## Scheme
 
-```
+```text
 infisical://<secretName>                    secret from the configured project
 infisical://<secretName>?project=<id>       explicit project
 infisical://<secretName>?env=<slug>         explicit environment
