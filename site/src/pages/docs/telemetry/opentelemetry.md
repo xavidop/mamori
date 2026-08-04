@@ -110,7 +110,7 @@ The seven instruments and their attributes:
 - `status` is `error` when the resolve returned a non-nil error, otherwise `ok`.
 - `mamori.change.dropped.count` carries no attributes at all: the bounded `OnChange` dispatch queue it reports on is a process-wide property, not a per-scheme one. **This is the counter to alert on**: a non-zero rate means an `OnChange` handler is not keeping up with the rate of applied changes, and the oldest change events are being silently discarded as a result.
 - `reason` on the apply-rejected counter carries `mamori.RejectReason`, a closed set of exactly three values (`validation`, `preapply`, `derive`) so it stays a safe, bounded metric label rather than an unbounded free-form string.
-- `mamori.bootstrap.write.failed.count` arrives through `mamori.BootstrapMeter`, an optional interface rather than a method on `mamori.Meter`. This bridge implements it, so the counter records itself; see [Writing your own sink](#writing-your-own-sink) if you do not use a bridge.
+- `mamori.bootstrap.write.failed.count` counts [bootstrap cache](/docs/usage/bootstrap-cache/) snapshot writes that failed. This bridge records it with nothing extra to do; see [Writing your own sink](#writing-your-own-sink) if you do not use a bridge.
 
 The instrument names are also exported as constants (`MetricResolveDuration`, `MetricRefreshCount`, `MetricWatchErrors`, `MetricStaleCount`, `MetricChangeDroppedCount`, `MetricApplyRejectedCount`).
 
@@ -155,7 +155,7 @@ type BootstrapMeter interface {
 }
 ```
 
-mamori type-asserts for it where the write fails, so implementing it is opt-in: a sink that provides only the six `Meter` methods keeps compiling and simply never sees this event. Implement it if you use `WithBootstrapCache`, since nothing else tells you the process is running without the fallback it was configured to have. Both bridges implement it already.
+Implementing it is opt-in: a sink providing only the six `Meter` methods keeps compiling and never sees this event. Add it if you use `WithBootstrapCache`. Both bridges implement it already.
 
 ## See also
 

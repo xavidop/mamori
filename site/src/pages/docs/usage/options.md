@@ -38,7 +38,7 @@ Groups below are ordered by what you are trying to do, not alphabetically, becau
 
 ### The snapshot is a credential at rest
 
-**Enabling `WithBootstrapCache` creates a file holding live credentials that did not exist before.** It is sealed with AES-256-GCM and written `0600`, but the trade is a startup failure for an artifact an attacker with disk access and the key could read. See [Bootstrap cache](/docs/usage/bootstrap-cache/) for how to supply the key, which failures fall back and which deliberately do not, and what `BootstrapMaxAge` should be set to.
+**Enabling `WithBootstrapCache` creates a file holding live credentials that did not exist before.** It is sealed with AES-256-GCM and written `0600`. See [Bootstrap cache](/docs/usage/bootstrap-cache/) for how to supply the key, which failures fall back, and what to set `BootstrapMaxAge` to.
 
 ### Backoff is disabled by default
 

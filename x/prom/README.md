@@ -107,10 +107,9 @@ panic.
   of three values (`validation`, `preapply`, `derive`) so it stays a safe,
   bounded metric label.
 - `mamori_bootstrap_write_failed_total` is fed through `mamori.BootstrapMeter`,
-  an optional interface mamori type-asserts for rather than a method on
-  `mamori.Meter` itself. This bridge implements it, so the counter is recorded
-  with nothing extra to do; a hand-written sink that implements only
-  `mamori.Meter` keeps working and simply never sees this event.
+  an optional interface this bridge implements, so the counter is recorded with
+  nothing extra to do. A sink implementing only `mamori.Meter` keeps working and
+  never sees this event.
 
 **Seconds, not milliseconds.** `mamori_resolve_duration_seconds` records in
 seconds, following Prometheus convention for a duration histogram

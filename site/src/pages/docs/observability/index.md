@@ -101,7 +101,7 @@ Only a [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) report 
 
 ### The bootstrap cache block
 
-`Source` and `Bootstrap` are `backend` and `nil` for every process not using [`WithBootstrapCache`](/docs/usage/bootstrap-cache/). With it configured, they answer the one question the rest of a report cannot: is this process serving what its backends say, or what a file on its disk says.
+`Source` and `Bootstrap` are `backend` and `nil` for every process not using [`WithBootstrapCache`](/docs/usage/bootstrap-cache/). With it configured, they say whether this process is serving what its backends answered or what a file on its disk held.
 
 ```go
 type BootstrapStatus struct {
@@ -114,9 +114,9 @@ type BootstrapStatus struct {
 }
 ```
 
-`Source` is what to watch, and it is not the same as `Restored`. `Restored` stays true for the life of a process that booted from the snapshot, which is what a post-mortem wants. `Source` reverts to `backend` once every field has been answered by its own backend, because at that point nothing being served is still the snapshot's decision. `mamori doctor` renders both, so a pod that booted during an outage and has been healthy ever since still says so.
+`Source` is what to watch, and it is not the same as `Restored`. `Restored` stays true for the life of a process that booted from the snapshot; `Source` reverts to `backend` once every field has been answered by its own backend. `mamori doctor` renders both.
 
-Neither the snapshot's contents nor its path ever appear. The status carries metadata only, and `Problem` names a failure (a wrong key, an altered file, a drifted schema) and never any part of the file.
+Neither the snapshot's contents nor its path ever appear. `Problem` names a failure (a wrong key, an altered file, a drifted schema) and never any part of the file.
 
 ## Health: one yes/no for a probe
 
@@ -149,7 +149,7 @@ See [Error kinds](/docs/concepts/error-kinds/) for the full list of `Kind` value
 
 ### One more rule with a bootstrap cache
 
-A process serving a configuration [restored from the bootstrap cache](/docs/usage/bootstrap-cache/) passes `Health` while that snapshot is within `BootstrapMaxAge`, so the pod joins the load balancer and a backend outage does not also become a total outage. Past the bound, `Health` returns a `*BootstrapStaleError` and the pod drops out of rotation.
+A process serving a configuration [restored from the bootstrap cache](/docs/usage/bootstrap-cache/) passes `Health` while that snapshot is within `BootstrapMaxAge`. Past the bound, `Health` returns a `*BootstrapStaleError` and the pod drops out of rotation.
 
 ```go
 var stale *mamori.BootstrapStaleError
@@ -158,7 +158,7 @@ if errors.As(w.Health(), &stale) {
 }
 ```
 
-When both a field is unhealthy *and* the snapshot is too old, the two errors are joined; `errors.As` reaches either. A process not using `WithBootstrapCache` is unaffected and still gets a plain `*HealthError`.
+When both a field is unhealthy *and* the snapshot is too old, the two errors are joined; `errors.As` reaches either. A process not using `WithBootstrapCache` still gets a plain `*HealthError`.
 
 ## Next
 

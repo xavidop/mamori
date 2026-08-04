@@ -164,39 +164,16 @@ mamori.WithBootstrapCache("/var/lib/app/mamori.snap", key,
 ```
 
 - **It creates a file holding live credentials at rest that did not exist
-  before.** Encryption and `0600` are the mitigation; the trade is a startup
-  failure for a file an attacker with disk access and the key could read. Say so
-  when you recommend it.
-- **Fallback, never a fast path.** Every start resolves normally first; the
-  snapshot is read only if that fails.
-- **Only `unavailable` and `rate_limited` fall back.** `not_found`,
-  `permission_denied`, `unauthenticated`, `invalid` and `unknown` mean the
-  backend answered and said no, so they fail the start rather than undoing a
-  revocation. An expired `Value.NotAfter` is refused for the same reason.
-- Written on every applied update, after validation, every `WithDerive` hook and
-  `PreApply`. A write failure never fails the update: it reaches `OnError`, the
-  logger, and a `bootstrap_write_failed` counter. That counter goes through
-  `mamori.BootstrapMeter`, an OPTIONAL interface adding
-  `RecordBootstrapWriteFailed()` to `Meter`; `x/otel` and `x/prom` implement it,
-  a hand-written `Meter` need not. A restore does not rewrite the file, so its
-  age is not reset.
-- A restored config is replayed through the ordinary decode, derive, validate
-  and `PreApply` path. Resolved values are cached rather than `T` because
-  `secret.String` marshals to `[REDACTED]`, so a snapshot of `T` would lose
-  every secret.
-- `Health()` passes inside `BootstrapMaxAge` (default 24h) so the pod serves
-  traffic, and returns a `*BootstrapStaleError` past it. Set it to the rotation
-  window of the shortest-lived credential; `0` is unbounded and must be written
-  explicitly, and a negative duration is rejected with `ErrInvalid` rather than
-  clamped.
-- `Report.Source` reads `bootstrap_cache` while the snapshot is deciding what is
-  served, and `Report.Bootstrap` carries its presence, age, fingerprint match,
-  and `Restored` (how the process booted, which never changes back, so `doctor`
-  still reports the restore after every field is live again). Neither the file's
-  contents nor its path ever appear.
-- Changing the config struct invalidates an older snapshot (schema fingerprint).
-  Put the file on a volume that outlives the container, and give each replica
-  its own path.
+  before.** Say so when you recommend it.
+- **Fallback, never a fast path.** Every start resolves normally first. The
+  snapshot is read only if that fails, and only on `unavailable` or
+  `rate_limited`; `not_found`, `permission_denied`, `unauthenticated`, `invalid`
+  and `unknown` fail the start, as does a record whose `Value.NotAfter` passed.
+- `Health()` passes inside `BootstrapMaxAge` (default 24h) and returns a
+  `*BootstrapStaleError` past it. Set it to the rotation window of the
+  shortest-lived credential; `0` is unbounded and must be written explicitly.
+- Changing the config struct invalidates an older snapshot. Give each replica
+  its own path, on a volume that outlives the container.
 
 ## Force an immediate refresh
 
