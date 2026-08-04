@@ -68,6 +68,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `flipt://` | Flipt | no | poll | ✅ |
 | `goff://` | GO Feature Flag | no | poll | ✅ |
 | `openfeature://` | OpenFeature | no | poll | ✅ |
+| `posthog://` | PostHog | no | poll | ✅ |
 | `viper://` | Viper | no | poll | n/a (no error surface) |
 
 ## Choosing and configuring a provider
