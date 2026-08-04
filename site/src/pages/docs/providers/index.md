@@ -15,7 +15,7 @@ Every provider that ships in this repo passes the conformance kit (see **Write a
 
 The **Errors** column shows which providers classify a failure beyond `not_found`, mapping backend-specific errors onto `mamori.ErrorKind` values like `permission_denied`, `unauthenticated`, `unavailable`, `rate_limited`, and `invalid`. The classification sweep across the whole catalog is now complete, and every provider falls into exactly one of three honest states:
 
-- **✅** - classifies real backend errors beyond `not_found`: thirty-seven providers across thirty-two modules (the `env:` / `dotenv://` / `file://` / `exec:` rows are one core module, counted as four providers).
+- **✅** - classifies real backend errors beyond `not_found`: thirty-eight providers across thirty-three modules (the `env:` / `dotenv://` / `file://` / `exec:` rows are one core module, counted as four providers).
 - **no (chain preserved)** - `firebase-rtdb`, `growthbook`, and `flagsmith` have no backend-specific error vocabulary to map, so a non-not-found failure still reports `unknown`, but `Resolve` wraps the underlying error with `%w` rather than flattening it, so `errors.Is`/`errors.As` still reach it. This is not classification; it is proof that the chain survives even where there is nothing more specific to name.
 - **n/a (no error surface)** - `unleash`, `configcat`, `split`, and `viper` wrap a client surface with no per-key error at all: the flag SDKs return only `bool`/`string`, and Viper's own read API has no error return (`Get` returns `any`, `IsSet` returns `bool`). `Resolve` can only ever produce `not_found` or a client-construction error. Each is explicitly exempt from the conformance kit's `ErrorClassification` case via `providertest.Config.NoResolveErrors`, a deliberate, greppable opt-out rather than a silent gap.
 
@@ -47,6 +47,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `redis://` | Redis | no | **native** (keyspace) | ✅ |
 | `consul://` | Consul | no | **native** | ✅ |
 | `etcd://` | etcd | no | **native** | ✅ |
+| `nacos://` | Nacos | no | **native** | ✅ |
 | `vercel-gc://` | Vercel Global Config | no | poll (digest) | ✅ |
 | `cloudflare-kv://` | Cloudflare Workers KV | no | poll | ✅ |
 | `https://` | Generic HTTPS | per-endpoint | poll (conditional GET) | ✅ |
@@ -86,7 +87,7 @@ The [mamori (client)](/docs/providers/mamori/) provider is the one shipped provi
 
 ## Watch behavior
 
-- **native** - the backend pushes changes (Kubernetes watch API, Consul blocking queries, a mamori config server's `/v1/watch` Server-Sent Events stream). mamori subscribes directly.
+- **native** - the backend pushes changes (Kubernetes watch API, Consul blocking queries, a Nacos long-poll listener, a mamori config server's `/v1/watch` Server-Sent Events stream). mamori subscribes directly.
 - **fsnotify** - a local file is watched for writes (built-in `file://`, `sops://`).
 - **lease-aware poll** - polling, but `Value.NotAfter` from a Vault lease triggers a refresh before expiry.
 - **poll** - mamori polls on `WithPollInterval` with jitter, using `Value.Version` to detect change.

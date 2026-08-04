@@ -35,6 +35,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `k8s` | `k8s-secret://` `k8s-cm://` | `k8s-secret://ns/name#key` |
 | `consul` | `consul://` | `consul://app/config` |
 | `etcd` | `etcd://` | `etcd://app/config` |
+| `nacos` | `nacos://` | `nacos://prod/db.json#password` |
 | `vercel-gc` | `vercel-gc://` | `vercel-gc://my-flag`, `vercel-gc://ecfg_abc/my-flag` |
 | `cloudflare-kv` | `cloudflare-kv://` | `cloudflare-kv://log-level`, `cloudflare-kv://log-level?namespace=abcd1234` |
 | `https` | `https://` | generic REST config/secrets. The authority is a **registered `Endpoint.Name`, not a hostname** - `https://billing/cfg#/db/pass` resolves against whatever `BaseURL` the endpoint named `billing` was registered with via `httpsprov.New`, never against a host literally named `billing`. **This is the one module you do NOT blank-import**: it has no `init`, because an `Endpoint` is entirely operator-supplied and `New` returns an error. Import it normally, call `httpsprov.New(...)`, and pass the result to `mamori.WithProvider`. |

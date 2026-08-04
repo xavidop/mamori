@@ -39,7 +39,7 @@ go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
 go get github.com/xavidop/mamori/providers/https          # https:// (generic REST)
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
-# ... gcp, azure, consul, doppler, onepassword, sops
+# ... gcp, azure, consul, doppler, nacos, onepassword, sops
 
 go get github.com/xavidop/mamori/providers/httpcore       # no scheme: the shared HTTP core
 ```
@@ -140,6 +140,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/dynamodb` | `dynamodb://` | poll | ✅ |
 | `providers/redis` | `redis://` | **native** (keyspace notifications) | ✅ |
 | `providers/etcd` | `etcd://` | **native** (watch API) | ✅ |
+| `providers/nacos` | `nacos://` | **native** (long-poll listener) | ✅ |
 | `providers/vercel-gc` | `vercel-gc://` | poll (digest) | ✅ |
 | `providers/cloudflare-kv` | `cloudflare-kv://` | poll | ✅ |
 | `providers/https` | `https://` (generic, operator-declared endpoints) | poll (conditional GET) | ✅ |

@@ -29,6 +29,7 @@ use (
 	./providers/mamori
 	./providers/mongodb
 	./providers/mysql
+	./providers/nacos
 	./providers/onepassword
 	./providers/openfeature
 	./providers/postgres

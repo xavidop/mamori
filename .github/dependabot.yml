@@ -58,6 +58,13 @@ updates:
     directory: "/providers/etcd"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:etcd]
+  # Standard library only, on top of httpcore: the Nacos Open API is plain HTTP
+  # and the nacos-sdk-go is deliberately not used. The entry stays so the
+  # coverage check passes and so a future dependency is picked up automatically.
+  - package-ecosystem: gomod
+    directory: "/providers/nacos"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:nacos]
   - package-ecosystem: gomod
     directory: "/providers/redis"
     schedule: { interval: weekly }
