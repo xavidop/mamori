@@ -171,6 +171,14 @@ updates:
     directory: "/providers/https"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:https]
+  # Standard library only, on top of httpcore, and deliberately not a Heroku
+  # SDK: the vendor publishes none for Go and the read path is one documented
+  # GET. Same reasoning again - this entry will rarely fire, and the coverage
+  # check requires every module to be listed regardless.
+  - package-ecosystem: gomod
+    directory: "/providers/heroku"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:heroku]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.

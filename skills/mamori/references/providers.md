@@ -37,6 +37,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `etcd` | `etcd://` | `etcd://app/config` |
 | `vercel-gc` | `vercel-gc://` | `vercel-gc://my-flag`, `vercel-gc://ecfg_abc/my-flag` |
 | `cloudflare-kv` | `cloudflare-kv://` | `cloudflare-kv://log-level`, `cloudflare-kv://log-level?namespace=abcd1234` |
+| `heroku` | `heroku://` | Heroku config vars. `heroku://DATABASE_URL`, `heroku://my-app/API_TOKEN`, `heroku://SERVICE_ACCOUNT#/private_key`. The grammar is `heroku://<VAR>` or `heroku://<app>/<VAR>`; a third segment is refused. App precedence: ref path > `WithApp` > `HEROKU_APP` > `HEROKU_APP_NAME` (dyno metadata). Auth is `HEROKU_API_KEY`. **A `BatchProvider`**: one GET returns every config var of an app, so N refs cost one request per app. **Always `Sensitive`** - add-ons write `DATABASE_URL` into the same namespace as `LOG_LEVEL`. |
 | `https` | `https://` | generic REST config/secrets. The authority is a **registered `Endpoint.Name`, not a hostname** - `https://billing/cfg#/db/pass` resolves against whatever `BaseURL` the endpoint named `billing` was registered with via `httpsprov.New`, never against a host literally named `billing`. **This is the one module you do NOT blank-import**: it has no `init`, because an `Endpoint` is entirely operator-supplied and `New` returns an error. Import it normally, call `httpsprov.New(...)`, and pass the result to `mamori.WithProvider`. |
 | `postgres` | `postgres://` | connection-string backed |
 | `mysql` | `mysql://` | connection-string backed |
@@ -61,7 +62,9 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
 
 - Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
-  `doppler`, `scaleway-sm`, `k8s-secret`.
+  `doppler`, `scaleway-sm`, `k8s-secret`, `heroku` (not a secret manager, but
+  Heroku add-ons write `DATABASE_URL` and `REDIS_URL` into the same
+  unclassified config var namespace as `LOG_LEVEL`).
 - Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).

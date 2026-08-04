@@ -22,6 +22,7 @@ use (
 	./providers/gcs
 	./providers/goff
 	./providers/growthbook
+	./providers/heroku
 	./providers/httpcore
 	./providers/https
 	./providers/k8s
