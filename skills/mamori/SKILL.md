@@ -46,7 +46,7 @@ cfg, err := mamori.Load[Config](ctx) // *Config, or an error and no partial stru
 - `optional:"true"` leaves a missing field at its zero value instead of failing.
 - `validate:` uses go-playground/validator/v10 syntax and runs on load AND on
   every reconciled update; an invalid update is rejected atomically.
-- `flatten:"json|yaml|env"` decodes one payload into a nested struct.
+- `flatten:"json|yaml|toml|env"` decodes one payload into a nested struct.
 
 ## Ref syntax
 

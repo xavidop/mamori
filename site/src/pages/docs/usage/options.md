@@ -15,7 +15,7 @@ Groups below are ordered by what you are trying to do, not alphabetically, becau
 | --- | --- | --- |
 | `WithProvider` | Registers a provider for this call only, taking precedence over the global registry for its scheme. | none (falls back to the global registry) |
 | `WithRefVars` | Supplies the variables available to `${VAR}` expansion in `source` tags. | none (no variables; a tag using `${VAR}` errors without this) |
-| `WithDecodeHook` | Adds a mapstructure decode hook applied when decoding a `flatten:"json\|yaml\|env"` payload; see [Value decoding](/docs/concepts/decoding/). | none (only the built-in secret/duration hook runs) |
+| `WithDecodeHook` | Adds a mapstructure decode hook applied when decoding a `flatten:"json\|yaml\|toml\|env"` payload; see [Value decoding](/docs/concepts/decoding/). | none (only the built-in secret/duration hook runs) |
 | `WithValidator` | Overrides the validator used on load and on every reconciled update; see [Validation](/docs/validation/). | the built-in go-playground/validator-based validator |
 | `WithExecProvider` | Enables the opt-in `exec:` provider for this call; see [exec](/docs/providers/exec/). | disabled (not registered) |
 

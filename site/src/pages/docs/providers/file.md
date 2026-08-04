@@ -35,6 +35,7 @@ file://relative/path
 - `file:///etc/tls/tls.crt` reads a certificate into a raw `[]byte` field.
 - `file:///etc/tls/tls.key` into a `secret.Bytes` field keeps the private key redacted in logs.
 - `file:///etc/app/config.yaml` with `flatten:"yaml"` decodes the file into a nested struct.
+- `file:///etc/app/config.toml` with `flatten:"toml"` decodes the file into a nested struct.
 - `file:///etc/tls/tls.crt?debounce=0` hot-reloads the moment the cert is atomically replaced.
 
 ```go
@@ -45,6 +46,14 @@ type Config struct {
 }
 
 cfg, err := mamori.Load[Config](ctx) // file is already registered
+```
+
+A TOML file works the same way, decoded with `flatten:"toml"`:
+
+```go
+type Config struct {
+	Config AppConfig `source:"file:///etc/app/config.toml" flatten:"toml"`
+}
 ```
 
 ## Watch

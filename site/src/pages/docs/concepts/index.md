@@ -50,7 +50,7 @@ Other struct tags refine how a field resolves:
 | --- | --- |
 | `default:"..."` | Value used when the ref resolves to not-found (never on error). |
 | `validate:"..."` | Field validation (go-playground/validator syntax), evaluated on **every** update. See [Validation](/docs/validation/). |
-| `flatten:"json\|yaml\|env"` | Decode a single provider payload into a nested struct. |
+| `flatten:"json\|yaml\|toml\|env"` | Decode a single provider payload into a nested struct. |
 | `optional:"true"` | Not-found is tolerated with no default (field keeps its zero value). |
 | `onfail:"keeplast\|default\|fail"` | Policy for a chain error, not absence. Default `keeplast`. See [Source chains and precedence](/docs/concepts/source-chains/#the-onfail-policy). |
 | `?debounce=<dur>` | Per-field coalescing window override, e.g. `?debounce=0` for certs. |
