@@ -187,6 +187,14 @@ func TestResolveMalformedResponseNeverEchoesTheBody(t *testing.T) {
 	if strings.Contains(err.Error(), garbage[:10]) {
 		t.Fatalf("the response body reached the error: %q", err)
 	}
+	// The substring check above cannot fail on its own. encoding/json quotes a
+	// SINGLE byte in a syntax error, so wrapping the cause yields "invalid
+	// character 'o' in literal null", which contains no ten-character run of
+	// the body. What distinguishes a dropped cause from a wrapped one is
+	// whether any encoding/json text reaches the message at all.
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("the json decode cause was wrapped, so a quoted byte of the body can reach the error: %q", err)
+	}
 }
 
 // TestResolveResponseWithoutSecretObject pins that a 200 carrying no "secret"

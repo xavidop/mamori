@@ -404,6 +404,15 @@ func TestLoginResponseThatIsNotJSONNeverEchoesTheBody(t *testing.T) {
 	if strings.Contains(err.Error(), garbage[:8]) {
 		t.Fatalf("the login response body reached the error: %q", err)
 	}
+	// The substring check above cannot fail on its own, and asserting only it
+	// would be a test that proves nothing. encoding/json quotes a SINGLE byte in
+	// a syntax error, so wrapping the cause yields "invalid character 'o' in
+	// literal null", which contains no eight-character run of the body. What
+	// actually distinguishes a dropped cause from a wrapped one is whether any
+	// encoding/json text reaches the message at all.
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("the json decode cause was wrapped, so a quoted byte of the body can reach the error: %q", err)
+	}
 }
 
 // TestNewUniversalAuthRejectsMissingInputs pins that the authenticator refuses
