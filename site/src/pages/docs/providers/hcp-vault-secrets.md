@@ -17,7 +17,7 @@ Load a secret from [HCP Vault Secrets](https://developer.hashicorp.com/hcp/docs/
 
 ## This is not the `vault://` provider
 
-HCP Vault Secrets and self-hosted HashiCorp Vault are different products with different APIs. If you run your own Vault cluster, you want [the Vault provider](./vault) and `vault://`.
+HCP Vault Secrets and self-hosted HashiCorp Vault are different products with different APIs. If you run your own Vault cluster, you want [the Vault provider](/docs/providers/vault) and `vault://`.
 
 | | `vault://` | `hcp-vs://` |
 | --- | --- | --- |
@@ -167,5 +167,5 @@ They skip cleanly when the variables are unset, and log only a byte count, never
 
 ## See also
 
-- [Vault provider](./vault) for self-hosted HashiCorp Vault
-- [Provider catalog](./)
+- [Vault provider](/docs/providers/vault) for self-hosted HashiCorp Vault
+- [Provider catalog](/docs/providers)
