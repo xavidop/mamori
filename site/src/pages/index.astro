@@ -29,6 +29,11 @@ const features = [
     t: "Secret hygiene",
     d: "secret.String redacts itself in logs, fmt, and JSON. Only Reveal() exposes the value - and a shipped go vet analyzer flags sensitive refs stored in plain strings.",
   },
+  {
+    k: "05",
+    t: "Boots through an outage",
+    d: "A restart while the backend is down still starts. WithBootstrapCache keeps an encrypted snapshot of the last known-good values on disk and boots from it when a cold start cannot reach the backend, then returns to live values as soon as it can. Opt-in, bounded by a max age you set, and reported in Status so a stale start is never silent.",
+  },
 ];
 
 // Providers are summarized on the landing by category; the full gallery lives in
