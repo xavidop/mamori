@@ -3,12 +3,12 @@ module github.com/xavidop/mamori/providers/aws
 go 1.26.0
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.43.2
+	github.com/aws/aws-sdk-go-v2 v1.43.3
 	github.com/aws/aws-sdk-go-v2/config v1.32.33
 	github.com/aws/aws-sdk-go-v2/service/appconfigdata v1.26.2
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.44.2
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.73.2
-	github.com/aws/smithy-go v1.27.5
+	github.com/aws/smithy-go v1.27.6
 	github.com/xavidop/mamori v0.1.0
 )
 
