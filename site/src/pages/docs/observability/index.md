@@ -85,6 +85,9 @@ type Report struct {
 	Pinned      bool      // true when Get is frozen at Snapshot while Live keeps advancing; see Watcher.Pin
 	Healthy     bool      // no field is stale or carries a terminal error kind
 	GeneratedAt time.Time // when this report was built
+
+	Source      ConfigSource     // "backend", or "bootstrap_cache" while serving a restored snapshot
+	Bootstrap   *BootstrapStatus // nil unless WithBootstrapCache is configured; see below
 }
 ```
 
@@ -95,6 +98,25 @@ A `FieldStatus` with `Derived: true` is a field a [`WithDerive`](/docs/usage/der
 `Version` is the exception: a derived entry does carry one, a content hash of the value the hook produced. In a running `Watcher`'s `Status()` it is always set, since a failing hook rejects the candidate before it is published.
 
 Only a [`Doctor`](/docs/observability/doctor/#derived-fields-are-probed) report can leave it blank, which happens when the hook errored, when a sourced field produced no value so the hook never ran, or when the hooks could not be typed to `T`.
+
+### The bootstrap cache block
+
+`Source` and `Bootstrap` are `backend` and `nil` for every process not using [`WithBootstrapCache`](/docs/usage/bootstrap-cache/). With it configured, they answer the one question the rest of a report cannot: is this process serving what its backends say, or what a file on its disk says.
+
+```go
+type BootstrapStatus struct {
+	Present          bool          // a snapshot exists and opened
+	Restored         bool          // this process booted from it; a fact about the boot, it never changes
+	WrittenAt        time.Time     // when the snapshot was written
+	Age              time.Duration // recomputed at read time
+	FingerprintMatch bool          // it was written for this build's config struct
+	Problem          string        // why it is unusable, empty when it is not
+}
+```
+
+`Source` is what to watch, and it is not the same as `Restored`. `Restored` stays true for the life of a process that booted from the snapshot, which is what a post-mortem wants. `Source` reverts to `backend` once every field has been answered by its own backend, because at that point nothing being served is still the snapshot's decision.
+
+Neither the snapshot's contents nor its path ever appear. The status carries metadata only, and `Problem` names a failure (a wrong key, an altered file, a drifted schema) and never any part of the file.
 
 ## Health: one yes/no for a probe
 
@@ -124,6 +146,19 @@ One rule, shared by `Status`, `Health`, and `Doctor`:
 - No error at all is judged purely by staleness too.
 
 See [Error kinds](/docs/concepts/error-kinds/) for the full list of `Kind` values.
+
+### One more rule with a bootstrap cache
+
+A process serving a configuration [restored from the bootstrap cache](/docs/usage/bootstrap-cache/) passes `Health` while that snapshot is within `BootstrapMaxAge`, so the pod joins the load balancer and a backend outage does not also become a total outage. Past the bound, `Health` returns a `*BootstrapStaleError` and the pod drops out of rotation.
+
+```go
+var stale *mamori.BootstrapStaleError
+if errors.As(w.Health(), &stale) {
+	log.Printf("serving a %s-old snapshot, past the %s bound", stale.Age, stale.MaxAge)
+}
+```
+
+When both a field is unhealthy *and* the snapshot is too old, the two errors are joined; `errors.As` reaches either. A process not using `WithBootstrapCache` is unaffected and still gets a plain `*HealthError`.
 
 ## Next
 

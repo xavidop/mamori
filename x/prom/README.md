@@ -22,7 +22,7 @@ go get github.com/xavidop/mamori/x/prom
 
 ## What it does
 
-`New` wraps a `prometheus.Registerer` and registers six instruments, recording
+`New` wraps a `prometheus.Registerer` and registers seven instruments, recording
 to them as mamori resolves and reconciles config. It is safe for concurrent
 use.
 
@@ -85,6 +85,7 @@ panic.
 | Stale count | `mamori_stale_total` | Counter | - | `scheme` |
 | Change dropped count | `mamori_change_dropped_total` | Counter | - | none |
 | Apply rejected count | `mamori_apply_rejected_total` | Counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
+| Bootstrap write failed | `mamori_bootstrap_write_failed_total` | Counter | - | none |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws-sm`,
   `vault`).

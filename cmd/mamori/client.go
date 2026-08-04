@@ -103,12 +103,12 @@ func parseEndpoint(endpoint string, insecure bool) (baseURL string, transport *h
 	}
 }
 
-// reportFields is the exact set of top-level JSON keys json.Marshal always
-// emits for a mamori.Report: Report has no struct json tags and no field
-// carries "omitempty" (see status.go in the core module), so encoding/json
-// emits all six top-level keys unconditionally, regardless of value. That
-// makes the exact key set a reliable sentinel for "this body is a Report",
-// including the all-zero-value case: a genuine, all-unhealthy-defaults
+// reportFields is the set of top-level JSON keys every mamori.Report has
+// carried since the admin endpoint existed: Report has no struct json tags
+// and none of these fields carries "omitempty" (see status.go in the core
+// module), so encoding/json emits all six unconditionally, regardless of
+// value. That makes their presence a reliable sentinel for "this body is a
+// Report", including the all-zero-value case: a genuine, all-unhealthy
 // Report still has all six keys, while a bare {} has none and an unrelated
 // document (e.g. {"hello":"world"}) has the wrong ones. decodeReport uses
 // this to reject both without mistaking either for a real (if unhealthy)
@@ -117,28 +117,53 @@ var reportFields = map[string]struct{}{
 	"Fields": {}, "Snapshot": {}, "Live": {}, "Pinned": {}, "Healthy": {}, "GeneratedAt": {},
 }
 
-// decodeReport strictly decodes body as a mamori.Report: it first checks
-// that the top-level JSON object's key set is exactly reportFields (no
-// fewer, no more, no unexpected key), then decodes for real. This is what
-// lets fetchReport tell a genuine admin Report (any Healthy value,
-// including the current process being unhealthy) apart from a 200 that
-// merely happens to also be a JSON object: a bare {}, or an unrelated
-// service's unrelated JSON payload, both fail the key-set check and are
-// reported as "not a Report" (exit 2) rather than silently decoding into a
-// zero-value Report that would misclassify as unhealthy (exit 1) or, worse,
-// healthy (exit 0).
+// reportOptionalFields are top-level keys a Report may or may not carry,
+// because the mamori version running in the target process decides.
+//
+// The CLI and the process it points at are separate binaries on separate
+// release cadences: an operator debugging an incident runs whichever mamori
+// they have against whichever the pod was built with. Requiring an exact key
+// set made every field ever added to Report a hard break in both directions -
+// a new CLI would reject a running process for lacking a key it never had,
+// and an old one would reject a healthy report for carrying a key it does not
+// know. Splitting required from optional keeps the sentinel (a bare {} or an
+// unrelated payload still has none of the required keys) while letting the
+// two versions differ. A key in neither set is still rejected, so this is not
+// a blanket "ignore what you do not understand".
+//
+// Add a new Report field here, not to reportFields above, unless every
+// supported mamori version emits it.
+var reportOptionalFields = map[string]struct{}{
+	"Source": {}, "Bootstrap": {},
+}
+
+// decodeReport strictly decodes body as a mamori.Report: it first checks that
+// the top-level JSON object carries every key in reportFields and nothing
+// outside reportFields plus reportOptionalFields, then decodes for real. This
+// is what lets fetchReport tell a genuine admin Report (any Healthy value,
+// including the current process being unhealthy) apart from a 200 that merely
+// happens to also be a JSON object: a bare {}, or an unrelated service's
+// unrelated JSON payload, both fail the key check and are reported as "not a
+// Report" (exit 2) rather than silently decoding into a zero-value Report that
+// would misclassify as unhealthy (exit 1) or, worse, healthy (exit 0).
 func decodeReport(body []byte) (*mamori.Report, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("response body is not a JSON object: %w", err)
 	}
-	if len(raw) != len(reportFields) {
-		return nil, fmt.Errorf("response body has %d top-level field(s), want exactly the %d mamori.Report fields", len(raw), len(reportFields))
+	for k := range reportFields {
+		if _, ok := raw[k]; !ok {
+			return nil, fmt.Errorf("response body is missing top-level field %q, which every mamori.Report carries", k)
+		}
 	}
 	for k := range raw {
-		if _, ok := reportFields[k]; !ok {
-			return nil, fmt.Errorf("response body has unexpected top-level field %q, not part of the mamori.Report contract", k)
+		if _, ok := reportFields[k]; ok {
+			continue
 		}
+		if _, ok := reportOptionalFields[k]; ok {
+			continue
+		}
+		return nil, fmt.Errorf("response body has unexpected top-level field %q, not part of the mamori.Report contract", k)
 	}
 
 	var rep mamori.Report

@@ -16,7 +16,7 @@ go get github.com/xavidop/mamori/x/otel
 
 ## What it does
 
-- **Metrics** - `NewMeter` wraps an OTel `metric.Meter` and registers six
+- **Metrics** - `NewMeter` wraps an OTel `metric.Meter` and registers seven
   instruments, recording to them as mamori resolves and reconciles config.
 - **Tracing** - `NewTracer` wraps an OTel `trace.Tracer` and starts one span per
   resolve, ending it with the correct status (and a recorded error on failure).
@@ -80,6 +80,7 @@ records measurements against `context.Background()`.
 | Stale count | `mamori.stale.count` | Int64 counter | - | `scheme` |
 | Change dropped count | `mamori.change.dropped.count` | Int64 counter | - | none |
 | Apply rejected count | `mamori.apply.rejected.count` | Int64 counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
+| Bootstrap write failed | `mamori.bootstrap.write.failed.count` | Int64 counter | - | none |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws`,
   `vault`).

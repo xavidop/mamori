@@ -104,7 +104,7 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 			// publishes would not match what Load computes.
 			res = append(res, resolved{
 				spec:  spec,
-				value: Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"},
+				value: Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: defaultValueVersion},
 				found: false,
 				set:   true,
 			})
@@ -123,7 +123,7 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 			// default: tag, so spec.Default is always the real value.
 			res = append(res, resolved{
 				spec:  spec,
-				value: Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"},
+				value: Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: defaultValueVersion},
 				found: false,
 				set:   true,
 			})
@@ -138,11 +138,23 @@ func Doctor[T any](ctx context.Context, opts ...Option) (Report, error) {
 	healthy = healthy && derivedHealthy
 
 	return Report{
-		Fields:      fields,
-		Snapshot:    0, // Doctor is a one-shot probe, not a running snapshot
-		Live:        0,
-		Healthy:     healthy,
+		Fields:   fields,
+		Snapshot: 0, // Doctor is a one-shot probe, not a running snapshot
+		Live:     0,
+		Healthy:  healthy,
+		// Doctor resolves every field live and restores nothing, so what it
+		// reports always came from the backends themselves. The Bootstrap block
+		// beside it describes the file this config would fall back to, not where
+		// these values came from.
+		Source:      SourceBackend,
 		GeneratedAt: now,
+		// Inspected, never restored: a preflight's job is to tell an operator
+		// whether the fallback they believe they have is real - it exists, it
+		// decrypts with the configured key, and it still fits this build's config
+		// struct - while the backends are up and there is time to fix it. A
+		// bootstrap cache is otherwise exercised only during the outage it exists
+		// for, which is the worst moment to discover the key is wrong.
+		Bootstrap: bootstrapStatusFor(o, specs, now),
 	}, nil
 }
 

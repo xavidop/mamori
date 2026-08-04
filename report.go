@@ -1,6 +1,10 @@
 package mamori
 
-import "reflect"
+import (
+	"errors"
+	"reflect"
+	"time"
+)
 
 // buildReport constructs an immutable Report from the engine's current state.
 // It is called only by the reconciler goroutine, so it reads the engine maps
@@ -114,6 +118,8 @@ func (e *engine[T]) buildReport() *Report {
 		Pinned:      e.pinned,
 		Healthy:     healthy,
 		GeneratedAt: now,
+		Source:      e.bootstrapSource(),
+		Bootstrap:   e.bootstrapStatus(now),
 	}
 }
 
@@ -178,13 +184,59 @@ func (w *Watcher[T]) Status() Report {
 			out.Healthy = false
 		}
 	}
+	// The bootstrap age is recomputed here for the same reason a field's Age is:
+	// the stored report was built when the reconciler last ran, and a watcher
+	// that has gone quiet during an outage is exactly the one whose snapshot age
+	// matters. Copied rather than shared, because the pointer in the stored
+	// report is read by every concurrent Status caller.
+	if rep.Bootstrap != nil {
+		bs := *rep.Bootstrap
+		if !bs.WrittenAt.IsZero() {
+			bs.Age = now.Sub(bs.WrittenAt)
+		}
+		out.Bootstrap = &bs
+		if bootstrapExpired(out, w.bootstrapMaxAge) {
+			out.Healthy = false
+		}
+	}
 	return out
+}
+
+// bootstrapExpired reports whether a report that is still being served from the
+// snapshot has outlived maxAge.
+//
+// It keys on Source rather than on Bootstrap.Restored, and the two differ once a
+// restored process has reconciled every field against its backend: Restored
+// stays true forever, because it describes how the process booted, while Source
+// reverts to SourceBackend because nothing is at risk of being an unnoticed
+// rotation any more. Bounding the age of a snapshot the process has stopped
+// depending on would take a healthy pod out over a file it no longer reads.
+//
+// A zero maxAge is the explicit unbounded opt-out BootstrapMaxAge documents, and
+// is also what a watcher with no bootstrap cache carries, so both fall through
+// the same branch.
+func bootstrapExpired(rep Report, maxAge time.Duration) bool {
+	return rep.Bootstrap != nil && rep.Source == SourceBootstrapCache && maxAge > 0 && rep.Bootstrap.Age > maxAge
 }
 
 // Health returns nil when every field is fresh and no field carries a
 // terminal error kind. It wraps the offending fields in a HealthError
 // otherwise, so a caller can log which fields are broken instead of a bare
 // "unhealthy". Intended for use as a readiness probe.
+//
+// A process serving a configuration restored by WithBootstrapCache passes while
+// the snapshot is within BootstrapMaxAge, which is the point: a backend outage
+// should not also take every pod out of the load balancer. Past that bound it
+// returns a *BootstrapStaleError instead, so a configuration frozen for longer
+// than the operator said they would tolerate stops receiving traffic. See
+// BootstrapMaxAge.
+//
+// When both conditions hold the two errors are joined, because a probe that
+// reports only one of them sends the operator to fix half the problem. Callers
+// reaching for either with errors.As find it in both cases; a caller asserting
+// on the concrete type rather than using errors.As still sees a plain
+// *HealthError whenever the bootstrap cache is not involved, which is every
+// process that does not use it.
 func (w *Watcher[T]) Health() error {
 	rep := w.Status()
 	var bad []FieldStatus
@@ -193,8 +245,19 @@ func (w *Watcher[T]) Health() error {
 			bad = append(bad, f)
 		}
 	}
-	if len(bad) == 0 {
-		return nil
+	var errs []error
+	if len(bad) > 0 {
+		errs = append(errs, &HealthError{Fields: bad})
 	}
-	return &HealthError{Fields: bad}
+	if bootstrapExpired(rep, w.bootstrapMaxAge) {
+		errs = append(errs, &BootstrapStaleError{Age: rep.Bootstrap.Age, MaxAge: w.bootstrapMaxAge})
+	}
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return errors.Join(errs...)
+	}
 }

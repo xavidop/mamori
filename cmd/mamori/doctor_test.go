@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xavidop/mamori"
 )
@@ -418,5 +419,96 @@ func TestStatusOnceUnreachableExit3(t *testing.T) {
 	code := statusCmd([]string{"--endpoint", "unix:///nonexistent/status-test.sock"}, &outBuf, &errBuf)
 	if code != 3 {
 		t.Errorf("statusCmd() code = %d, want 3", code)
+	}
+}
+
+// TestDecodeReportToleratesAVersionSkewBothWays pins that the CLI and the
+// process it points at may run different mamori versions. They are separate
+// binaries on separate release cadences, and an operator debugging an incident
+// runs whichever CLI they have against whichever the pod was built with.
+func TestDecodeReportToleratesAVersionSkewBothWays(t *testing.T) {
+	base := `"Fields":[],"Snapshot":1,"Live":1,"Pinned":false,"Healthy":true,"GeneratedAt":"2026-01-01T00:00:00Z"`
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"a process older than this CLI", "{" + base + "}"},
+		{"a process this CLI matches", "{" + base + `,"Source":"backend","Bootstrap":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := decodeReport([]byte(tt.body)); err != nil {
+				t.Fatalf("decodeReport: %v", err)
+			}
+		})
+	}
+}
+
+// TestDecodeReportStillRejectsANonReport pins that tolerating an unknown
+// optional key did not turn the shape check into "accept any JSON object".
+func TestDecodeReportStillRejectsANonReport(t *testing.T) {
+	for _, body := range []string{`{}`, `{"hello":"world"}`, `{"Fields":[],"Snapshot":1}`} {
+		if _, err := decodeReport([]byte(body)); err == nil {
+			t.Fatalf("decodeReport(%s) = nil error, want a rejection", body)
+		}
+	}
+	// A key in neither the required nor the optional set is still refused.
+	full := `{"Fields":[],"Snapshot":1,"Live":1,"Pinned":false,"Healthy":true,"GeneratedAt":"2026-01-01T00:00:00Z","Surprise":1}`
+	if _, err := decodeReport([]byte(full)); err == nil {
+		t.Fatal("decodeReport accepted an unknown top-level field")
+	}
+}
+
+// TestDoctorTableReportsTheBootstrapCache pins that a process serving a
+// restored snapshot says so in the CLI, which is otherwise indistinguishable
+// from a healthy one line for line.
+func TestDoctorTableReportsTheBootstrapCache(t *testing.T) {
+	tests := []struct {
+		name   string
+		report mamori.Report
+		want   string
+	}{
+		{
+			name: "serving from the snapshot",
+			report: mamori.Report{
+				Healthy: true, Source: mamori.SourceBootstrapCache,
+				Bootstrap: &mamori.BootstrapStatus{Present: true, Restored: true, Age: 2 * time.Hour, FingerprintMatch: true},
+			},
+			want: "BOOTSTRAP CACHE: serving a snapshot written 2h0m0s ago",
+		},
+		{
+			name: "configured with no snapshot yet",
+			report: mamori.Report{
+				Healthy: true, Source: mamori.SourceBackend,
+				Bootstrap: &mamori.BootstrapStatus{Problem: "no snapshot has been written"},
+			},
+			want: "bootstrap cache: no snapshot (no snapshot has been written)",
+		},
+		{
+			name: "a drifted snapshot",
+			report: mamori.Report{
+				Healthy: true, Source: mamori.SourceBackend,
+				Bootstrap: &mamori.BootstrapStatus{Present: true, Age: time.Minute},
+			},
+			want: "for a DIFFERENT config struct",
+		},
+		{
+			name:   "not configured at all",
+			report: mamori.Report{Healthy: true, Source: mamori.SourceBackend},
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			rep := tt.report
+			writeReportTable(&out, &rep)
+			switch {
+			case tt.want == "" && strings.Contains(out.String(), "bootstrap"):
+				t.Fatalf("output mentions the bootstrap cache for a process not using one:\n%s", out.String())
+			case tt.want != "" && !strings.Contains(out.String(), tt.want):
+				t.Fatalf("output missing %q:\n%s", tt.want, out.String())
+			}
+		})
 	}
 }

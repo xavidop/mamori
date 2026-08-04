@@ -74,6 +74,13 @@ type Watcher[T any] struct {
 	// with the reconciler goroutine).
 	stale time.Duration
 	clock Clock
+	// bootstrapMaxAge is WithBootstrapCache's BootstrapMaxAge, copied here for
+	// the same reason stale is: Health applies it to the age Status recomputed a
+	// moment ago, on the caller's goroutine, with no access to the engine. It is
+	// zero both when the option is absent and when the caller explicitly asked
+	// for an unbounded age, which are the same thing as far as Health is
+	// concerned: no bound to enforce.
+	bootstrapMaxAge time.Duration
 
 	// control carries Pin/PinCurrent/Unpin/Refresh commands to the reconciler
 	// goroutine; see pin.go and engine.handlePin. It is unbuffered: sendPin's
@@ -424,7 +431,7 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		return nil, err
 	}
 
-	cfg, initial, err := loadValue[T](ctx, o)
+	cfg, initial, origin, err := loadValue[T](ctx, o)
 	if err != nil {
 		return nil, err
 	}
@@ -436,6 +443,9 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 
 	wctx, cancel := context.WithCancel(ctx)
 	w := &Watcher[T]{cancel: cancel, stale: o.stale, clock: o.clock}
+	if o.bootstrap != nil {
+		w.bootstrapMaxAge = o.bootstrap.maxAge
+	}
 	w.ctx = wctx
 	w.control = make(chan pinCmd)
 	w.cfg.Store(&cfg)
@@ -467,11 +477,24 @@ func Watch[T any](ctx context.Context, opts ...Option) (*Watcher[T], error) {
 		e.sources[i] = make([]srcState, len(s.Refs))
 	}
 	now := o.clock.Now()
+	// lastOK is the instant each value was last confirmed against its backend,
+	// which for a restored snapshot is when the snapshot was written, not now.
+	// Dating a restored value to now would report Age 0 for a configuration this
+	// process has never once reached the backend for, and would hide it from
+	// WithStale as well: a snapshot older than the stale threshold should be
+	// reporting stale from the first second, because it is.
+	confirmedAt := now
+	if origin != nil && origin.restored {
+		e.seedBootstrapOrigin(origin, initial)
+		confirmedAt = origin.writtenAt
+	} else if origin != nil {
+		e.bootstrapPresent, e.bootstrapWrittenAt = origin.present, origin.writtenAt
+	}
 	for _, r := range initial {
 		if r.set {
 			e.observed[r.spec.Path] = r.value
 			e.applied[r.spec.Path] = r.value.Version
-			e.lastOK[r.spec.Path] = now
+			e.lastOK[r.spec.Path] = confirmedAt
 		}
 	}
 	w.report.Store(e.buildReport())
@@ -554,6 +577,31 @@ type engine[T any] struct {
 	// Only the reconciler goroutine ever reads or writes it directly. Callers
 	// observe it only through w.snapshots, never through this field.
 	history []Snapshot[T]
+
+	// bootstrap state, owned by the reconciler goroutine like every map above,
+	// and published only through buildReport's BootstrapStatus.
+	//
+	// bootstrapPresent and bootstrapWrittenAt describe the file on disk as this
+	// process last left it: written by a flush, written by the initial load, or
+	// read at a restore.
+	//
+	// bootstrapRestored and bootstrapServing answer two different questions and
+	// are deliberately not one field. bootstrapRestored is a fact about how this
+	// process booted and never changes, which is what a post-mortem wants.
+	// bootstrapServing is whether the snapshot still matters right now, which is
+	// what Report.Source publishes and what Health's max-age rule keys on.
+	//
+	// bootstrapUnconfirmed holds the restored paths whose backend has not
+	// answered since this process started, and clearing the last of them clears
+	// bootstrapServing: a pod that booted during a two-minute outage and has
+	// been reconciling normally for the twenty hours since would otherwise fail
+	// its own readiness probe over a file it no longer depends on. See
+	// markBootstrapReconciled.
+	bootstrapPresent     bool
+	bootstrapRestored    bool
+	bootstrapServing     bool
+	bootstrapWrittenAt   time.Time
+	bootstrapUnconfirmed map[string]struct{}
 
 	// controlCh is w.control, wired in at construction. handlePin is the only
 	// place that acts on what arrives here.
@@ -817,6 +865,7 @@ func (e *engine[T]) loop(ctx context.Context, updates <-chan srcUpdate) {
 				e.lastOK[spec.Path] = e.o.clock.Now()
 				delete(e.lastErr, spec.Path) // successful observe clears any prior error
 				unblock(spec.Path)           // a resolving field can never stay blocked
+				e.markBootstrapReconciled(spec.Path)
 				markChanged(spec, val)
 
 			case errors.Is(cherr, ErrNotFound):
@@ -862,7 +911,11 @@ func (e *engine[T]) loop(ctx context.Context, updates <-chan srcUpdate) {
 					// have been set for it, so there is never a real error to
 					// recover from.
 					delete(e.lastErr, spec.Path)
-					markChanged(spec, Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"})
+					// The default has replaced whatever this path was
+					// serving, including a value a restore put there; see
+					// markBootstrapReconciled.
+					e.markBootstrapReconciled(spec.Path)
+					markChanged(spec, Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: defaultValueVersion})
 				case onFailFail:
 					// Rejects the whole candidate snapshot rather than
 					// applying a partial or stale update: mark this field
@@ -1165,6 +1218,11 @@ func (e *engine[T]) handleChainNotFound(spec fieldSpec, err error, unblock func(
 			e.o.log().Info("resolve recovered", logAttrField, spec.Path)
 		}
 		delete(e.lastErr, spec.Path)
+		// The backend was reached and reported this ref absent, which is an
+		// answer: a rotation would have shown up here just as a new value would.
+		// See markBootstrapReconciled for why that, rather than where the bytes
+		// came from, is what ends a field's dependence on a restored snapshot.
+		e.markBootstrapReconciled(spec.Path)
 		return
 	}
 	e.reportTerminalError(spec, spec.Refs[0], err)
@@ -1439,6 +1497,19 @@ func (e *engine[T]) flush(ctx context.Context, pending map[string]struct{}) erro
 	e.version++
 	e.lastGood = cand
 	e.recordSnapshot(cand, fields)
+
+	// Written here, once, before the pinned branch splits: this is the exact
+	// point a candidate has passed decode, every WithDerive hook, validation and
+	// the PreApply gate, which is the whole definition of the last known-good
+	// configuration the snapshot is supposed to hold. A pin freezes what Get
+	// returns, not what this process has proven, so a pinned flush writes too -
+	// pin state does not survive a restart, and the snapshot exists for what
+	// happens after one.
+	//
+	// It runs inline on the reconciler goroutine, like the PreApply gate a few
+	// lines above, and unlike that gate it is a local file write rather than a
+	// network round trip. It cannot fail the update: see persistBootstrap.
+	e.persistBootstrap()
 
 	if e.pinned {
 		// Live (e.version) and history advance so Status can show the
@@ -1716,7 +1787,7 @@ func (e *engine[T]) refreshNow(ctx context.Context) error {
 				clearBlock(spec.Path)
 				e.lastOK[spec.Path] = e.o.clock.Now()
 				delete(e.lastErr, spec.Path)
-				observe(spec.Path, Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: "default"})
+				observe(spec.Path, Value{Bytes: []byte(spec.Default), Sensitive: spec.Sensitive, Version: defaultValueVersion})
 			case onFailFail:
 				// Blocks every field's flush, this one included, until it
 				// clears; buildCandidate is what enforces that, and it is what

@@ -85,6 +85,90 @@ type Report struct {
 	Pinned      bool      // true when Get is frozen at Snapshot while Live keeps advancing; see Watcher.Pin
 	Healthy     bool      // no field is stale or carries a terminal error kind
 	GeneratedAt time.Time // when this report was built
+
+	// Source names where the configuration being served came from. It is
+	// SourceBackend for every ordinary process and SourceBootstrapCache only
+	// while WithBootstrapCache is covering for a backend this process has not
+	// reached since it started.
+	//
+	// It is reported from the first second rather than only once the situation
+	// turns unhealthy, because "we booted off disk" is the single fact an
+	// operator most needs during an outage and it is invisible otherwise: a
+	// process serving a restored config looks identical to a healthy one.
+	Source ConfigSource
+
+	// Bootstrap describes the WithBootstrapCache snapshot, and is nil when the
+	// option is not configured. See BootstrapStatus.
+	Bootstrap *BootstrapStatus
+}
+
+// ConfigSource names where the configuration a Report describes came from.
+type ConfigSource string
+
+const (
+	// SourceBackend means every value was resolved from its provider. This is
+	// the ordinary case, and the only one for a process not using
+	// WithBootstrapCache.
+	SourceBackend ConfigSource = "backend"
+	// SourceBootstrapCache means the cold-start resolve failed with a transient
+	// kind and the configuration came off disk instead. It reverts to
+	// SourceBackend once every field has been resolved live at least once since
+	// the process started, because at that point nothing being served is still
+	// coming from the snapshot.
+	SourceBootstrapCache ConfigSource = "bootstrap_cache"
+)
+
+// BootstrapStatus is the state of the WithBootstrapCache snapshot, as reported
+// by Watcher.Status and by Doctor. It carries no configuration value and no
+// snapshot bytes: a snapshot holds live credentials, so only its existence, its
+// age, and whether it still fits this build's config struct leave the process.
+//
+// The file's path is deliberately absent. A Report is designed to be served over
+// HTTP, and telling an unauthenticated reader exactly where the encrypted
+// credential file lives buys them a step for nothing in return.
+type BootstrapStatus struct {
+	// Present is true when a snapshot exists and opened. In a running watcher
+	// that means this process wrote or restored one; in a Doctor report it means
+	// the file was found on disk and decrypted.
+	Present bool
+
+	// Restored is true when this process booted from the snapshot. It is a fact
+	// about the boot and never changes, which is what makes it the field a
+	// post-mortem wants: an incident an hour later still shows that this pod
+	// started during the outage.
+	//
+	// It is not what Health's max-age rule keys on. Source is, because a process
+	// that restored and has since reconciled every field against its backend is
+	// no longer at risk of serving an unnoticed rotation, and bounding the age of
+	// a snapshot it has stopped depending on would take a healthy pod out. It is
+	// always false in a Doctor report, which starts no watcher.
+	Restored bool
+
+	// WrittenAt is when the snapshot was written, and Age is how long ago that
+	// was, recomputed at read time so a watcher that has gone quiet does not
+	// keep reporting the age it had at the last reconcile.
+	//
+	// The snapshot is rewritten on every applied update, so its age is the time
+	// since the configuration last CHANGED, not the time since it was last
+	// confirmed against the backend. A configuration that genuinely never
+	// changes therefore ages without bound; see BootstrapMaxAge, which is meant
+	// to be set to the rotation window of the shortest-lived credential in it.
+	WrittenAt time.Time
+	Age       time.Duration
+
+	// FingerprintMatch reports whether the snapshot was written for the same
+	// config struct this build declares. A false here means the snapshot cannot
+	// be restored at all, whatever its age. In a running watcher it is always
+	// true when Present, since this process either wrote the file or checked it
+	// before restoring; it earns its place in a Doctor report, which is where a
+	// schema drift is worth learning about before the outage rather than during
+	// one.
+	FingerprintMatch bool
+
+	// Problem explains why the snapshot is unusable, and is empty when it is
+	// not. It names the failure only: a wrong key, an altered file, a drifted
+	// schema. It never contains any part of the snapshot.
+	Problem string
 }
 
 // sensitiveOptKeys are query-option names whose values are redacted from a Ref

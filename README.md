@@ -109,6 +109,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 - **[Precedence chains](https://mamorigo.dev/docs/concepts/source-chains)** - `source:"env:PORT,aws-ps://svc/port"` tries sources in order, and every position stays watched.
 - **[Rich ref grammar](https://mamorigo.dev/docs/concepts/ref-grammar)** - RFC 6901 JSON Pointer selection, `?decode=` pipelines, and `${VAR}` interpolation from an explicit, non-ambient source.
 - **Reconciled at runtime** - native watch where the backend supports it, polling with jitter everywhere else, lease-aware refresh for Vault.
+- **[Boots through an outage](https://mamorigo.dev/docs/usage/bootstrap-cache)** - `WithBootstrapCache` keeps an encrypted, on-disk snapshot of the last known-good values and starts from it when a restart cannot reach the backend, instead of failing to start.
 - **[Secret hygiene by default](https://mamorigo.dev/docs/concepts/secret-types)** - `secret.String` / `secret.Bytes` redact in `fmt`, JSON, and `slog`; only the greppable `Reveal()` exposes a value, and `mamori vet` flags the ones you missed.
 - **[Observable](https://mamorigo.dev/docs/observability)** - live per-field health, a readiness probe, a pre-deploy `Doctor` check, structured logs, and metrics.
 - **Pluggable** - providers register with the `database/sql` pattern, and a [`providertest`](providertest/) conformance kit keeps them behaving identically.

@@ -36,6 +36,16 @@ type Meter interface {
 	// RecordApplyRejected reports that a candidate configuration was refused
 	// and the previous one is still being served.
 	RecordApplyRejected(reason RejectReason)
+	// RecordBootstrapWriteFailed reports that the WithBootstrapCache snapshot
+	// could not be written after an otherwise good configuration was applied.
+	//
+	// It is a counter rather than an error return because such a failure must
+	// never reject the configuration behind it (see persistBootstrap). Nothing
+	// observable breaks the moment it happens, which is exactly why it needs a
+	// metric: the damage appears later, at a restart that finds no fallback. A
+	// non-zero rate means the process is running without the safety net it was
+	// configured to have.
+	RecordBootstrapWriteFailed()
 }
 
 // RejectReason names why a candidate configuration was refused. It is a closed
@@ -69,6 +79,7 @@ func (noopMeter) RecordWatchError(string)                    {}
 func (noopMeter) RecordStale(string)                         {}
 func (noopMeter) RecordChangeDropped()                       {}
 func (noopMeter) RecordApplyRejected(RejectReason)           {}
+func (noopMeter) RecordBootstrapWriteFailed()                {}
 
 type noopTracer struct{}
 

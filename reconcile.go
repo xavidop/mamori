@@ -39,8 +39,9 @@ type options struct {
 	jitter       float64
 	debounce     time.Duration
 	queueDepth   int
-	stale        time.Duration // 0 = disabled
-	backoffBase  time.Duration // 0 = disabled; see WithBackoff
+	stale        time.Duration    // 0 = disabled
+	bootstrap    *bootstrapConfig // nil = disabled; see WithBootstrapCache
+	backoffBase  time.Duration    // 0 = disabled; see WithBackoff
 	backoffMax   time.Duration
 	meter        Meter
 	tracer       Tracer
@@ -328,7 +329,7 @@ func Load[T any](ctx context.Context, opts ...Option) (T, error) {
 		opt(o)
 	}
 	var zero T
-	cfg, _, err := loadValue[T](ctx, o)
+	cfg, _, _, err := loadValue[T](ctx, o)
 	if err != nil {
 		return zero, err
 	}
@@ -336,10 +337,26 @@ func Load[T any](ctx context.Context, opts ...Option) (T, error) {
 }
 
 // loadValue is the shared load path used by Load and Watch's initial resolve. It
-// returns the built config and the per-spec resolved values (for change
-// detection in Watch).
-func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
+// returns the built config, the per-spec resolved values (for change detection
+// in Watch), and what it learned about the bootstrap cache.
+//
+// The bootstrapOrigin is nil unless WithBootstrapCache is configured. It is the
+// only way Watch can tell that the values it is about to seed the engine with
+// came off disk rather than from a backend, which is what Report, Health and
+// Doctor then say out loud. Load discards it: a one-shot Load has no reporting
+// surface to put it on, and it returns to a caller who is about to use the
+// configuration and nothing else.
+func loadValue[T any](ctx context.Context, o *options) (T, []resolved, *bootstrapOrigin, error) {
 	var cfg T
+
+	// A misconfigured bootstrap cache fails before any provider round trip, the
+	// same reason the hook assertions below do. WithBootstrapCache cannot return
+	// an error from an Option, so it parks one here; surfacing it only when the
+	// cache is first needed would mean the process learns its fallback was never
+	// viable at the exact moment it is relying on it.
+	if o.bootstrap != nil && o.bootstrap.err != nil {
+		return cfg, nil, nil, o.bootstrap.err
+	}
 
 	// Checked before any provider round trip, for the same reason Watch checks
 	// it before calling loadValue at all (see typedPreApply's doc comment):
@@ -350,7 +367,7 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// point of its own to catch this.
 	hook, err := typedPreApply[T](o)
 	if err != nil {
-		return cfg, nil, err
+		return cfg, nil, nil, err
 	}
 	// Checked here too, for the identical reason: a mismatched WithDerive hook
 	// is the same kind of caller bug as a mismatched PreApply one, and must
@@ -360,20 +377,37 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// See typedDerives's doc comment.
 	derives, err := typedDerives[T](o)
 	if err != nil {
-		return cfg, nil, err
+		return cfg, nil, nil, err
 	}
 
 	t := reflect.TypeOf(cfg)
 	specs, err := fieldSpecs(t, o.refVars)
 	if err != nil {
-		return cfg, nil, err
+		return cfg, nil, nil, err
 	}
+
+	// The ordinary resolve runs first, always. The snapshot is a fallback, never
+	// a fast path: a healthy process must never serve from disk, or the cache
+	// would start masking a backend that is up but wrong, and nobody would learn
+	// about it until the values on disk expired.
+	var origin *bootstrapOrigin
 	res, err := resolveAll(ctx, specs, o)
 	if err != nil {
-		return cfg, nil, err
+		if o.bootstrap == nil {
+			return cfg, nil, nil, err
+		}
+		restored, writtenAt, berr := restoreBootstrap(o, specs, err, o.clock.Now())
+		if berr != nil {
+			return cfg, nil, nil, berr
+		}
+		o.log().Warn("the configuration backend is unreachable; booting from the bootstrap snapshot",
+			append([]any{"snapshot_written_at", writtenAt.UTC().Format(time.RFC3339)}, errAttrs(err)...)...)
+		res = restored
+		origin = &bootstrapOrigin{present: true, restored: true, writtenAt: writtenAt, resolveErr: err}
 	}
+
 	if err := buildInto(reflect.ValueOf(&cfg).Elem(), res, o.decodeHooks); err != nil {
-		return cfg, nil, err
+		return cfg, nil, nil, bootstrapReplayErr(origin, err)
 	}
 	// Derives run here, after decode and before validation, so a derived field
 	// is validated on its derived value rather than the zero value it held a
@@ -382,11 +416,16 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// only invokes the hooks.
 	for _, d := range derives {
 		if err := d.fn(&cfg); err != nil {
-			return cfg, nil, &DeriveError{Err: err}
+			return cfg, nil, nil, bootstrapReplayErr(origin, &DeriveError{Err: err})
 		}
 	}
+	// Validation runs on a restored snapshot exactly as it does on a live
+	// resolve, and that is the property that makes the cache safe rather than a
+	// way to smuggle a configuration past the gate. A snapshot only ever holds
+	// values that passed this same check when they were written, so a failure
+	// here means the rules changed, not that the file did.
 	if err := o.validator.Validate(cfg); err != nil {
-		return cfg, nil, &ValidationError{Err: err}
+		return cfg, nil, nil, bootstrapReplayErr(origin, &ValidationError{Err: err})
 	}
 
 	// Gate the initial configuration too (decision D7): a hook that verifies a
@@ -437,10 +476,22 @@ func loadValue[T any](ctx context.Context, o *options) (T, []resolved, error) {
 	// nil it has not been assigned yet. Only flush's gate, which runs on the
 	// reconciler goroutine itself, needs the mark (see reconciler.go).
 	if err := runPreApply(ctx, hook, o.preApplyTimeout, Change[T]{New: cfg, Fields: fields}, nil); err != nil {
-		return cfg, nil, err
+		return cfg, nil, nil, bootstrapReplayErr(origin, err)
 	}
 
-	return cfg, res, nil
+	// The snapshot is written for a configuration that has passed decode, every
+	// derive hook, validation and the gate, so it can never hold something this
+	// process itself refused. A restore is deliberately excluded: rewriting the
+	// file with what was just read from it would reset its age and quietly hand
+	// back the staleness bound BootstrapMaxAge exists to enforce.
+	if o.bootstrap != nil && origin == nil {
+		origin = &bootstrapOrigin{}
+		if at := persistBootstrap(o, specs, res, o.clock.Now(), o.onError); !at.IsZero() {
+			origin.present, origin.writtenAt = true, at
+		}
+	}
+
+	return cfg, res, origin, nil
 }
 
 // buildInto decodes all resolved values into the struct value dst.

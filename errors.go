@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is the sentinel error providers wrap (or return) when a referenced
@@ -294,6 +295,32 @@ func (e *StaleError) Error() string {
 }
 
 func (e *StaleError) Unwrap() error { return e.Err }
+
+// BootstrapStaleError is returned by Watcher.Health when the process booted
+// from a WithBootstrapCache snapshot and that snapshot is now older than
+// BootstrapMaxAge.
+//
+// Health passes inside the bound so the pod joins the load balancer and a
+// backend outage does not become a total outage. Past it the answer flips: a
+// configuration frozen for longer than the operator said they would tolerate is
+// no longer a config worth serving, and taking the process out of rotation is
+// better than serving indefinitely stale secrets to real traffic.
+//
+// It unwraps to ErrUnavailable, so ErrorKind classifies it as transient. That is
+// the accurate classification: nothing here needs human repair, and the
+// condition clears by itself the moment the backend is reachable again and the
+// fields resolve live.
+type BootstrapStaleError struct {
+	Age    time.Duration
+	MaxAge time.Duration
+}
+
+func (e *BootstrapStaleError) Error() string {
+	return fmt.Sprintf("mamori: serving a configuration restored from the bootstrap snapshot, written %s ago, which exceeds the %s BootstrapMaxAge",
+		e.Age.Round(time.Second), e.MaxAge)
+}
+
+func (e *BootstrapStaleError) Unwrap() error { return ErrUnavailable }
 
 // HealthError is returned by Watcher.Health when one or more fields are
 // unhealthy. It names the offending fields so a readiness probe can log which

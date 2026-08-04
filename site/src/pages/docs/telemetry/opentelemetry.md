@@ -5,7 +5,7 @@ title: OpenTelemetry
 
 # OpenTelemetry
 
-The `github.com/xavidop/mamori/x/otel` bridge (package `mamoriotel`) turns mamori's config resolves into OpenTelemetry spans and metrics: one `mamori.resolve` span per resolve, plus latency, refresh, watch-error, stale, dropped-change, and rejected-apply instruments, all tagged with the provider scheme and, on failure, a `mamori.error.kind` classification. Reach for it when you already run OTel and want config resolution to show up in the same traces and dashboards as the rest of your service.
+The `github.com/xavidop/mamori/x/otel` bridge (package `mamoriotel`) turns mamori's config resolves into OpenTelemetry spans and metrics: one `mamori.resolve` span per resolve, plus latency, refresh, watch-error, stale, dropped-change, rejected-apply, and bootstrap-write-failure instruments, all tagged with the provider scheme and, on failure, a `mamori.error.kind` classification. Reach for it when you already run OTel and want config resolution to show up in the same traces and dashboards as the rest of your service.
 
 Running Prometheus without OpenTelemetry? See [Prometheus](/docs/telemetry/prometheus/) for `x/prom`, a sibling bridge that implements `mamori.Meter` directly against `prometheus/client_golang` instead of going through OTel.
 
@@ -83,7 +83,7 @@ Each resolve produces one span, summarized below:
 
 ## Record metrics
 
-`NewMeter` wraps an OTel `metric.Meter` and registers six instruments up front, recording to them as mamori resolves and reconciles config. Pass the result to `mamori.WithMeter`:
+`NewMeter` wraps an OTel `metric.Meter` and registers seven instruments up front, recording to them as mamori resolves and reconciles config. Pass the result to `mamori.WithMeter`:
 
 ```go
 meter, err := mamoriotel.NewMeter(otel.Meter("mamori"))
@@ -94,7 +94,7 @@ if err != nil {
 w, err := mamori.Watch[Config](ctx, mamori.WithMeter(meter))
 ```
 
-The six instruments and their attributes:
+The seven instruments and their attributes:
 
 | Instrument | Name | Kind | Unit | Attributes |
 | --- | --- | --- | --- | --- |
@@ -104,6 +104,7 @@ The six instruments and their attributes:
 | Stale count | `mamori.stale.count` | Int64 counter | - | `scheme` |
 | Change dropped count | `mamori.change.dropped.count` | Int64 counter | - | none |
 | Apply rejected count | `mamori.apply.rejected.count` | Int64 counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
+| Bootstrap write failed | `mamori.bootstrap.write.failed.count` | Int64 counter | - | none |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws`, `vault`).
 - `status` is `error` when the resolve returned a non-nil error, otherwise `ok`.

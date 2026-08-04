@@ -415,3 +415,28 @@ func keys[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+// TestMeter_RecordBootstrapWriteFailed confirms the bootstrap-write-failure
+// counter carries no attributes: there is one snapshot file per process, so
+// there is nothing to break it down by.
+func TestMeter_RecordBootstrapWriteFailed(t *testing.T) {
+	rm := collect(t, func(m mamori.Meter) {
+		m.RecordBootstrapWriteFailed()
+		m.RecordBootstrapWriteFailed()
+	})
+
+	failed := findMetric(t, rm, mamoriotel.MetricBootstrapWriteFailedCount)
+	failedSum, ok := failed.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("bootstrap write failed data has type %T, want Sum[int64]", failed.Data)
+	}
+	if len(failedSum.DataPoints) != 1 {
+		t.Fatalf("bootstrap write failed data points = %d, want 1", len(failedSum.DataPoints))
+	}
+	if got := failedSum.DataPoints[0].Value; got != 2 {
+		t.Errorf("bootstrap write failed count = %d, want 2", got)
+	}
+	if n := failedSum.DataPoints[0].Attributes.Len(); n != 0 {
+		t.Errorf("bootstrap write failed attributes = %d, want 0", n)
+	}
+}

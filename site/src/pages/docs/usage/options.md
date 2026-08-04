@@ -29,6 +29,17 @@ Groups below are ordered by what you are trying to do, not alphabetically, becau
 | `WithStale` | Escalates prolonged staleness to a `*StaleError` delivered to `OnError`. | disabled (0) |
 | `WithClock` | Overrides the clock, primarily for deterministic tests. | the real system clock |
 
+## Surviving a cold start during an outage
+
+| Option | What it does | Default |
+| --- | --- | --- |
+| `WithBootstrapCache` | Keeps an encrypted, on-disk snapshot of the last known-good resolved values and boots from it when a cold start cannot reach the backend; see [Bootstrap cache](/docs/usage/bootstrap-cache/). | disabled (no snapshot is ever written) |
+| `BootstrapMaxAge` | A `BootstrapOption` passed to `WithBootstrapCache`: how old a restored snapshot may be while `Health` still reports the process ready. `0` means unbounded. | 24h (`DefaultBootstrapMaxAge`) |
+
+### The snapshot is a credential at rest
+
+**Enabling `WithBootstrapCache` creates a file holding live credentials that did not exist before.** It is sealed with AES-256-GCM and written `0600`, but the trade is a startup failure for an artifact an attacker with disk access and the key could read. See [Bootstrap cache](/docs/usage/bootstrap-cache/) for how to supply the key, which failures fall back and which deliberately do not, and what `BootstrapMaxAge` should be set to.
+
 ### Backoff is disabled by default
 
 **Without an explicit `WithBackoff(base, max)`, there is no retry backoff at all.** A ref that fails to resolve is simply retried on the plain `WithPollInterval` cadence, forever, until it succeeds or `WithStale` escalates the staleness to a hard error. It is easy to assume some backoff already exists once you start tuning retry behavior; it does not, and that is deliberate: turning it on by default would silently have changed the retry cadence of every caller already running mamori. See [Retry backoff](/docs/usage/watching/#retry-backoff) for the full behavior, including how it interacts with `WithStale` and `WithJitter`, once you do enable it.

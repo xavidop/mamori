@@ -29,6 +29,7 @@ func (m *fakeMeter) RecordWatchError(scheme string)                            {
 func (m *fakeMeter) RecordStale(scheme string)                                 {}
 func (m *fakeMeter) RecordChangeDropped()                                      {}
 func (m *fakeMeter) RecordApplyRejected(reason mamori.RejectReason)            {}
+func (m *fakeMeter) RecordBootstrapWriteFailed()                               {}
 
 // waitForLive blocks until w.Status().Live reaches at least v. It is the
 // Live counterpart to mamoritest.WaitForSnapshot's wait on Snapshot: Live is

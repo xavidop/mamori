@@ -5,7 +5,7 @@ title: Prometheus
 
 # Prometheus
 
-The `github.com/xavidop/mamori/x/prom` bridge (package `prom`) implements `mamori.Meter` directly against `prometheus/client_golang`, registering six instruments up front: resolve latency, refresh, watch-error, stale, dropped-change, and rejected-apply, all labeled with the provider scheme and, on failure, an `error_kind` classification. Reach for it when you run Prometheus without OpenTelemetry and want `client_golang` to be the only metrics dependency in your build.
+The `github.com/xavidop/mamori/x/prom` bridge (package `prom`) implements `mamori.Meter` directly against `prometheus/client_golang`, registering seven instruments up front: resolve latency, refresh, watch-error, stale, dropped-change, rejected-apply, and bootstrap-write-failure, all labeled with the provider scheme and, on failure, an `error_kind` classification. Reach for it when you run Prometheus without OpenTelemetry and want `client_golang` to be the only metrics dependency in your build.
 
 Already on OpenTelemetry? Use [`x/otel`](/docs/telemetry/opentelemetry/) with a Prometheus exporter instead of this module: it gives you the same `/metrics` endpoint plus spans, through one metrics pipeline rather than two. `x/prom` exists specifically for shops using `client_golang` directly.
 
@@ -60,7 +60,7 @@ Every resolve now records to `mamori_resolve_duration_seconds`; failed resolves 
 
 ## Record metrics
 
-`New` registers six instruments up front, recording to them as mamori resolves and reconciles config. Pass the result to `mamori.WithMeter`:
+`New` registers seven instruments up front, recording to them as mamori resolves and reconciles config. Pass the result to `mamori.WithMeter`:
 
 ```go
 meter, err := mamoriprom.New(reg)
@@ -71,7 +71,7 @@ if err != nil {
 w, err := mamori.Watch[Config](ctx, mamori.WithMeter(meter))
 ```
 
-The six instruments and their labels:
+The seven instruments and their labels:
 
 | Instrument | Name | Kind | Unit | Labels |
 | --- | --- | --- | --- | --- |
@@ -81,6 +81,7 @@ The six instruments and their labels:
 | Stale count | `mamori_stale_total` | Counter | - | `scheme` |
 | Change dropped count | `mamori_change_dropped_total` | Counter | - | none |
 | Apply rejected count | `mamori_apply_rejected_total` | Counter | - | `reason` (`validation` \| `preapply` \| `derive`) |
+| Bootstrap write failed | `mamori_bootstrap_write_failed_total` | Counter | - | none |
 
 - `scheme` is the provider scheme of the resolved ref (e.g. `file`, `aws-sm`, `vault`).
 - `status` is `error` when the resolve returned a non-nil error, otherwise `ok`.

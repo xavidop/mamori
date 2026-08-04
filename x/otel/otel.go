@@ -63,6 +63,13 @@ const (
 	// refused before being applied, with attribute "reason" (see
 	// mamori.RejectReason: "validation", "preapply", or "derive").
 	MetricApplyRejectedCount = "mamori.apply.rejected.count"
+	// MetricBootstrapWriteFailedCount is a counter of WithBootstrapCache
+	// snapshot writes that failed after an otherwise good configuration was
+	// applied. It carries no attributes: there is one snapshot file per
+	// process. A non-zero rate means the process is running without the
+	// cold-start fallback it was configured to have, and nothing else will say
+	// so until a restart finds nothing to fall back to.
+	MetricBootstrapWriteFailedCount = "mamori.bootstrap.write.failed.count"
 )
 
 // Metric attribute keys.
@@ -104,10 +111,11 @@ type meter struct {
 	staleCount      metric.Int64Counter
 	changeDropped   metric.Int64Counter
 	applyRejected   metric.Int64Counter
+	bootstrapFailed metric.Int64Counter
 }
 
 // NewMeter builds a mamori.Meter backed by the given OpenTelemetry meter. It
-// creates six instruments up front:
+// creates seven instruments up front:
 //
 //   - a Float64Histogram "mamori.resolve.duration" (unit ms) recording resolve
 //     latency, tagged with "scheme" and "status" (ok|error);
@@ -115,7 +123,9 @@ type meter struct {
 //   - an Int64Counter "mamori.watch.errors" tagged with "scheme";
 //   - an Int64Counter "mamori.stale.count" tagged with "scheme";
 //   - an Int64Counter "mamori.change.dropped.count", with no attributes;
-//   - an Int64Counter "mamori.apply.rejected.count" tagged with "reason".
+//   - an Int64Counter "mamori.apply.rejected.count" tagged with "reason";
+//   - an Int64Counter "mamori.bootstrap.write.failed.count", with no
+//     attributes.
 //
 // An error is returned if any instrument cannot be created. The returned Meter
 // records measurements against context.Background(); pass it to
@@ -170,6 +180,14 @@ func NewMeter(m metric.Meter) (mamori.Meter, error) {
 		return nil, err
 	}
 
+	bootstrapFailed, err := m.Int64Counter(
+		MetricBootstrapWriteFailedCount,
+		metric.WithDescription("Number of mamori bootstrap cache snapshot writes that failed."),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &meter{
 		ctx:             context.Background(),
 		resolveDuration: resolveDuration,
@@ -178,6 +196,7 @@ func NewMeter(m metric.Meter) (mamori.Meter, error) {
 		staleCount:      staleCount,
 		changeDropped:   changeDropped,
 		applyRejected:   applyRejected,
+		bootstrapFailed: bootstrapFailed,
 	}, nil
 }
 
@@ -230,6 +249,12 @@ func (m *meter) RecordChangeDropped() {
 // reason ("validation", "preapply", or "derive").
 func (m *meter) RecordApplyRejected(reason mamori.RejectReason) {
 	m.applyRejected.Add(m.ctx, 1, metric.WithAttributes(attribute.String(attrReason, string(reason))))
+}
+
+// RecordBootstrapWriteFailed increments the bootstrap-snapshot-write-failure
+// counter. It carries no attributes: there is one snapshot file per process.
+func (m *meter) RecordBootstrapWriteFailed() {
+	m.bootstrapFailed.Add(m.ctx, 1)
 }
 
 // tracer implements mamori.Tracer on top of an OpenTelemetry trace.Tracer.

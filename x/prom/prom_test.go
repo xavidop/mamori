@@ -140,3 +140,41 @@ func TestRecordChangeDroppedHasNoLabels(t *testing.T) {
 		t.Fatalf("metric %s not found", MetricChangeDroppedTotal)
 	}
 }
+
+// TestRecordBootstrapWriteFailedHasNoLabels confirms the
+// bootstrap-write-failure counter is a bare Counter: there is one snapshot
+// file per process, so there is nothing to break it down by.
+func TestRecordBootstrapWriteFailedHasNoLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m, err := New(reg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	m.RecordBootstrapWriteFailed()
+	m.RecordBootstrapWriteFailed()
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found bool
+	for _, fam := range families {
+		if fam.GetName() != MetricBootstrapWriteFailedTotal {
+			continue
+		}
+		found = true
+		if n := len(fam.Metric); n != 1 {
+			t.Fatalf("%s metric count = %d, want 1", MetricBootstrapWriteFailedTotal, n)
+		}
+		metric := fam.Metric[0]
+		if n := len(metric.GetLabel()); n != 0 {
+			t.Errorf("%s labels = %d, want 0", MetricBootstrapWriteFailedTotal, n)
+		}
+		if got := metric.GetCounter().GetValue(); got != 2 {
+			t.Errorf("%s value = %v, want 2", MetricBootstrapWriteFailedTotal, got)
+		}
+	}
+	if !found {
+		t.Fatalf("metric %s not found", MetricBootstrapWriteFailedTotal)
+	}
+}

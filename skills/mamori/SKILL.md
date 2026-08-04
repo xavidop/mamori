@@ -151,6 +151,47 @@ mamori.WithDerive(func(c *Config) error {
   reading this call site rather than a `source:` tag. `policy` still grants it
   nothing, since it has no ref.
 
+## Boot through a backend outage
+
+`WithBootstrapCache(path, key, ...)` keeps an encrypted snapshot of the last
+known-good **resolved values** on disk and boots from it when a cold start
+cannot reach the backend. `key` is exactly 32 bytes (AES-256-GCM); the file is
+written atomically, mode `0600`.
+
+```go
+mamori.WithBootstrapCache("/var/lib/app/mamori.snap", key,
+	mamori.BootstrapMaxAge(6*time.Hour))
+```
+
+- **It creates a file holding live credentials at rest that did not exist
+  before.** Encryption and `0600` are the mitigation; the trade is a startup
+  failure for a file an attacker with disk access and the key could read. Say so
+  when you recommend it.
+- **Fallback, never a fast path.** Every start resolves normally first; the
+  snapshot is read only if that fails.
+- **Only `unavailable` and `rate_limited` fall back.** `not_found`,
+  `permission_denied`, `unauthenticated`, `invalid` and `unknown` mean the
+  backend answered and said no, so they fail the start rather than undoing a
+  revocation. An expired `Value.NotAfter` is refused for the same reason.
+- Written on every applied update, after validation, every `WithDerive` hook and
+  `PreApply`. A write failure never fails the update: it reaches `OnError`, the
+  logger, and a `bootstrap_write_failed` counter. A restore does not rewrite the
+  file, so its age is not reset.
+- A restored config is replayed through the ordinary decode, derive, validate
+  and `PreApply` path. Resolved values are cached rather than `T` because
+  `secret.String` marshals to `[REDACTED]`, so a snapshot of `T` would lose
+  every secret.
+- `Health()` passes inside `BootstrapMaxAge` (default 24h) so the pod serves
+  traffic, and returns a `*BootstrapStaleError` past it. Set it to the rotation
+  window of the shortest-lived credential; `0` is unbounded and must be written
+  explicitly.
+- `Report.Source` reads `bootstrap_cache` while the snapshot is deciding what is
+  served, and `Report.Bootstrap` carries its presence, age, and fingerprint
+  match. Neither the file's contents nor its path ever appear.
+- Changing the config struct invalidates an older snapshot (schema fingerprint).
+  Put the file on a volume that outlives the container, and give each replica
+  its own path.
+
 ## Force an immediate refresh
 
 `w.Refresh(ctx)` re-resolves every field now, bypassing poll intervals, and
@@ -211,6 +252,8 @@ provider's native watch when there is one and polls otherwise.
 | `WithQueueDepth(n)` | 16 | `OnChange` queue; drops oldest when full |
 | `WithBackoff(base, max)` | provider default | retry pacing after failures |
 | `WithStale(maxAge)` | off | a ref unrefreshed this long sends `OnError` a `*StaleError` |
+| `WithBootstrapCache(path, key, ...)` | off | boot from an encrypted on-disk snapshot when a cold start cannot reach the backend |
+| `BootstrapMaxAge(d)` | 24h | a `BootstrapOption`: how old a restored snapshot may be while `Health` passes |
 | `WithPreApplyTimeout(d)` | 10s | bound the `PreApply` hook |
 | `WithHistory(n)` | 0 | keep the last `n` snapshots |
 | `WithLogger(l)` | discard | structured trail; never logs a resolved value |

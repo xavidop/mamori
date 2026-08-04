@@ -6,6 +6,17 @@ import (
 	"fmt"
 )
 
+// defaultValueVersion is the Value.Version mamori stamps on a value that came
+// from a field's `default:` tag rather than from a provider.
+//
+// It is a constant because more than one reader depends on telling the two
+// apart, not only the writers: the bootstrap cache uses it to know that a
+// restored field carries a struct-tag default, which no backend can have
+// rotated behind the process's back, rather than a cached backend value that
+// one might have (see seedBootstrapOrigin). A literal repeated at every site
+// would let a rename break that reader silently.
+const defaultValueVersion = "default"
+
 // resolved pairs a fieldSpec with the value obtained for it.
 type resolved struct {
 	spec  fieldSpec
@@ -196,7 +207,7 @@ func applyOnFail(r *resolved, terminal error) error {
 	if r.spec.OnFail == onFailUseDefault {
 		// walkSpecs rejects onfail:"default" without a default: tag at
 		// spec-parse time, so HasDefault is always true here.
-		r.value = Value{Bytes: []byte(r.spec.Default), Sensitive: r.spec.Sensitive, Version: "default"}
+		r.value = Value{Bytes: []byte(r.spec.Default), Sensitive: r.spec.Sensitive, Version: defaultValueVersion}
 		r.found = false
 		r.set = true
 		return nil
@@ -281,7 +292,7 @@ func setResolved(r *resolved, val Value) {
 func applyDefault(r *resolved) error {
 	switch {
 	case r.spec.HasDefault:
-		r.value = Value{Bytes: []byte(r.spec.Default), Sensitive: r.spec.Sensitive, Version: "default"}
+		r.value = Value{Bytes: []byte(r.spec.Default), Sensitive: r.spec.Sensitive, Version: defaultValueVersion}
 		r.found = false
 		r.set = true
 		return nil
