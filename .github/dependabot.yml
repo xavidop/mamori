@@ -171,6 +171,14 @@ updates:
     directory: "/providers/https"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:https]
+  # Bitwarden Secrets Manager. Standard library only, on top of httpcore, and
+  # deliberately so: it decrypts client side with crypto/hkdf, crypto/aes and
+  # crypto/hmac rather than taking Bitwarden's cgo Rust SDK. Same reasoning as
+  # https above for why the entry stays despite rarely firing.
+  - package-ecosystem: gomod
+    directory: "/providers/bitwarden"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:bitwarden]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.

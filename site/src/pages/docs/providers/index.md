@@ -36,6 +36,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `azure-appconfig://` | Azure AppConfig | no | poll | ✅ |
 | `doppler://` | Doppler | yes | poll | ✅ |
 | `scaleway-sm://` | Scaleway Secret Manager | yes | poll | ✅ |
+| `bitwarden-sm://` | Bitwarden Secrets Manager | yes | poll | ✅ |
 | `op://` | 1Password | yes | poll | ✅ |
 | `sops://` | SOPS | yes | fsnotify | ✅ |
 | `postgres://` | PostgreSQL | no | **native** (LISTEN/NOTIFY) | ✅ |

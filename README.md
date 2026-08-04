@@ -39,6 +39,7 @@ go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
 go get github.com/xavidop/mamori/providers/https          # https:// (generic REST)
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
+go get github.com/xavidop/mamori/providers/bitwarden      # bitwarden-sm://
 # ... gcp, azure, consul, doppler, onepassword, sops
 
 go get github.com/xavidop/mamori/providers/httpcore       # no scheme: the shared HTTP core
@@ -131,6 +132,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/consul` | `consul://` | **native** (blocking queries) | ✅ |
 | `providers/doppler` | `doppler://` | poll | ✅ |
 | `providers/scaleway-sm` | `scaleway-sm://` | poll | ✅ |
+| `providers/bitwarden` | `bitwarden-sm://` | poll | ✅ |
 | `providers/onepassword` | `op://` | poll | ✅ |
 | `providers/sops` | `sops://` | fsnotify | ✅ |
 | `providers/postgres` | `postgres://` | **native** (LISTEN/NOTIFY) | ✅ |

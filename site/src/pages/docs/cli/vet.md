@@ -45,19 +45,20 @@ A field is flagged when both of these are true:
 
 The secret-bearing schemes are the ones that resolve to secret material:
 
-| Scheme       | Backend                     | Always a secret?              |
-| ------------ | --------------------------- | ----------------------------- |
-| `aws-sm`     | AWS Secrets Manager         | yes                           |
-| `gcp-sm`     | Google Cloud Secret Manager | yes                           |
-| `azure-kv`   | Azure Key Vault             | yes                           |
-| `vault`      | HashiCorp Vault             | yes                           |
-| `op`         | 1Password                   | yes                           |
-| `sops`       | Mozilla SOPS                | yes                           |
-| `doppler`    | Doppler                     | yes                           |
-| `k8s-secret` | Kubernetes Secret           | yes                           |
-| `aws-ps`     | AWS SSM Parameter Store     | only `SecureString` params    |
-| `exec`       | Command output              | mamori marks all of it secret |
-| `mamori`     | A mamori config server      | whatever the server marks     |
+| Scheme         | Backend                     | Always a secret?              |
+| -------------- | --------------------------- | ----------------------------- |
+| `aws-sm`       | AWS Secrets Manager         | yes                           |
+| `gcp-sm`       | Google Cloud Secret Manager | yes                           |
+| `azure-kv`     | Azure Key Vault             | yes                           |
+| `vault`        | HashiCorp Vault             | yes                           |
+| `op`           | 1Password                   | yes                           |
+| `sops`         | Mozilla SOPS                | yes                           |
+| `doppler`      | Doppler                     | yes                           |
+| `k8s-secret`   | Kubernetes Secret           | yes                           |
+| `bitwarden-sm` | Bitwarden Secrets Manager   | yes                           |
+| `aws-ps`       | AWS SSM Parameter Store     | only `SecureString` params    |
+| `exec`         | Command output              | mamori marks all of it secret |
+| `mamori`       | A mamori config server      | whatever the server marks     |
 
 The last three carry secrets only sometimes, and are flagged anyway. A false positive costs you a `secret.String` on a value that did not need one; a miss costs a leaked credential. For a security check, the cheap mistake is the right one to make.
 

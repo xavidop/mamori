@@ -6,6 +6,7 @@ use (
 	./providers/aws
 	./providers/azblob
 	./providers/azure
+	./providers/bitwarden
 	./providers/cloudflare-kv
 	./providers/configcat
 	./providers/consul

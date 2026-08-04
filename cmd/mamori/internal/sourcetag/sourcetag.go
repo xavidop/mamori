@@ -38,14 +38,15 @@ import (
 // SchemeSet.Add and the `--secret-schemes` flag on vet and explain.
 var defaultSecretSchemes = []string{
 	// Dedicated secret managers: every value they resolve is secret.
-	"aws-sm",     // AWS Secrets Manager
-	"gcp-sm",     // Google Cloud Secret Manager
-	"azure-kv",   // Azure Key Vault
-	"vault",      // HashiCorp Vault
-	"op",         // 1Password
-	"sops",       // Mozilla SOPS
-	"doppler",    // Doppler
-	"k8s-secret", // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
+	"aws-sm",       // AWS Secrets Manager
+	"gcp-sm",       // Google Cloud Secret Manager
+	"azure-kv",     // Azure Key Vault
+	"vault",        // HashiCorp Vault
+	"op",           // 1Password
+	"sops",         // Mozilla SOPS
+	"doppler",      // Doppler
+	"k8s-secret",   // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
+	"bitwarden-sm", // Bitwarden Secrets Manager
 
 	// Conditionally secret, listed for the reason given above.
 	"aws-ps", // SSM Parameter Store: only SecureString params are secret

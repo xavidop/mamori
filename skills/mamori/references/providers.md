@@ -30,6 +30,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
 | `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
+| `bitwarden` | `bitwarden-sm://` | Bitwarden **Secrets Manager** (the `bws` machine-account product), not the consumer password manager. A secret is addressed by its **UUID**, never its name, because the list endpoint returns names as ciphertext and omits values: `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d`, `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d#password`. Reads `BWS_ACCESS_TOKEN`. Decrypts client side with the Go standard library alone. |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
 | `k8s` | `k8s-secret://` `k8s-cm://` | `k8s-secret://ns/name#key` |
@@ -61,7 +62,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
 
 - Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
-  `doppler`, `scaleway-sm`, `k8s-secret`.
+  `doppler`, `scaleway-sm`, `k8s-secret`, `bitwarden-sm`.
 - Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).
