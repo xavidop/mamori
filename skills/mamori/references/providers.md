@@ -29,6 +29,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
+| `hcp-vault-secrets` | `hcp-vs://` | `hcp-vs://DB_PASSWORD`, `hcp-vs://DB_PASSWORD?app=web&org=<uuid>&project=<uuid>`, `hcp-vs://DB_CREDS#/creds/password`. HCP Vault Secrets, NOT self-hosted `vault://`. The whole ref path is the secret NAME; organization/project/app come from options or `?org=`/`?project=`/`?app=`, never from the path. Service principal via `HCP_CLIENT_ID`/`HCP_CLIENT_SECRET`. Static secrets only. |
 | `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
@@ -61,7 +62,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
 
 - Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
-  `doppler`, `scaleway-sm`, `k8s-secret`.
+  `doppler`, `hcp-vs`, `scaleway-sm`, `k8s-secret`.
 - Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).

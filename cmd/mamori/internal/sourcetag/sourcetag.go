@@ -45,6 +45,7 @@ var defaultSecretSchemes = []string{
 	"op",         // 1Password
 	"sops",       // Mozilla SOPS
 	"doppler",    // Doppler
+	"hcp-vs",     // HCP Vault Secrets (distinct from self-hosted vault above)
 	"k8s-secret", // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
 
 	// Conditionally secret, listed for the reason given above.
