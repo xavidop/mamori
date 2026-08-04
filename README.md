@@ -160,6 +160,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/growthbook` | `growthbook://` | poll | no (chain preserved) |
 | `providers/flipt` | `flipt://` | poll | ✅ |
 | `providers/goff` | `goff://` (GO Feature Flag) | poll | ✅ |
+| `providers/posthog` | `posthog://` | poll | ✅ |
 | `providers/openfeature` | `openfeature://` ([OpenFeature](https://openfeature.dev) standard) | poll | ✅ |
 | `providers/viper` | `viper://` ([Viper](https://github.com/spf13/viper) config library) | poll | n/a (no error surface) |
 | `providers/mamori` | `mamori://` ([config server](#config-server) client) | **native** (SSE stream) | ✅ |

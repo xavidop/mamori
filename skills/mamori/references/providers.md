@@ -53,6 +53,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcs` | `gcs://` | Google Cloud Storage object |
 | `azblob` | `azblob://` | Azure Blob Storage object |
 | `launchdarkly` `unleash` `flagsmith` `configcat` `split` `growthbook` `flipt` `goff` | feature-flag schemes | one module per flag backend |
+| `posthog` | `posthog://` | PostHog flag evaluated for one distinct id (set provider-wide with `WithDistinctID`, not per ref). No fragment gives `true`/`false` for a boolean flag and the variant key for a multivariate one; `#enabled`, `#variant`, `#payload` name a facet. `posthog://new-checkout`, `posthog://pricing-test#variant` |
 | `openfeature` | `openfeature://` | vendor-neutral flag standard; evaluates through whatever `openfeature.FeatureProvider` your app installs. `openfeature://new-checkout?type=bool`, `openfeature://limits#/upload/maxMB?type=object` |
 | `viper` | `viper://` | reads whatever a `*viper.Viper` resolved for a key, inheriting its precedence (Set > flags > env > config file > k/v store > defaults); for incremental migration off an existing Viper setup. `viper://server.port`, `viper://db#/creds/port` |
 | `mamori` | `mamori://` | client of a mamori config server (native watch) |
