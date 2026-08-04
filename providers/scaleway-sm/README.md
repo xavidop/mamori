@@ -175,10 +175,14 @@ status:
 | --- | --- |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
-| 429 | `rate_limited` |
-| 400 | `invalid` |
-| 5xx | `unavailable` |
-| anything else | `unknown` |
+| 408, 429 | `rate_limited` |
+| 400, 422 | `invalid` |
+| 5xx, and any other status not named above | `unavailable` |
+
+The mapping is `httpcore.ClassifyStatus`, shared with every other
+`httpcore`-backed provider, rather than a table private to this module. An
+unrecognized status reports `unavailable` (transient, so mamori backs off and
+retries) rather than `unknown`.
 
 **The 404 caveat.** Scaleway's by-path access route returns the same 404, with no
 distinguishing error code in the body, whether the secret name is unknown, the
@@ -192,7 +196,7 @@ operator disables the newest revision. Either way it degrades silently to the
 field's default or optional handling, exactly as if the secret had never existed
 at all. Scaleway has not published a stable enough error-code vocabulary in the
 response body to key this mapping on anything but the status, so codes not
-listed here report `unknown` rather than being guessed at.
+listed here report `unavailable` rather than being guessed at.
 
 ## Authentication & configuration
 
@@ -259,7 +263,7 @@ revision, see above) to detect a change between ticks.
 | The disabled-revision decision: `?revision` defaulting to `latest_enabled` skips a disabled revision and resolves the newest enabled one; a disabled revision fails to resolve regardless of whether it is addressed via `latest` or by its exact number | **Verified** (`TestResolveLatestEnabledSkipsDisabledRevision`, `TestResolveDisabledRevisionFails`) |
 | `#field` and `#/json/pointer` selection, including a nested pointer | **Verified** (unit tests) |
 | Not-found (unknown secret) | **Verified** (`TestResolveUnknownSecretIsNotFound`) |
-| Error classification (401/403/429/400/5xx), exercised through `Resolve` and by table tests against `classifyStatus` directly | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
+| Error classification (401/403/400/422/408/429, and an unnamed status such as 418 as `unavailable`), exercised through `Resolve` | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
 | Credentials never reach an error: the secret key and project id never appear in an error string, from a live transport failure or a malformed `WithBaseURL` | **Verified** (`TestResolveTransportErrorNeverLeaksCredentials`, `TestResolveMalformedBaseURLNeverLeaksCredentials`) |
 | No cache: repeated resolves of an unchanged secret cost one request each, and a failure injected between resolves is observed on the very next call | **Verified** (`TestResolveNeverCaches`) |
 | Context cancellation | **Verified** (`TestResolveHonorsContextCancellation`) |

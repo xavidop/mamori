@@ -46,8 +46,8 @@
 // its enabled state; Scaleway does not offer one. A caller who pins
 // ?revision=latest and later has that revision disabled will see the
 // request fail, and because a 404 from this API does not distinguish "no
-// such revision" from "that revision is disabled" (see classifyStatus's doc
-// comment in resolve.go), that failure surfaces as mamori.ErrNotFound - which
+// such revision" from "that revision is disabled" (see the 404 branch
+// of access in resolve.go), that failure surfaces as mamori.ErrNotFound - which
 // means an optional or defaulted field goes quiet and silently falls back to
 // its default instead of announcing the revocation.
 //

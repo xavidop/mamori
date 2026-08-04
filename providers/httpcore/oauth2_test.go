@@ -392,3 +392,61 @@ func TestOAuth2ConcurrentApply(t *testing.T) {
 		t.Fatalf("exchanges = %d, want 1 under concurrency", exchanges)
 	}
 }
+
+// TestOAuth2RedactPathHidesTokenURLPath pins that OAuth2Config.RedactPath
+// reaches both places a token endpoint's URL is rendered into an error: the
+// scheme rejection at construction, and every error the exchange itself
+// returns through the Client this builds for the token endpoint.
+//
+// A token endpoint identifies its tenant through the path often enough to need
+// this. Microsoft Entra's is
+// https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token, and a tenant id
+// there is exactly as identifying as an account id in a resource path.
+func TestOAuth2RedactPathHidesTokenURLPath(t *testing.T) {
+	tokenURL := "http://idp.test/" + pathIDMarker + "/oauth2/token"
+
+	t.Run("scheme rejection", func(t *testing.T) {
+		_, err := OAuth2ClientCredentials(OAuth2Config{
+			TokenURL:     tokenURL,
+			ClientID:     "cid",
+			ClientSecret: clientSecretMarker,
+			RedactPath:   hidePathID,
+		})
+		if err == nil {
+			t.Fatal("OAuth2ClientCredentials with an http:// TokenURL returned nil error")
+		}
+		if strings.Contains(err.Error(), pathIDMarker) {
+			t.Fatalf("path identifier leaked into the scheme rejection %q", err.Error())
+		}
+		if !strings.Contains(err.Error(), pathIDPlaceholder) {
+			t.Fatalf("RedactPath was not applied to the scheme rejection %q", err.Error())
+		}
+	})
+
+	t.Run("exchange", func(t *testing.T) {
+		auth, err := OAuth2ClientCredentials(OAuth2Config{
+			TokenURL:      tokenURL,
+			ClientID:      "cid",
+			ClientSecret:  clientSecretMarker,
+			AllowInsecure: true,
+			RedactPath:    hidePathID,
+			HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("dial tcp: connection refused")
+			}),
+		})
+		if err != nil {
+			t.Fatalf("OAuth2ClientCredentials: %v", err)
+		}
+
+		err = auth.Apply(context.Background(), newTestRequest(t))
+		if err == nil {
+			t.Fatal("Apply with a failing token endpoint returned nil error")
+		}
+		if strings.Contains(err.Error(), pathIDMarker) {
+			t.Fatalf("path identifier leaked into the exchange error %q", err.Error())
+		}
+		if !strings.Contains(err.Error(), pathIDPlaceholder) {
+			t.Fatalf("RedactPath was not applied to the exchange error %q", err.Error())
+		}
+	})
+}

@@ -146,10 +146,14 @@ identically on both paths:
 | --- | --- |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
-| 429 | `rate_limited` |
-| 400 | `invalid` |
-| 5xx | `unavailable` |
-| anything else | `unknown` |
+| 408, 429 | `rate_limited` |
+| 400, 422 | `invalid` |
+| 5xx, and any other status not named above | `unavailable` |
+
+The mapping is `httpcore.ClassifyStatus`, shared with every other
+`httpcore`-backed provider, rather than a table private to this module. An
+unrecognized status reports `unavailable` (transient, so mamori backs off and
+retries) rather than `unknown`.
 
 **The 404 caveat.** An absent key and an absent namespace are indistinguishable
 in Cloudflare's response: both return a plain 404 with no error code this
@@ -168,10 +172,17 @@ request URL, and `http.Client.Do` wraps every transport-level failure - a
 refused connection, a timeout, a cancelled context - in a `*url.Error` whose
 `Error()` renders that full URL. Without stripping it, an ordinary network
 hiccup, not even a bug in this provider, would put the account id and
-namespace id into a returned error's text. This provider's
-`sanitizeTransportError` discards the rendered URL and keeps only the
-underlying reason, while still wrapping it with `%w` so `errors.Is(_,
-context.Canceled)` and similar checks keep working.
+namespace id into a returned error's text. This provider therefore hands
+`httpcore` a `Config.RedactPath` hook that substitutes `<account>` and
+`<namespace>` for the two ids, in both their raw and percent-encoded forms,
+before `httpcore` composes the message. `httpcore` applies that hook at every
+site that renders a URL into an error, including the `*url.Error` it rebuilds
+around a transport failure, so the ids cannot be read back out through the
+chain either. Substituting the path before the message exists, rather than
+rewriting the finished message afterwards as this provider used to, is what
+keeps the error chain whole: nothing is rewritten, so `errors.Is(_,
+context.Canceled)` and `errors.As(_, &urlErr)` keep working, and the rest of
+the path still names which endpoint was called.
 
 ## Authentication & configuration
 
@@ -249,9 +260,10 @@ either.
 | `ResolveBatch` grouped by namespace; a key deduplicated across refs that select different `#field`s fans out to every ref | **Verified** (`TestResolveBatchGroupsByNamespace`, `TestResolveBatchDedupedKeyFansOutToAllRefs`) |
 | An absent key omitted from a batch response leaves its siblings intact, per the `BatchProvider` contract; an invalid selection still fails the batch | **Verified** (unit tests) |
 | A 404 namespace on the bulk path omits that namespace's keys instead of failing the batch, and a sibling namespace's ref still resolves | **Verified** (`TestResolveBatchNotFoundNamespaceOmitsKeys`, `TestResolveBatchSurvivesSiblingNamespaceNotFound`) |
-| Error classification (401/403/429/400/5xx), exercised from both the single-key path and the bulk path | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
+| Error classification (401/403/400/422/408/429, and an unnamed status such as 418 as `unavailable`), exercised from both the single-key path and the bulk path | **Verified** (unit tests + `providertest` `ErrorClassification` case) |
 | A namespace containing `/` (ref-controlled via `?namespace=`) travels percent-encoded in the request path, on both the single-key and the bulk path | **Verified** (`TestResolveNamespaceWithSlashIsEscaped`, `TestResolveBatchNamespaceWithSlashIsEscaped`) |
-| Credentials never reach an error: the token, account id, and namespace id never appear in an error string, on any of the four `sanitizeTransportError` call sites (`NewRequestWithContext` and `httpClient.Do`, in each of `get` and `bulkGet`) | **Verified** (`TestSettingsErrorsNeverCarryCredentials`, `TestResolveSendsBearerTokenNeverInURL`, `TestResolveTransportErrorNeverLeaksCredentials`, `TestResolveBatchTransportErrorNeverLeaksCredentials`, `TestResolveMalformedBaseURLNeverLeaksCredentials`, `TestResolveBatchMalformedBaseURLNeverLeaksCredentials`) |
+| Credentials never reach an error: the token, account id, and namespace id never appear in an error string, on the transport-failure path of both `get` and `bulkGet`, where `httpcore` renders the request URL twice (into its own message and into the `*url.Error` it rebuilds around the cause) | **Verified** (`TestSettingsErrorsNeverCarryCredentials`, `TestResolveSendsBearerTokenNeverInURL`, `TestResolveTransportErrorNeverLeaksCredentials`, `TestResolveBatchTransportErrorNeverLeaksCredentials`, plus `TestRedactPathSubstitutesBothIDs` and `TestRedactPathLeavesAPathCarryingNoIDAlone` on the hook itself) |
+| A malformed `WithBaseURL` is rejected at client construction as `mamori.ErrInvalid`, on both the single-key and the bulk path, rather than reaching mamori as an unclassified error it would back off and retry | **Verified** (`TestResolveMalformedBaseURLIsInvalid`, `TestResolveBatchMalformedBaseURLIsInvalid`) |
 | No cache: every `Resolve` reaches the fake transport, never a held value | **Verified** (`TestResolveNeverCaches`) |
 | Context cancellation | **Verified** (unit tests) |
 | `BatchProvider` is implemented; `WatchableProvider` is deliberately not | **Verified** (`TestProviderImplementsBatchProvider`, `TestProviderIsNotWatchable`) |

@@ -653,6 +653,195 @@ func TestDoTransportErrorRedactsURLWithoutBreakingChain(t *testing.T) {
 	}
 }
 
+// pathIDMarker stands in for an identifier a provider carries as a path
+// segment: an account id, a namespace id, an organisation. Like the two markers
+// above it must not appear in any mamori sentinel's own text, so an assertion
+// trips on a real leak rather than on the sentinel.
+const pathIDMarker = "s3cr3t-path-id-4b8e"
+
+// pathIDPlaceholder is what hidePathID substitutes for pathIDMarker. It is
+// asserted on as well as the marker's absence, so a hook that silently dropped
+// the whole path, or was never called at all, cannot pass.
+const pathIDPlaceholder = "<id>"
+
+// hidePathID is the Config.RedactPath hook the tests below install: the shape a
+// path-identified provider writes, substituting a placeholder for an identifier
+// rather than discarding the path.
+func hidePathID(path string) string {
+	return strings.ReplaceAll(path, pathIDMarker, pathIDPlaceholder)
+}
+
+// TestDoRedactPathHidesPathFromClassifiedStatusError covers the wrap site that
+// renders a URL once ClassifyStatus has rejected the response: the commonest
+// error any provider returns, and the one an operator is most likely to paste
+// somewhere.
+func TestDoRedactPathHidesPathFromClassifiedStatusError(t *testing.T) {
+	c, err := New(Config{
+		BaseURL:    "https://api.test",
+		RedactPath: hidePathID,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusForbidden, nil, nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = c.Do(context.Background(), Request{Path: "accounts/" + pathIDMarker + "/values/k"})
+	if err == nil {
+		t.Fatal("Do with 403 returned nil error")
+	}
+	if strings.Contains(err.Error(), pathIDMarker) {
+		t.Fatalf("path identifier leaked into the classified-status error %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), pathIDPlaceholder) {
+		t.Fatalf("RedactPath was not applied to the classified-status error %q", err.Error())
+	}
+}
+
+// TestDoRedactPathHidesPathFromTransportError covers the transport-failure wrap
+// site, and with it the subtle half of this hook: Do rebuilds net/http's
+// *url.Error with a redacted URL, and that rebuilt URL must go through
+// RedactPath too. Skipping it there would leave the path one errors.As away,
+// and would render it into the very same message through the wrapped cause, so
+// the assertions are made against both the message and the *url.Error itself.
+//
+// The chain assertions are the other half: the rebuild exists to keep
+// errors.As reaching *url.Error and errors.Is reaching the transport's own
+// cause, and a hook must not be an excuse to start discarding either.
+func TestDoRedactPathHidesPathFromTransportError(t *testing.T) {
+	sentinel := errors.New("dial tcp: connection refused")
+	c, err := New(Config{
+		BaseURL:    "https://api.test",
+		RedactPath: hidePathID,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			return nil, sentinel
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = c.Do(context.Background(), Request{Path: "accounts/" + pathIDMarker + "/values/k"})
+	if err == nil {
+		t.Fatal("Do with a transport error returned nil error")
+	}
+	if strings.Contains(err.Error(), pathIDMarker) {
+		t.Fatalf("path identifier leaked into the transport error %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), pathIDPlaceholder) {
+		t.Fatalf("RedactPath was not applied to the transport error %q", err.Error())
+	}
+
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("errors.As(err, *url.Error) = false for %v", err)
+	}
+	if strings.Contains(urlErr.URL, pathIDMarker) {
+		t.Fatalf("urlErr.URL = %q: RedactPath was skipped on the *url.Error rebuild", urlErr.URL)
+	}
+	if !strings.Contains(urlErr.URL, pathIDPlaceholder) {
+		t.Fatalf("urlErr.URL = %q, want the RedactPath placeholder", urlErr.URL)
+	}
+	if !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("cause lost from %v", err)
+	}
+}
+
+// TestDoRedactPathHidesPathFromRequestBuildError covers the third wrap site,
+// the one reached before anything is sent: http.NewRequestWithContext rejects
+// the request and httpcore renders the URL it would have called. An invalid
+// method is what drives it here, because it fails on a URL that is otherwise
+// perfectly well formed.
+func TestDoRedactPathHidesPathFromRequestBuildError(t *testing.T) {
+	c, err := New(Config{
+		BaseURL:    "https://api.test",
+		RedactPath: hidePathID,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			t.Error("a request that could not be built reached the transport")
+			return newResponseOK()
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = c.Do(context.Background(), Request{
+		Method: "BAD METHOD",
+		Path:   "accounts/" + pathIDMarker + "/values/k",
+	})
+	if err == nil {
+		t.Fatal("Do with an invalid method returned nil error")
+	}
+	if strings.Contains(err.Error(), pathIDMarker) {
+		t.Fatalf("path identifier leaked into the request-build error %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), pathIDPlaceholder) {
+		t.Fatalf("RedactPath was not applied to the request-build error %q", err.Error())
+	}
+}
+
+// TestDoRedactPathHidesPathFromOversizedBodyError covers the fourth and last
+// wrap site, the one a body over MaxBody reaches. It renders the URL through a
+// different fmt.Errorf than the classified-status path directly above it, so
+// nothing but its own test proves the hook reaches it.
+func TestDoRedactPathHidesPathFromOversizedBodyError(t *testing.T) {
+	c, err := New(Config{
+		BaseURL:    "https://api.test",
+		MaxBody:    8,
+		RedactPath: hidePathID,
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusOK, []byte(strings.Repeat("x", 64)), nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = c.Do(context.Background(), Request{Path: "accounts/" + pathIDMarker + "/values/k"})
+	if err == nil {
+		t.Fatal("Do with an oversized body returned nil error")
+	}
+	if strings.Contains(err.Error(), pathIDMarker) {
+		t.Fatalf("path identifier leaked into the oversized-body error %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), pathIDPlaceholder) {
+		t.Fatalf("RedactPath was not applied to the oversized-body error %q", err.Error())
+	}
+}
+
+// TestDoNilRedactPathRendersPathVerbatim pins the default. Every provider whose
+// path names nothing but a key wants the path in its errors, and that is the
+// overwhelming majority of them: a hook that quietly changed how an
+// unconfigured Client renders a URL would make every one of their messages
+// worse to pay for a guarantee they did not ask for.
+func TestDoNilRedactPathRendersPathVerbatim(t *testing.T) {
+	c, err := New(Config{
+		BaseURL: "https://api.test",
+		HTTPClient: fakeClient(func(*http.Request) (*http.Response, error) {
+			resp, _ := newResponse(http.StatusForbidden, nil, nil)
+			return resp, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = c.Do(context.Background(), Request{Path: "accounts/" + pathIDMarker + "/values/k"})
+	if err == nil {
+		t.Fatal("Do with 403 returned nil error")
+	}
+	want := "https://api.test/accounts/" + pathIDMarker + "/values/k"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q does not render the URL as %q: a nil RedactPath must change nothing", err.Error(), want)
+	}
+}
+
 // TestDoPreservesAuthenticatorClassification pins that Do does not overwrite a
 // kind an Authenticator already chose.
 //

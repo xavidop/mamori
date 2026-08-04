@@ -5,23 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 )
 
-// errBodyLimit bounds how much of a non-200 response body get reads, so a
-// hostile or broken upstream cannot put an unbounded response into an error
-// string. The 404 branch reads within this same bound and folds the result
-// into the returned not-found error (rather than building it and discarding
-// it, which is what this provider used to do), which doubles as the drain
-// that lets net/http reuse the connection - the same reason the other
-// branch below reads a bounded amount rather than none at all. The 200 path
-// needs no matching drain step: it already reads the whole body via
-// io.ReadAll, so the connection is already fully consumed by the time this
-// function returns.
+// errBodyLimit bounds how much of a failing response body reaches an error
+// string, so a hostile or broken upstream cannot put an unbounded response
+// into one. It applies to the 404 branch too, which folds the body into the
+// returned not-found error rather than discarding it: this is the one place a
+// store-not-found body such as "edge_config_not_found" tells a caller what
+// actually went wrong. httpcore hands errorDetail at most Config.MaxBody bytes
+// and always drains the rest on every branch, so the connection-reuse
+// discipline this file used to hand-roll per branch now comes from one place.
 const errBodyLimit = 4096
 
 // Resolve fetches the value for ref.
@@ -178,39 +177,74 @@ func (p *Provider) fetchItems(ctx context.Context, c connection, store string) (
 // the token lives in (see parseConnectionString's doc comment for how that
 // error is stripped before it reaches a caller).
 func (p *Provider) get(ctx context.Context, c connection, store, endpoint string) ([]byte, error) {
-	url := c.host + "/" + store + "/" + endpoint
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	client, err := p.clientFor(c)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := client.Do(ctx, httpcore.Request{
+		Path:   "/" + url.PathEscape(store) + "/" + endpoint,
+		Header: http.Header{"Accept": {"application/json"}},
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics (and, on the
-		// 404 branch below, fold it into the returned error instead of
-		// discarding it: this is the one place a store-not-found body such as
-		// "edge_config_not_found" would tell a caller what actually went
-		// wrong). Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		trimmed := strings.TrimSpace(string(msg))
-		if resp.StatusCode == http.StatusNotFound {
-			if trimmed == "" {
-				return nil, fmt.Errorf("mamori/vercel-gc: store %s not found: %w", store, mamori.ErrNotFound)
-			}
-			return nil, fmt.Errorf("mamori/vercel-gc: store %s not found: %w: %s", store, mamori.ErrNotFound, trimmed)
+		// One %w on both branches: the cause already carries the sentinel
+		// httpcore classified it with, and adding a second would replace that
+		// kind rather than duplicate it. The bounded body errorDetail lifted
+		// out of the response travels inside that cause, which is what keeps
+		// a store-not-found diagnostic such as "edge_config_not_found" in the
+		// message rather than discarding it.
+		if errors.Is(err, mamori.ErrNotFound) {
+			return nil, fmt.Errorf("mamori/vercel-gc: store %s not found: %w", store, err)
 		}
-		statusErr := fmt.Errorf("mamori/vercel-gc: unexpected status %d from %s of store %s: %s",
-			resp.StatusCode, endpoint, store, trimmed)
-		return nil, classifyStatus(resp.StatusCode, statusErr)
+		return nil, fmt.Errorf("mamori/vercel-gc: %s of store %s: %w", endpoint, store, err)
 	}
-	return io.ReadAll(resp.Body)
+	return resp.Body, nil
+}
+
+// clientFor builds the httpcore client for one request.
+//
+// It is built per call rather than cached because the connection is resolved
+// per resolve, reading GLOBAL_CONFIG and EDGE_CONFIG lazily (see connection):
+// caching would pin whichever one happened to be resolved first. Construction
+// performs no network call and reuses the provider's *http.Client, so the
+// connection pool is shared across every request.
+//
+// The token travels in the Authorization header rather than the documented
+// token query parameter, so an ordinary request cannot leak it into a log
+// line, a trace span, or an error message through a URL. httpcore adds a
+// second guarantee on top of that one: it renders the request URL into its
+// errors with the query string and any userinfo stripped, and rebuilds a
+// transport failure's own *url.Error the same way, so even the misuse
+// WithBaseURL's doc comment warns about - passing a whole connection string
+// where a bare origin belongs, which puts the token in c.host - cannot put
+// the token into an error's text.
+func (p *Provider) clientFor(c connection) (*httpcore.Client, error) {
+	client, err := httpcore.New(httpcore.Config{
+		BaseURL:     c.host,
+		HTTPClient:  p.httpClient,
+		Auth:        httpcore.Bearer(c.token),
+		ErrorDetail: errorDetail,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mamori/vercel-gc: building the API client: %w", err)
+	}
+	return client, nil
+}
+
+// errorDetail is httpcore's Config.ErrorDetail hook: it quotes a bounded
+// prefix of a failing response's body into the error message.
+//
+// Embedding the body verbatim, bounded by errBodyLimit, is a deliberate house
+// convention shared with providers/doppler, providers/cloudflare-kv and
+// providers/scaleway-sm. It matters most on the 404: "edge_config_not_found"
+// is the one thing that distinguishes a store that does not exist from a token
+// that cannot see it. httpcore calls this only for a status it has already
+// decided is a failure, never for the 200 whose body is the store's items.
+func errorDetail(_ int, body []byte) string {
+	if len(body) > errBodyLimit {
+		body = body[:errBodyLimit]
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // ResolveBatch resolves every ref, grouping by store so each store costs one
@@ -278,36 +312,13 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 	return out, nil
 }
 
-// classifyStatus maps a Global Config read API status onto a mamori
-// classification sentinel, wrapping statusErr so both the sentinel and the
-// diagnostic context survive in the errors.Is chain. 404 is handled by its own
-// branch in get and never reaches this function.
+// Status classification comes from httpcore.ClassifyStatus, inside
+// httpcore.Client.Do, rather than from a mapping copied into this package. 404
+// is the one status get takes back, to give it a message of its own.
 //
-// The mapping follows ordinary HTTP semantics. One caveat is worth stating
-// rather than hiding: Vercel's documented error body for a request missing an
-// authentication token carries "code": "forbidden", so a 403 from this API can
-// mean an absent credential rather than an insufficient one. Vercel has not
-// published the full error-code vocabulary, so the mapping keys on status
-// rather than guessing at a body it cannot rely on. Codes not listed report
-// unknown rather than being guessed at.
-func classifyStatus(code int, statusErr error) error {
-	if statusErr == nil {
-		return nil
-	}
-	var sentinel error
-	switch {
-	case code == http.StatusUnauthorized:
-		sentinel = mamori.ErrUnauthenticated
-	case code == http.StatusForbidden:
-		sentinel = mamori.ErrPermissionDenied
-	case code == http.StatusTooManyRequests:
-		sentinel = mamori.ErrRateLimited
-	case code == http.StatusBadRequest:
-		sentinel = mamori.ErrInvalid
-	case code >= 500:
-		sentinel = mamori.ErrUnavailable
-	default:
-		return statusErr
-	}
-	return fmt.Errorf("%w: %w", sentinel, statusErr)
-}
+// One caveat of the mapping is worth stating rather than hiding: Vercel's
+// documented error body for a request missing an authentication token carries
+// "code": "forbidden", so a 403 from this API can mean an absent credential
+// rather than an insufficient one. Vercel has not published the full
+// error-code vocabulary, so classification keys on the status rather than
+// guessing at a body it cannot rely on.

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 	"github.com/xavidop/mamori/providertest"
 )
 
@@ -36,6 +37,7 @@ type fakeDoppler struct {
 	mu       sync.Mutex
 	store    map[string]string // key: project/config/name -> value
 	fails    map[string]error  // key: project/config/name -> injected transport error
+	codes    map[string]int    // key: project/config/name -> injected HTTP status
 	lastAuth string            // last Authorization header seen
 }
 
@@ -44,7 +46,7 @@ func storeKey(project, config, name string) string {
 }
 
 func newFake() *fakeDoppler {
-	return &fakeDoppler{store: map[string]string{}, fails: map[string]error{}}
+	return &fakeDoppler{store: map[string]string{}, fails: map[string]error{}, codes: map[string]int{}}
 }
 
 func (f *fakeDoppler) set(project, config, name, val string) {
@@ -70,6 +72,31 @@ func (f *fakeDoppler) clear(project, config, name string) {
 	delete(f.fails, storeKey(project, config, name))
 }
 
+// failCode makes every request for project/config/name answer with the HTTP
+// status code, until clearCode is called. It is the seam the providertest
+// ErrorClassification case uses.
+//
+// It has to be a real status rather than a transport error. Resolve now sends
+// its request through httpcore.Client.Do, which classifies ANY transport
+// failure as mamori.ErrUnavailable, and mamori.ErrorKind tests
+// ErrUnavailable before ErrRateLimited and ErrInvalid: a sentinel injected at
+// the transport would come back out as "unavailable" for two of the five
+// cases. Going through a real status is also the stronger test, because it
+// forces the classification to be earned through the same status mapping a
+// live Doppler 403 or 429 would take.
+func (f *fakeDoppler) failCode(project, config, name string, code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.codes[storeKey(project, config, name)] = code
+}
+
+// clearCode cancels a previously injected failCode.
+func (f *fakeDoppler) clearCode(project, config, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.codes, storeKey(project, config, name))
+}
+
 func (f *fakeDoppler) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.lastAuth = r.Header.Get("Authorization")
@@ -87,9 +114,18 @@ func (f *fakeDoppler) handle(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	val, ok := f.store[storeKey(project, config, name)]
+	code, failing := f.codes[storeKey(project, config, name)]
 	f.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
+	if failing {
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success":  false,
+			"messages": []string{"injected failure"},
+		})
+		return
+	}
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -141,14 +177,13 @@ func (f *fakeDoppler) inProcessProvider() *Provider {
 // error keyed by the requested project/config/name and, when present,
 // returns it directly instead of invoking the handler.
 //
-// This is the seam the providertest ErrorClassification case and
-// TestResolveInjectedSentinelSurvives exercise: http.Client.Do wraps a
-// RoundTripper error in *url.Error, which is Unwrap-compatible, and
-// doppler.go's Resolve returns that error verbatim on a transport failure
-// (it never touches an HTTP response at all), so an injected mamori sentinel
-// survives errors.Is unchanged. This is a separate path from
-// classifyDopplerStatus, which only classifies a real HTTP status on a real
-// response; both must work independently.
+// This is the seam TestResolveInjectedSentinelSurvives exercises:
+// http.Client.Do wraps a RoundTripper error in *url.Error, which is
+// Unwrap-compatible, and httpcore rebuilds that wrapper with a redacted URL
+// rather than discarding it, so an injected mamori sentinel is still reachable
+// with errors.Is on the way out. This is a separate path from status
+// classification, which only runs on a real HTTP response; both must work
+// independently.
 func (f *fakeDoppler) failClient() *http.Client {
 	return &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -358,12 +393,17 @@ func TestConformance(t *testing.T) {
 			f.set(testProject, testConfig, key, val)
 			return nil
 		},
+		// httpcore.StatusForKind is the exported inverse of the status mapping
+		// Resolve now classifies through, so each of the five cases
+		// round-trips the real mapping rather than exercising one of them five
+		// times. See fakeDoppler.failCode for why this is a status and not a
+		// transport error.
 		Fail: func(_ context.Context, key string, err error) error {
-			f.fail(testProject, testConfig, key, err)
+			f.failCode(testProject, testConfig, key, httpcore.StatusForKind(mamori.ErrorKind(err)))
 			return nil
 		},
 		Clear: func(_ context.Context, key string) error {
-			f.clear(testProject, testConfig, key)
+			f.clearCode(testProject, testConfig, key)
 			return nil
 		},
 		SkipWatch: true, // Doppler has no native change notification.
@@ -385,6 +425,7 @@ func TestResolveInjectedSentinelSurvives(t *testing.T) {
 
 	p := New(WithBaseURL("http://doppler.test"), WithToken(testToken), WithHTTPClient(f.failClient()))
 	_, err := p.Resolve(context.Background(), mustRef(t, "doppler://"+testProject+"/"+testConfig+"#K"))
+	f.clear(testProject, testConfig, "K")
 	if err == nil {
 		t.Fatal("Resolve returned a nil error while the transport was failing")
 	}
@@ -396,14 +437,11 @@ func TestResolveInjectedSentinelSurvives(t *testing.T) {
 	}
 }
 
-// TestResolveClassifiesRealStatus exercises classifyDopplerStatus through
+// TestResolveClassifiesRealStatus exercises status classification through
 // Resolve itself, using a real HTTP 403 response from a handler (not an
-// injected transport error). Neither the conformance ErrorClassification
-// case nor TestResolveInjectedSentinelSurvives can catch a regression in
-// Resolve's default-branch wiring: both inject a mamori sentinel directly at
-// the RoundTripper, bypassing the HTTP-status path entirely, so they would
-// keep passing even if the classifyDopplerStatus call were deleted from
-// Resolve. This test fails if that wiring is removed.
+// injected transport error), so a regression in the wiring between Resolve and
+// httpcore's classification surfaces here even though
+// TestResolveInjectedSentinelSurvives bypasses the HTTP-status path entirely.
 func TestResolveClassifiesRealStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

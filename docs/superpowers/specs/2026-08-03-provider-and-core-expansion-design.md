@@ -4,6 +4,12 @@
 HTTP resolve core, then migrate the sixteen existing `net/http` providers onto that
 core. Sixteen independent pull requests.
 
+**Correction, after PR1 shipped:** the migration set is eight providers, not sixteen,
+which merges PR13 and PR14 into one batch and withdraws PR16. The reasoning is under
+[PR1](#why-this-exists) and [Deliverables 13 through
+16](#deliverables-13-through-16-migrating-the-existing-http-providers); the original
+numbering is kept throughout so the two sections can be read against each other.
+
 **Status:** design approved, pending spec review.
 
 ## Scope: this is a program, not a feature
@@ -44,6 +50,9 @@ anything else.
 | 14 | `xavier/migrate-poll-2` | migrate flipt, growthbook, onepassword, scaleway-sm, unleash, vault, vercel-gc, cloudflare-kv | PR2-8 |
 | 15 | `xavier/httpcore-sse` | `httpcore` SSE, migrate firebase-rtdb and mamori | PR2-8 |
 | 16 | `xavier/migrate-consul` | migrate consul onto `LongPoll` | PR2-8, needs `LongPoll` from PR5 |
+
+Rows 13, 14 and 16 are superseded: see the correction under Deliverables 13 through
+16. The rows are left as written so the corrected batches can be read against them.
 
 A stack was considered and rejected. Only PR1 is a genuine dependency, so an
 eight-deep chain would buy nothing and would restack seven branches every time a
@@ -87,6 +96,20 @@ bug. Five providers additionally hand-roll conditional-GET polling: `s3` on ETag
 
 Seven of the eight providers requested here are REST APIs. Building them the current
 way writes that layer seven more times.
+
+**Correction, after PR1 shipped.** "Sixteen" was measured by import, not by use: it
+counted every provider whose non-test sources import `net/http`. Eight of the sixteen
+(`azblob`, `azure`, `cosmos`, `flipt`, `growthbook`, `unleash`, `vault`, `consul`)
+import it only incidentally - for the `http.Status*` constants they compare a vendor
+SDK's error code against, for an `*http.Client` they hand to a vendor SDK, or for an
+`http.Header` value - and do their actual fetching through that SDK. They have no raw
+HTTP for `httpcore` to replace. The providers that genuinely hand-roll request
+building are eight, not sixteen: `cloudflare-kv`, `doppler`, `firebase-rc`,
+`onepassword`, `scaleway-sm`, and `vercel-gc`, which are the six migrated on
+`xavier/httpcore-migration`, plus `firebase-rtdb` and `mamori`, whose read paths are
+SSE streams and which stay with PR15. The duplication and the #107 hygiene bug were
+real in all eight; only the count was wrong. See the correction under Deliverables 13
+through 16 for what that does to the migration batches.
 
 ### `providers/httpcore`
 
@@ -294,15 +317,20 @@ supplied, since `#key` selects into a JSON payload.
 ### Deferred out of PR1, but in the program
 
 Retro-fitting the existing sixteen `net/http` providers is PR13 through PR16, not
-PR1. PR1 must stay a reviewable module.
+PR1. PR1 must stay a reviewable module. (Eight providers, not sixteen: see the
+correction above.)
 
 Server-sent events are PR15. `httpcore` grows an SSE unit there and `firebase-rtdb`
 and `mamori` migrate onto it in the same PR, so the abstraction lands with both of
 its consumers rather than ahead of them.
 
-Long polling is PR5. Nacos needs it, `consul` already hand-rolls it, so `httpcore`
-gains `LongPoll` when the new provider forces the question and `consul` harvests it
-in PR16.
+Long polling is PR5. Nacos needs it, so `httpcore` gains `LongPoll` when the new
+provider forces the question.
+
+**Correction:** this originally added "and `consul` harvests it in PR16". It cannot.
+`consul`'s blocking query is `api.QueryOptions.WaitIndex` inside the HashiCorp SDK,
+not a hand-rolled HTTP long poll, so there is nothing for `httpcore.LongPoll` to take
+over. `LongPoll` is justified by Nacos alone.
 
 ## Deliverables 2 through 8: the REST providers
 
@@ -316,7 +344,7 @@ and the reason each one is not merely an `https://` recipe.
 | 2 | `providers/infisical` | `infisical://` | Project, environment, and secret path form a structured ref; error envelope needs mapping |
 | 3 | `providers/hcp-vault-secrets` | `hcp-vs://` | OAuth2 client-credentials exchange with token caching; distinct product and API from `vault://` |
 | 4 | `providers/bitwarden` | `bws://` | Client-side cryptography; the value is decrypted locally, not served in the clear |
-| 5 | `providers/nacos` | `nacos://` | Long-poll listener protocol gives it a native watch, so it implements `WatchableProvider`. **Also adds `httpcore.LongPoll`**, which PR16 harvests for `consul` |
+| 5 | `providers/nacos` | `nacos://` | Long-poll listener protocol gives it a native watch, so it implements `WatchableProvider`. **Also adds `httpcore.LongPoll`** (originally justified as something PR16 would also harvest for `consul`; see the correction above, `consul` cannot use it) |
 | 6 | `providers/supabase` | `supabase://` | Reads `vault.decrypted_secrets` through PostgREST; needs its own row and column shaping |
 | 7 | `providers/heroku` | `heroku://` | Requires the Heroku API `Accept` version header and returns all config vars in one document, so it is a `BatchProvider` |
 | 8 | `providers/posthog` | `posthog://` | Flag evaluation is a POST with a distinct id, not a GET; result is a facet on an evaluated payload |
@@ -369,12 +397,23 @@ Sixteen providers use `net/http` with no shared helper today. Migrating them ont
 `httpcore` is the reason `httpcore` is worth building: it is what turns issue #107
 from a recurring class of bug into a single place to fix.
 
+**Correction, after PR1 shipped.** That sixteen was measured by import rather than by
+use, and the real number is eight; see the correction under PR1 for which eight and
+why. The batches below shrink accordingly. PR13 and PR14 collapse into a single
+poll-only batch of six - `cloudflare-kv`, `doppler`, `firebase-rc`, `onepassword`,
+`scaleway-sm`, `vercel-gc` - which is what `xavier/httpcore-migration` carries. PR15
+is unaffected: `firebase-rtdb` and `mamori` do hand-roll their requests, and both are
+SSE consumers, so they still wait on the SSE unit. PR16 is withdrawn, because
+`consul` has no hand-rolled long poll to migrate. The eight providers dropped from
+the set are not being skipped, they were never in it: an `http.StatusNotFound`
+constant compared against a vendor SDK's error is not HTTP that `httpcore` can own.
+
 **Sequencing.** These land after PR2 through PR8, not before. Eight new consumers
 (`https` plus seven adapters) exercise the API first, so that if they reveal a gap it
-is fixed once, in `httpcore`, rather than after sixteen modules have already committed
-to the wrong shape.
+is fixed once, in `httpcore`, rather than after every migrated module has already
+committed to the wrong shape.
 
-**What makes this verifiable.** Every one of the sixteen already passes
+**What makes this verifiable.** Every one of them already passes
 `providertest.Run` and carries its own unit tests. A migration that preserves
 behaviour keeps them green, and a migration that does not fails loudly. No new test
 strategy is needed; the safety net exists. Each PR must show its modules' conformance
@@ -382,21 +421,26 @@ runs passing before and after, and must not change any provider's public API,
 `Scheme()`, ref grammar, or error mapping. This is a refactor, and any behaviour
 change found along the way belongs in a separate PR.
 
+The table as originally written, with the correction applied to each row:
+
 | PR | Modules | Shape |
 | --- | --- | --- |
-| 13 | azblob, azure, cosmos, doppler, firebase-rc | Poll-only. First migration batch, kept small so the pattern is established under real review before it is applied at scale |
-| 14 | flipt, growthbook, onepassword, scaleway-sm, unleash, vault, vercel-gc, cloudflare-kv | Poll-only. Applies the pattern PR13 established |
-| 15 | firebase-rtdb, mamori | Adds `httpcore` SSE and migrates both streaming consumers in the same PR |
-| 16 | consul | Migrates onto `httpcore.LongPoll`, which PR5 built for Nacos |
+| 13 | ~~azblob, azure, cosmos,~~ doppler, firebase-rc | Poll-only. Merged into the single batch below; the three struck modules fetch through a vendor SDK |
+| 14 | ~~flipt, growthbook,~~ onepassword, scaleway-sm, ~~unleash, vault,~~ vercel-gc, cloudflare-kv | Poll-only. Merged into the single batch below; the four struck modules fetch through a vendor SDK |
+| 13+14 | cloudflare-kv, doppler, firebase-rc, onepassword, scaleway-sm, vercel-gc | Poll-only, one batch of six rather than two. `xavier/httpcore-migration` |
+| 15 | firebase-rtdb, mamori | Adds `httpcore` SSE and migrates both streaming consumers in the same PR. Unchanged |
+| 16 | ~~consul~~ | Withdrawn. Its blocking query is `api.QueryOptions.WaitIndex` inside the HashiCorp SDK, so there is no hand-rolled long poll to migrate |
 
-**PR15 is the one to watch.** `providers/mamori` is 3,485 lines, the largest of the
-sixteen, and it is the client half of the config server's wire protocol. Its SSE
+**PR15 is the one to watch.** `providers/mamori` is 3,485 lines, the largest of them,
+and it is the client half of the config server's wire protocol. Its SSE
 handling is load-bearing for `server/`, so PR15 carries more risk than PR13 and PR14
 combined. Splitting it further is an acceptable outcome if its own spec finds the
 SSE unit does not fit both consumers cleanly.
 
 **`vault` migrates its resolve path only.** Its lease-aware refresh reads `NotAfter`
-from the lease and is not an HTTP concern, so it stays where it is.
+from the lease and is not an HTTP concern, so it stays where it is. **Correction:**
+`vault` migrates nothing. Its resolve path goes through the HashiCorp SDK, and its
+`net/http` import is `http.Status*` constants used to classify the SDK's error.
 
 ## Risks
 
@@ -408,10 +452,10 @@ so the first person with credentials can confirm the shape in one command.
 **`httpcore` is load-bearing before it has users.** Its API is fixed by PR1 but only
 exercised by one provider until PR2. Mitigation: PR1 ships `https` on top of it as a
 real consumer rather than a demonstration; `httpcore` is a separate module on its own
-tag, so a v0 API change does not force a core release; and the sixteen migrations are
+tag, so a v0 API change does not force a core release; and the migrations are
 sequenced after eight consumers have exercised it.
 
-**The migrations touch working code.** PR13 through PR16 change sixteen providers
+**The migrations touch working code.** The migration PRs change providers
 that work today, for an internal benefit rather than a user-visible one. Mitigation:
 every one of them already passes the conformance kit, so the refactor is verifiable
 rather than hopeful, and the batches are ordered so the smallest establishes the

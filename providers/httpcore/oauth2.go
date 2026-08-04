@@ -47,6 +47,16 @@ type OAuth2Config struct {
 	// That is a higher-value leak than a cleartext BaseURL, which is why the
 	// opt-in is required here too.
 	AllowInsecure bool
+	// RedactPath is [Config.RedactPath] for the token endpoint, applied both to
+	// the TokenURL this rejects at construction and to every error the exchange
+	// itself returns.
+	//
+	// A token endpoint identifies its tenant through the path often enough to
+	// need this: Microsoft Entra's is
+	// https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token, and the
+	// tenant id there is exactly as identifying as the account id a resource
+	// path carries.
+	RedactPath func(path string) string
 }
 
 // oauth2Auth caches one access token and refreshes it before expiry.
@@ -125,11 +135,11 @@ func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error) {
 		return nil, fmt.Errorf("httpcore: OAuth2 ClientSecret is required: %w", mamori.ErrInvalid)
 	}
 
-	if err := checkTokenURLScheme(cfg.TokenURL, cfg.AllowInsecure); err != nil {
+	if err := checkTokenURLScheme(cfg.TokenURL, cfg.AllowInsecure, cfg.RedactPath); err != nil {
 		return nil, err
 	}
 
-	client, err := New(Config{BaseURL: cfg.TokenURL, HTTPClient: cfg.HTTPClient})
+	client, err := New(Config{BaseURL: cfg.TokenURL, HTTPClient: cfg.HTTPClient, RedactPath: cfg.RedactPath})
 	if err != nil {
 		return nil, fmt.Errorf("httpcore: OAuth2 TokenURL: %w", err)
 	}
@@ -182,7 +192,7 @@ func OAuth2ClientCredentials(cfg OAuth2Config) (Authenticator, error) {
 // configuration value it fetches; a cleartext TokenURL exposes the client
 // secret, which the client-credentials grant POSTs in the form body, and that
 // secret is the key to every value the endpoint serves.
-func checkTokenURLScheme(tokenURL string, allowInsecure bool) error {
+func checkTokenURLScheme(tokenURL string, allowInsecure bool, redactPath func(string) string) error {
 	u, err := url.Parse(tokenURL)
 	if err != nil {
 		// The unparsed string is not echoed: a URL can carry userinfo, and this
@@ -195,7 +205,7 @@ func checkTokenURLScheme(tokenURL string, allowInsecure bool) error {
 	case "http":
 		if !allowInsecure {
 			return fmt.Errorf("httpcore: OAuth2 TokenURL %s is http://, which POSTs the client secret in cleartext; set AllowInsecure to accept that: %w",
-				redactURL(u), mamori.ErrInvalid)
+				redactURLWith(u, redactPath), mamori.ErrInvalid)
 		}
 		return nil
 	default:

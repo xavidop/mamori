@@ -94,8 +94,8 @@ func (f *fakeGC) failStatus(store string, code int) {
 // ...) instead lets the digest succeed, so snapshotFor is entered, sees a
 // moved digest, and its call to fetchItems is what fails - the only path that
 // can genuinely test that a failed fetch does not install a snapshot, and the
-// only path that exercises classifyStatus from the items fetch rather than the
-// digest fetch.
+// only path that exercises status classification from the items fetch rather
+// than the digest fetch.
 func (f *fakeGC) failEndpoint(store, endpoint string, code int) {
 	f.setFail(store, endpoint, code)
 }

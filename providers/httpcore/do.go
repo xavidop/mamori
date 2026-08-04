@@ -87,7 +87,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("httpcore: %s %s: %w: %w",
-			req.Method, redactURL(req.URL), mamori.ErrUnavailable, redactTransportError(err, req.URL))
+			req.Method, c.redactURL(req.URL), mamori.ErrUnavailable, c.redactTransportError(err, req.URL))
 	}
 	// Drain and close on every path so the connection is reused rather than
 	// abandoned. This is the hygiene issue #107 found missing across providers.
@@ -110,7 +110,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 		if c.errorDetail != nil {
 			err = classify(resp.StatusCode, c.errorDetail(resp.StatusCode, readErrorBody(resp.Body, c.maxBody)))
 		}
-		return nil, fmt.Errorf("httpcore: %s %s: %w", req.Method, redactURL(req.URL), err)
+		return nil, fmt.Errorf("httpcore: %s %s: %w", req.Method, c.redactURL(req.URL), err)
 	}
 	if out.NotModified {
 		return out, nil
@@ -118,7 +118,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 
 	body, err := readBounded(resp.Body, c.maxBody)
 	if err != nil {
-		return nil, fmt.Errorf("httpcore: %s %s: %w", req.Method, redactURL(req.URL), err)
+		return nil, fmt.Errorf("httpcore: %s %s: %w", req.Method, c.redactURL(req.URL), err)
 	}
 	out.Body = body
 	return out, nil
@@ -152,7 +152,7 @@ func (c *Client) build(ctx context.Context, r Request) (*http.Request, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
-		return nil, fmt.Errorf("httpcore: building %s %s: %w: %w", method, redactURL(&u), mamori.ErrInvalid, err)
+		return nil, fmt.Errorf("httpcore: building %s %s: %w: %w", method, c.redactURL(&u), mamori.ErrInvalid, err)
 	}
 
 	for k, vs := range r.Header {
@@ -343,14 +343,39 @@ func readErrorBody(r io.Reader, max int64) []byte {
 	return b
 }
 
-// redactURL renders a URL for an error message with its query and userinfo
+// redactURL renders a URL for one of this Client's error messages, applying the
+// Client's [Config.RedactPath] to the path.
+func (c *Client) redactURL(u *url.URL) string {
+	return redactURLWith(u, c.redactPath)
+}
+
+// redactURLWith renders a URL for an error message with its query and userinfo
 // stripped, because QueryAuth puts a credential in the query and a URL can
-// carry userinfo.
-func redactURL(u *url.URL) string {
+// carry userinfo, and with its path passed through redactPath.
+//
+// A nil redactPath renders the path verbatim, exactly as this did before the
+// hook existed. It takes the hook as an argument rather than reading it off a
+// Client because checkTokenURLScheme renders a URL before
+// OAuth2ClientCredentials has built one, and that site needs the hook too:
+// [OAuth2Config.RedactPath] hands it over directly.
+//
+// The hook's result is concatenated rather than assigned back to the copy's
+// Path, because url.URL.String escapes Path on the way out: a placeholder like
+// "<account>" assigned there would render as "%3Caccount%3E". Clearing the path
+// and appending leaves exactly what the provider wrote. The fragment is cleared
+// with it, since keeping it would render it BEFORE the appended path; no URL
+// Client.build produces has one, and a fragment never reaches the wire anyway.
+func redactURLWith(u *url.URL, redactPath func(string) string) string {
 	c := *u
 	c.RawQuery = ""
 	c.User = nil
-	return c.String()
+	if redactPath == nil {
+		return c.String()
+	}
+	redacted := redactPath(u.EscapedPath())
+	c.Path, c.RawPath = "", ""
+	c.Fragment, c.RawFragment = "", ""
+	return c.String() + redacted
 }
 
 // redactTransportError strips the credential that net/http leaks into the error
@@ -366,10 +391,15 @@ func redactURL(u *url.URL) string {
 // The wrapper is rebuilt rather than discarded so the chain stays whole:
 // errors.As still reaches *url.Error, and errors.Is still reaches the underlying
 // net.OpError, timeout, or TLS verification error.
-func redactTransportError(err error, u *url.URL) error {
+//
+// The URL it is rebuilt with goes through [Config.RedactPath] like every other
+// rendered URL. Skipping it here would leave the hook trivially defeatable: the
+// path a provider asked to have hidden would still be one errors.As away, and it
+// would render into the very same message through the wrapped cause.
+func (c *Client) redactTransportError(err error, u *url.URL) error {
 	var ue *url.Error
 	if !errors.As(err, &ue) {
 		return err
 	}
-	return &url.Error{Op: ue.Op, URL: redactURL(u), Err: ue.Err}
+	return &url.Error{Op: ue.Op, URL: c.redactURL(u), Err: ue.Err}
 }

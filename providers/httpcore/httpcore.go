@@ -79,6 +79,40 @@ type Config struct {
 	// providers/cloudflare-kv, providers/vercel-gc, and providers/scaleway-sm,
 	// and a migration onto httpcore must be able to preserve it.
 	ErrorDetail func(status int, body []byte) string
+	// RedactPath renders a request path for an error message. It receives the
+	// ESCAPED path, exactly as it appears in the URL, and returns whatever
+	// should stand in its place.
+	//
+	// Nil renders the path verbatim, which is what a provider whose path
+	// carries nothing but a key name wants.
+	//
+	// It exists because a body is not the only thing that leaks. ErrorDetail
+	// guards the response body, and the URL rendered into every error already
+	// has its query string and any userinfo stripped, on the reasoning that a
+	// credential travels there. The path was left alone because for most
+	// backends it names a key. For a backend that addresses its tenant through
+	// the path it does not: an account id in a path is as identifying as a
+	// token in a query, and it reaches an operator's logs, a mamori status
+	// page, and whatever gets pasted into an issue, on nothing worse than a
+	// refused connection. providers/cloudflare-kv carries an account id and a
+	// namespace id as path segments, providers/hcp-vault-secrets an
+	// organisation, project, app and secret name, providers/heroku an app
+	// name, providers/infisical a secret name.
+	//
+	// It is a hook rather than something httpcore decides because only the
+	// provider knows which of its own segments identify anything. Substituting
+	// here, rather than rewriting httpcore's finished message afterwards as
+	// providers/cloudflare-kv had to before this existed, is also what keeps
+	// the error chain honest: nothing is rewritten, so errors.Is and errors.As
+	// still reach everything they reached before.
+	//
+	// It applies at every site that renders a URL into an error, including the
+	// *url.Error that [Client.Do] rebuilds around a transport failure, so the
+	// chain cannot be used to read around it. It does not apply to New's own
+	// rejection of a BaseURL: that message echoes the operator's configured
+	// string verbatim so a typo is recognizable, and a BaseURL that failed to
+	// parse has no path to hand a path hook.
+	RedactPath func(path string) string
 }
 
 // Client performs bounded, classified HTTP round trips against one backend. It
@@ -92,6 +126,7 @@ type Client struct {
 	maxBody     int64
 	userAgent   string
 	errorDetail func(status int, body []byte) string
+	redactPath  func(path string) string
 }
 
 // New validates cfg and returns a Client. It fails when BaseURL is empty or
@@ -125,5 +160,6 @@ func New(cfg Config) (*Client, error) {
 		maxBody:     maxBody,
 		userAgent:   cfg.UserAgent,
 		errorDetail: cfg.ErrorDetail,
+		redactPath:  cfg.RedactPath,
 	}, nil
 }

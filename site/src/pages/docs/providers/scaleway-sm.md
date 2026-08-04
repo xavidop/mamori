@@ -99,10 +99,11 @@ A 404 is detected before status classification runs and reports `not_found` dire
 | --- | --- |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
-| 429 | `rate_limited` |
-| 400 | `invalid` |
-| 5xx | `unavailable` |
-| anything else | `unknown` |
+| 408, 429 | `rate_limited` |
+| 400, 422 | `invalid` |
+| 5xx, and any other status not named above | `unavailable` |
+
+The mapping is `httpcore.ClassifyStatus`, shared with every other `httpcore`-backed provider. An unrecognized status reports `unavailable` (transient, so mamori backs off and retries) rather than `unknown`.
 
 An unknown secret, a known secret whose pinned revision does not exist, and a known secret whose pinned revision is **disabled** all return the identical 404, with no error code in the body to tell them apart. A ref asking for `?revision=99` against a secret that has only reached revision 12 degrades silently to the field's default, exactly as if the secret had never existed at all - and so does a ref pinning `?revision=latest` after an operator disables the newest revision.
 

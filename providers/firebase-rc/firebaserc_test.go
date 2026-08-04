@@ -154,7 +154,7 @@ func TestResolveNotFound(t *testing.T) {
 // TestResolvePendingErrorSurvives verifies that an error injected through the
 // fakeBackend pending-error seam (used by providertest's ErrorClassification
 // case) reaches Resolve's caller unchanged: fakeBackend.fetchTemplate returns
-// it directly (it never touches classifyFirebaseRC, which only runs inside
+// it directly (it never touches status classification, which only runs inside
 // httpFetcher.fetchTemplate), and Resolve must not mangle or lose the
 // sentinel on the way out.
 func TestResolvePendingErrorSurvives(t *testing.T) {
@@ -354,16 +354,14 @@ func TestHTTPFetcherErrorStatus(t *testing.T) {
 	}
 }
 
-// TestResolveClassifiesHTTPStatus exercises classifyFirebaseRC through Resolve
-// -> httpFetcher.fetchTemplate itself, not just as a direct function call.
-// Neither the conformance ErrorClassification case nor
-// TestResolvePendingErrorSurvives can catch a regression here: both go
-// through fakeBackend, whose fetchTemplate returns an injected error directly
-// and never calls classifyFirebaseRC, so they would still pass even if the
-// classifyFirebaseRC call were deleted from httpFetcher.fetchTemplate. This
-// test drives a real 403 response through an httptest.Server, the same shape
-// a live Remote Config API failure would take, so it fails if the wiring is
-// removed.
+// TestResolveClassifiesHTTPStatus exercises status classification through
+// Resolve -> httpFetcher.fetchTemplate. Neither the conformance
+// ErrorClassification case nor TestResolvePendingErrorSurvives can catch a
+// regression here: both go through fakeBackend, whose fetchTemplate returns an
+// injected error directly and never performs a request, so they would still
+// pass even if the classification were dropped. This test drives a real 403
+// response through an httptest.Server, the same shape a live Remote Config API
+// failure would take, so it fails if the wiring is removed.
 func TestResolveClassifiesHTTPStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"error":{"status":"PERMISSION_DENIED"}}`, http.StatusForbidden)
