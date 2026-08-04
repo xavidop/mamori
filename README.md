@@ -134,6 +134,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/doppler` | `doppler://` | poll | ✅ |
 | `providers/hcp-vault-secrets` | `hcp-vs://` | poll | ✅ |
 | `providers/scaleway-sm` | `scaleway-sm://` | poll | ✅ |
+| `providers/bitwarden` | `bitwarden-sm://` | poll | ✅ |
 | `providers/onepassword` | `op://` | poll | ✅ |
 | `providers/sops` | `sops://` | fsnotify | ✅ |
 | `providers/supabase` | `supabase://` | poll | ✅ |

@@ -38,15 +38,15 @@ import (
 // SchemeSet.Add and the `--secret-schemes` flag on vet and explain.
 var defaultSecretSchemes = []string{
 	// Dedicated secret managers: every value they resolve is secret.
-	"aws-sm",     // AWS Secrets Manager
-	"gcp-sm",     // Google Cloud Secret Manager
-	"azure-kv",   // Azure Key Vault
-	"vault",      // HashiCorp Vault
-	"op",         // 1Password
-	"sops",       // Mozilla SOPS
-	"doppler",    // Doppler
-	"supabase",   // Supabase Vault (vault.decrypted_secrets, over PostgREST)
-	"k8s-secret", // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
+	"aws-sm",       // AWS Secrets Manager
+	"gcp-sm",       // Google Cloud Secret Manager
+	"azure-kv",     // Azure Key Vault
+	"vault",        // HashiCorp Vault
+	"op",           // 1Password
+	"sops",         // Mozilla SOPS
+	"doppler",      // Doppler
+	"k8s-secret",   // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
+	"bitwarden-sm", // Bitwarden Secrets Manager
 
 	// Not a secret manager, but every value it resolves is marked sensitive
 	// and this list is about what a field HOLDS, not what the backend calls

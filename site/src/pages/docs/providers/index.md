@@ -37,6 +37,7 @@ Don't read either non-✅ state as broken: `not_found` is detected everywhere re
 | `doppler://` | Doppler | yes | poll | ✅ |
 | `hcp-vs://` | HCP Vault Secrets | yes | poll | ✅ |
 | `scaleway-sm://` | Scaleway Secret Manager | yes | poll | ✅ |
+| `bitwarden-sm://` | Bitwarden Secrets Manager | yes | poll | ✅ |
 | `op://` | 1Password | yes | poll | ✅ |
 | `sops://` | SOPS | yes | fsnotify | ✅ |
 | `supabase://` | Supabase Vault | yes | poll | ✅ |
