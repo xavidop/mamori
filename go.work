@@ -23,6 +23,7 @@ use (
 	./providers/gcs
 	./providers/goff
 	./providers/growthbook
+	./providers/hcp-vault-secrets
 	./providers/heroku
 	./providers/httpcore
 	./providers/https
@@ -35,8 +36,8 @@ use (
 	./providers/nacos
 	./providers/onepassword
 	./providers/openfeature
-	./providers/posthog
 	./providers/postgres
+	./providers/posthog
 	./providers/redis
 	./providers/s3
 	./providers/scaleway-sm

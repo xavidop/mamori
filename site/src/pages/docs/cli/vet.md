@@ -54,8 +54,12 @@ The secret-bearing schemes are the ones that resolve to secret material:
 | `op`           | 1Password                   | yes                           |
 | `sops`         | Mozilla SOPS                | yes                           |
 | `doppler`      | Doppler                     | yes                           |
+| `infisical`    | Infisical                   | yes                           |
+| `hcp-vs`       | HCP Vault Secrets           | yes                           |
+| `supabase`     | Supabase Vault              | yes                           |
 | `k8s-secret`   | Kubernetes Secret           | yes                           |
 | `bitwarden-sm` | Bitwarden Secrets Manager   | yes                           |
+| `heroku`       | Heroku config vars          | treated as yes, see below     |
 | `aws-ps`       | AWS SSM Parameter Store     | only `SecureString` params    |
 | `exec`         | Command output              | mamori marks all of it secret |
 | `mamori`       | A mamori config server      | whatever the server marks     |

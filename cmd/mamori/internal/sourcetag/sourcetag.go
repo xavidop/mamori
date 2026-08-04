@@ -45,6 +45,9 @@ var defaultSecretSchemes = []string{
 	"op",           // 1Password
 	"sops",         // Mozilla SOPS
 	"doppler",      // Doppler
+	"infisical",    // Infisical
+	"hcp-vs",       // HCP Vault Secrets (distinct from self-hosted vault above)
+	"supabase",     // Supabase Vault (vault.decrypted_secrets, over PostgREST)
 	"k8s-secret",   // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
 	"bitwarden-sm", // Bitwarden Secrets Manager
 
