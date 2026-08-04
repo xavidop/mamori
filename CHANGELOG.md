@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+# [1.10.0](https://github.com/xavidop/mamori/compare/v1.9.1...v1.10.0) (2026-08-04)
+
+
+### Features
+
+* **httpcore:** bounded SSE framing, and migrate the two streaming providers ([#146](https://github.com/xavidop/mamori/issues/146)) ([37f64e3](https://github.com/xavidop/mamori/commit/37f64e337ed45a4b98e9017dc3716d3036a9d1a7))
+
 ## [1.9.1](https://github.com/xavidop/mamori/compare/v1.9.0...v1.9.1) (2026-08-04)
 
 

@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori/providers/httpcore v0.0.0-00010101000000-000000000000
 	github.com/xavidop/mamori/server v0.0.0-00010101000000-000000000000
 	go.uber.org/goleak v1.3.0
 )
@@ -23,5 +24,7 @@ require (
 )
 
 replace github.com/xavidop/mamori => ../..
+
+replace github.com/xavidop/mamori/providers/httpcore => ../httpcore
 
 replace github.com/xavidop/mamori/server => ../../server

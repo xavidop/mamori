@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 	"go.uber.org/goleak"
 )
 
@@ -222,7 +223,7 @@ func TestWatchIgnoresHeartbeatComments(t *testing.T) {
 }
 
 // TestWatchRejectsOversizedFrame guards against unbounded per-frame memory
-// growth: a server that streams data: lines past sseMaxFrameBytes without
+// growth: a server that streams data: lines past the per-frame ceiling without
 // ever sending the blank line that would dispatch the frame must not be
 // allowed to make the client wait forever (or grow memory forever) reading
 // that one frame. The first connection does exactly that - and, crucially,
@@ -232,7 +233,7 @@ func TestWatchIgnoresHeartbeatComments(t *testing.T) {
 // bound, Scan() would simply block waiting for more bytes the server never
 // sends, no reconnect would happen, and this test would time out. Against
 // the fix, readSSE returns as soon as the running total crosses
-// sseMaxFrameBytes, the connection tears down, and watchLoop reconnects
+// the ceiling, the connection tears down, and watchLoop reconnects
 // quickly (backoff resets to the floor since the first connection did
 // establish) onto a second, well-formed frame.
 func TestWatchRejectsOversizedFrame(t *testing.T) {
@@ -245,14 +246,14 @@ func TestWatchRejectsOversizedFrame(t *testing.T) {
 		flusher := w.(http.Flusher)
 
 		if n == 1 {
-			// Stream well past sseMaxFrameBytes of data: lines and never
+			// Stream well past the per-frame ceiling of data: lines and never
 			// send the blank line that would dispatch the frame, then hold
 			// the connection open indefinitely. A well-behaved client must
 			// give up on this frame on its own instead of waiting forever
 			// for a blank line that is never coming.
 			_, _ = fmt.Fprintf(w, "event: update\n")
 			chunk := strings.Repeat("a", 64*1024) // 64 KiB per data: line
-			for sent := 0; sent <= sseMaxFrameBytes; sent += len(chunk) {
+			for sent := 0; sent <= httpcore.DefaultSSEMaxFrame; sent += len(chunk) {
 				_, _ = fmt.Fprintf(w, "data: %s\n", chunk)
 				flusher.Flush()
 			}
@@ -281,7 +282,7 @@ func TestWatchRejectsOversizedFrame(t *testing.T) {
 	for {
 		select {
 		case u := <-ch:
-			if u.Err == nil && len(u.Value.Bytes) > sseMaxFrameBytes {
+			if u.Err == nil && len(u.Value.Bytes) > httpcore.DefaultSSEMaxFrame {
 				t.Fatalf("delivered an oversized Update (%d bytes); an over-cap frame must be dropped, not delivered", len(u.Value.Bytes))
 			}
 			if u.Err == nil && string(u.Value.Bytes) == "second" {
