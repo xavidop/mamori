@@ -171,6 +171,13 @@ updates:
     directory: "/providers/https"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:https]
+  # Supabase Vault over PostgREST. Standard library on top of httpcore, with no
+  # Supabase SDK and no Postgres driver, so this rarely fires; it stays so a
+  # security advisory against the shared core still reaches this module.
+  - package-ecosystem: gomod
+    directory: "/providers/supabase"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:supabase]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.

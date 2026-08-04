@@ -45,6 +45,7 @@ var defaultSecretSchemes = []string{
 	"op",         // 1Password
 	"sops",       // Mozilla SOPS
 	"doppler",    // Doppler
+	"supabase",   // Supabase Vault (vault.decrypted_secrets, over PostgREST)
 	"k8s-secret", // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
 
 	// Conditionally secret, listed for the reason given above.

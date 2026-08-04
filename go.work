@@ -38,6 +38,7 @@ use (
 	./providers/sops
 	./providers/split
 	./providers/sqlite
+	./providers/supabase
 	./providers/unleash
 	./providers/vault
 	./providers/vercel-gc
