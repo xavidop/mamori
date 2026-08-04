@@ -104,11 +104,12 @@ func (f *fakeConnect) set(label, val string) {
 // err is translated into an HTTP status via failStatus rather than being
 // returned as a Go error directly. That matters for what the resulting test
 // proves: if fail instead made the RoundTripper return err as a transport
-// error, err would reach Resolve's caller by straight propagation, and the
-// test would pass even with classifyOnePassword deleted. Going through a real
-// HTTP status forces the classification to be earned through
-// statusError/classifyOnePassword, the same path a live Connect server's 403
-// or 429 would take.
+// error, httpcore would classify that transport failure as
+// mamori.ErrUnavailable, and mamori.ErrorKind tests ErrUnavailable before
+// ErrRateLimited and ErrInvalid, so two of the five cases would report the
+// wrong kind. Going through a real HTTP status forces the classification to be
+// earned through the same status mapping a live Connect server's 403 or 429
+// would take.
 func (f *fakeConnect) fail(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -123,9 +124,8 @@ func (f *fakeConnect) clear() {
 }
 
 // failStatus maps a mamori classification sentinel onto the HTTP status
-// classifyOnePassword would decode it back from. It is the fake's mirror of
-// classifyOnePassword, used only to reify an injected sentinel as a
-// wire-level response.
+// httpcore.ClassifyStatus decodes it back from. It is used only to reify an
+// injected sentinel as a wire-level response.
 func failStatus(err error) int {
 	switch {
 	case errors.Is(err, mamori.ErrPermissionDenied):
@@ -429,14 +429,13 @@ func TestConformance(t *testing.T) {
 	})
 }
 
-// TestResolveClassifiesNonNotFoundError exercises classifyOnePassword through
-// Resolve itself, not just as a direct function call, using the same
-// pending-error seam as the conformance ErrorClassification case (see the
-// comment on fakeConnect.fail for why 1Password Connect needs that coarser
-// seam). Because fail translates the injected sentinel into a real HTTP
-// status rather than returning it as a Go error, this only passes if
-// statusError still routes through classifyOnePassword: deleting that call
-// makes the error come back unclassified (KindUnknown) and this test fails.
+// TestResolveClassifiesNonNotFoundError exercises status classification
+// through Resolve itself, using the same pending-error seam as the conformance
+// ErrorClassification case (see the comment on fakeConnect.fail for why
+// 1Password Connect needs that coarser seam). Because fail translates the
+// injected sentinel into a real HTTP status rather than returning it as a Go
+// error, this only passes if Resolve still surfaces httpcore's classification
+// rather than flattening it.
 func TestResolveClassifiesNonNotFoundError(t *testing.T) {
 	fake := newFakeConnect()
 	fake.set("password", "s3cr3t")

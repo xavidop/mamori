@@ -6,6 +6,7 @@ use (
 	./providers/aws
 	./providers/azblob
 	./providers/azure
+	./providers/bitwarden
 	./providers/cloudflare-kv
 	./providers/configcat
 	./providers/consul
@@ -22,20 +23,28 @@ use (
 	./providers/gcs
 	./providers/goff
 	./providers/growthbook
+	./providers/hcp-vault-secrets
+	./providers/heroku
+	./providers/httpcore
+	./providers/https
+	./providers/infisical
 	./providers/k8s
 	./providers/launchdarkly
 	./providers/mamori
 	./providers/mongodb
 	./providers/mysql
+	./providers/nacos
 	./providers/onepassword
 	./providers/openfeature
 	./providers/postgres
+	./providers/posthog
 	./providers/redis
 	./providers/s3
 	./providers/scaleway-sm
 	./providers/sops
 	./providers/split
 	./providers/sqlite
+	./providers/supabase
 	./providers/unleash
 	./providers/vault
 	./providers/vercel-gc

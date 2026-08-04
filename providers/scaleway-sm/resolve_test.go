@@ -484,9 +484,8 @@ func TestResolveNeverCaches(t *testing.T) {
 	}
 }
 
-// TestResolveClassifiesFailureStatus exercises classifyStatus through the
-// full Resolve path, using the fake's failStatus injection, rather than only
-// unit-testing classifyStatus in isolation (errors_test.go does that). This
+// TestResolveClassifiesFailureStatus exercises status classification through
+// the full Resolve path, using the fake's failStatus injection. This
 // is also the shape Task 3's conformance Fail hook needs: fail one secret's
 // requests by status code, resolve, observe the classified error.
 func TestResolveClassifiesFailureStatus(t *testing.T) {

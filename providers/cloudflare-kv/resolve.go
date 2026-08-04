@@ -1,17 +1,17 @@
 package cloudflarekv
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 )
 
 // bulkMaxKeys is the maximum number of keys Cloudflare's bulk/get endpoint
@@ -21,16 +21,27 @@ import (
 // error at all.
 const bulkMaxKeys = 100
 
-// errBodyLimit bounds how much of a non-200 response body get and bulkGet
-// read, so a hostile or broken upstream cannot put an unbounded response
-// into an error string. Both functions' 404 branches drain within this same
-// bound (see get's doc comment on why an absent key needs that drain), and
-// both 200 paths now drain within it too - get already does by reading the
-// whole body via io.ReadAll, and bulkGet's Decode-based path drains
-// explicitly right after decoding - so every branch that can be entered
-// shares one connection-reuse discipline rather than the 200 and 404 paths
-// silently differing.
+// errBodyLimit bounds how much of a failing response body reaches an error
+// string, so a hostile or broken upstream cannot put an unbounded response
+// into one. httpcore hands errorDetail at most Config.MaxBody bytes and always
+// drains the rest on every branch, so the connection-reuse discipline this
+// file used to hand-roll per branch now comes from one place; this constant is
+// only about how much of that body is worth quoting.
 const errBodyLimit = 4096
+
+// maxBodyBytes is the response ceiling for a successful read. It is set
+// explicitly rather than left at httpcore's 1 MiB default because a Workers KV
+// value may be up to 25 MiB, and this provider read the value body unbounded
+// before it moved onto httpcore: a smaller ceiling would turn a legal, if
+// large, value into a resolve failure.
+const maxBodyBytes = 25 << 20
+
+// Placeholders substituted for the account and namespace ids in an error
+// message. See redactPath.
+const (
+	accountPlaceholder   = "<account>"
+	namespacePlaceholder = "<namespace>"
+)
 
 // Resolve fetches the value for ref from Workers KV.
 //
@@ -190,66 +201,46 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 // absent from the returned map; the caller (ResolveBatch) treats that as an
 // omission, not an error.
 func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[string][]byte, error) {
-	u := p.baseURL + "/accounts/" + url.PathEscape(s.account) +
-		"/storage/kv/namespaces/" + url.PathEscape(s.namespace) + "/bulk/get"
-
 	reqBody, err := json.Marshal(bulkGetRequestBody{Keys: keys, Type: "text"})
 	if err != nil {
 		return nil, fmt.Errorf("mamori/cloudflare-kv: encoding bulk request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(reqBody))
+	client, err := p.clientFor(s)
 	if err != nil {
-		return nil, sanitizeTransportError(err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := client.Do(ctx, httpcore.Request{
+		Method: http.MethodPost,
+		Path:   namespacePath(s) + "/bulk/get",
+		Header: http.Header{"Content-Type": {"application/json"}},
+		Body:   reqBody,
+	})
 	if err != nil {
-		return nil, sanitizeTransportError(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		// Unlike get, an absent key never reaches this branch: the bulk
-		// endpoint has no per-key 404 - a missing key is simply omitted from
-		// a successful response's Values map (see bulkGetResponseBody's doc
-		// comment). A 404 here can therefore only mean the namespace itself
-		// does not exist, so it is classified as mamori.ErrNotFound before
-		// classifyStatus ever sees it, exactly as get's namespace-not-found
-		// case is. ResolveBatch's call site treats this the same way it
-		// treats an absent key: this chunk's keys are skipped so their refs
-		// fall back to their defaults, rather than one bad namespace failing
-		// every sibling ref in the batch.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
-		return nil, fmt.Errorf("mamori/cloudflare-kv: namespace not found for bulk get of %d key(s): %w", len(keys), mamori.ErrNotFound)
-	}
-	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics. Never log
-		// it. Embedding the body verbatim, bounded by errBodyLimit, is a
-		// deliberate house convention shared with providers/doppler,
-		// providers/vercel-gc, and providers/scaleway-sm, not something
-		// invented here: the verbatim text is what actually tells an operator
-		// what the upstream rejected the request for, and the bound is what
-		// stops a hostile or broken upstream turning that diagnostic into an
-		// unbounded string.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d from bulk get of %d key(s): %s",
-			resp.StatusCode, len(keys), strings.TrimSpace(string(msg)))
-		return nil, classifyStatus(resp.StatusCode, statusErr)
+		if errors.Is(err, mamori.ErrNotFound) {
+			// Unlike get, an absent key never reaches this branch: the bulk
+			// endpoint has no per-key 404 - a missing key is simply omitted
+			// from a successful response's Values map (see
+			// bulkGetResponseBody's doc comment). A 404 here can therefore
+			// only mean the namespace itself does not exist, and it gets its
+			// own message for that, exactly as get's namespace-not-found case
+			// does. ResolveBatch's call site treats this the same way it
+			// treats an absent key: this chunk's keys are skipped so their
+			// refs fall back to their defaults, rather than one bad namespace
+			// failing every sibling ref in the batch.
+			return nil, fmt.Errorf("mamori/cloudflare-kv: namespace not found for bulk get of %d key(s): %w", len(keys), mamori.ErrNotFound)
+		}
+		// One %w: the cause already carries the sentinel httpcore classified
+		// it with, and adding a second would replace that kind rather than
+		// duplicate it.
+		return nil, fmt.Errorf("mamori/cloudflare-kv: bulk get of %d key(s): %w", len(keys), err)
 	}
 
 	var body bulkGetResponseBody
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
 		return nil, fmt.Errorf("mamori/cloudflare-kv: decoding bulk response: %w: %w", mamori.ErrInvalid, err)
 	}
-	// Decode consumes a well-formed single JSON value, so this is normally a
-	// no-op; draining explicitly, rather than relying on that, is what makes
-	// this path's connection-reuse behavior a decision instead of an
-	// accident of Decode's internals, matching the 404 branch above and
-	// get's own 200 path (see errBodyLimit's doc comment).
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 	if !body.Success {
 		// A 200 status carrying "success":false is Cloudflare's own reported
 		// failure, distinct from an HTTP-level status code, and is a malformed
@@ -283,78 +274,128 @@ func (p *Provider) bulkGet(ctx context.Context, s settings, keys []string) (map[
 // (config%2Fprod%2Flog-level) rather than as three, which is why keyOf takes
 // the entire ref path as one key and never splits it on '/'.
 func (p *Provider) get(ctx context.Context, s settings, key string) ([]byte, error) {
-	u := p.baseURL + "/accounts/" + url.PathEscape(s.account) +
-		"/storage/kv/namespaces/" + url.PathEscape(s.namespace) +
-		"/values/" + url.PathEscape(key)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	client, err := p.clientFor(s)
 	if err != nil {
-		return nil, sanitizeTransportError(err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.token)
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := client.Do(ctx, httpcore.Request{
+		Path: namespacePath(s) + "/values/" + url.PathEscape(key),
+	})
 	if err != nil {
-		return nil, sanitizeTransportError(err)
+		if errors.Is(err, mamori.ErrNotFound) {
+			// Either the key or the namespace is absent; the response does not
+			// reliably distinguish them, which is the caveat this provider's
+			// package doc names rather than hides.
+			return nil, fmt.Errorf("mamori/cloudflare-kv: key %q not found: %w", key, mamori.ErrNotFound)
+		}
+		// One %w: the cause already carries the sentinel httpcore classified
+		// it with, and adding a second would replace that kind rather than
+		// duplicate it.
+		return nil, fmt.Errorf("mamori/cloudflare-kv: reading key %q: %w", key, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		// Either the key or the namespace is absent; see classifyStatus's doc
-		// comment for why the response does not reliably distinguish them.
-		// Drain and discard a bounded amount of the body before returning:
-		// this provider caches nothing, so an absent key is read again on
-		// every poll tick, and leaving the body unread here would prevent
-		// the connection being reused, paying a fresh TCP and TLS handshake
-		// on every one of those ticks.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
-		return nil, fmt.Errorf("mamori/cloudflare-kv: key %q not found: %w", key, mamori.ErrNotFound)
-	}
-	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics. Never log
-		// it (same errBodyLimit bound and rationale as bulkGet's status
-		// branch, above).
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		statusErr := fmt.Errorf("mamori/cloudflare-kv: unexpected status %d reading key %q: %s",
-			resp.StatusCode, key, strings.TrimSpace(string(msg)))
-		return nil, classifyStatus(resp.StatusCode, statusErr)
-	}
-	// The 200 path needs no matching drain step: it already reads the whole
-	// body via io.ReadAll below, so the connection is already fully consumed
-	// by the time this function returns (see errBodyLimit's doc comment).
-	return io.ReadAll(resp.Body)
+	return resp.Body, nil
 }
 
-// sanitizeTransportError strips a *url.Error down to its underlying reason,
-// discarding the request URL it would otherwise render into Error().
+// namespacePath is the escaped path prefix addressing one namespace, shared by
+// the single-key and bulk endpoints.
 //
-// The request URL built in get embeds the account id and the namespace id,
-// and http.Client.Do wraps every transport-level failure - a refused
-// connection, a timeout, a cancelled context - in a *url.Error whose Error()
-// renders the full request URL. Without this, an ordinary network hiccup,
-// not even a bug in this provider, would put the account id into a returned
-// error's text. This is the same class of leak providers/vercel-gc fixed in
-// parseConnectionString (see its doc comment), reached here through the
-// client's transport instead of url.Parse.
+// Both ids are url.PathEscape'd. The namespace is ref-controlled through
+// ?namespace=, so without the escape a namespace containing "/" would produce
+// a request path addressing an entirely different endpoint. httpcore joins
+// Request.Path in its escaped form precisely so that works, and rejects a "."
+// or ".." segment (literal or percent-encoded) before anything is sent, so a
+// traversal payload cannot escape the base URL's prefix either.
+func namespacePath(s settings) string {
+	return "/accounts/" + url.PathEscape(s.account) +
+		"/storage/kv/namespaces/" + url.PathEscape(s.namespace)
+}
+
+// clientFor builds the httpcore client for one read.
 //
-// Wrapping urlErr.Err with %w, rather than discarding it, keeps
-// errors.Is(_, context.Canceled) (and similar checks) working: *url.Error
-// already unwraps to the same underlying error via its own Unwrap method, so
-// this changes only the rendered message, never the errors.Is chain.
-//
-// The final `return err` is deliberate, not a missed case: by construction
-// only a *url.Error carries a rendered request URL, so any other error type
-// already has nothing to strip, and wrapping it here would add noise without
-// removing anything sensitive.
-func sanitizeTransportError(err error) error {
-	if err == nil {
-		return nil
+// It is built per call rather than cached because the token, the account id
+// and the namespace are resolved per ref, reading the environment lazily (see
+// settingsFor): caching would pin whichever set happened to be resolved first,
+// and the namespace in particular is allowed to differ from one ref to the
+// next. Construction performs no network call and reuses the provider's
+// *http.Client, so the connection pool is shared across every read.
+func (p *Provider) clientFor(s settings) (*httpcore.Client, error) {
+	c, err := httpcore.New(httpcore.Config{
+		BaseURL:     p.baseURL,
+		HTTPClient:  p.httpClient,
+		Auth:        httpcore.Bearer(s.token),
+		MaxBody:     maxBodyBytes,
+		ErrorDetail: errorDetail,
+		RedactPath:  redactPath(s),
+	})
+	if err != nil {
+		// No redaction here: this error echoes the operator's configured
+		// BaseURL, which carries neither id, and a BaseURL that failed to parse
+		// has no path for a path hook to work on.
+		return nil, fmt.Errorf("mamori/cloudflare-kv: building the API client: %w", err)
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return fmt.Errorf("mamori/cloudflare-kv: request failed: %w", urlErr.Err)
+	return c, nil
+}
+
+// errorDetail is httpcore's Config.ErrorDetail hook: it quotes a bounded
+// prefix of a failing response's body into the error message.
+//
+// Embedding the body verbatim, bounded by errBodyLimit, is a deliberate house
+// convention shared with providers/doppler, providers/vercel-gc and
+// providers/scaleway-sm: the verbatim text is what actually tells an operator
+// what the upstream rejected the request for, and the bound is what stops a
+// hostile or broken upstream turning that diagnostic into an unbounded string.
+// httpcore calls this only for a status it has already decided is a failure,
+// never for the 200 whose body IS the stored value.
+func errorDetail(_ int, body []byte) string {
+	if len(body) > errBodyLimit {
+		body = body[:errBodyLimit]
 	}
-	return err
+	return strings.TrimSpace(string(body))
+}
+
+// redactPath returns httpcore's Config.RedactPath hook for s: it substitutes
+// placeholders for the account id and the namespace id in the request path
+// httpcore renders into every error it returns.
+//
+// httpcore strips the query string and any userinfo from that URL but renders
+// the path, which is right for a provider whose path carries only a key name
+// and wrong for this one: a Workers KV URL carries the account id and the
+// namespace id as ordinary path segments. This package guarantees neither
+// reaches an error's text (see TestResolveTransportErrorNeverLeaksCredentials),
+// and without this hook an ordinary refused connection would put both into a
+// log line. The API token needs no such treatment: it travels in the
+// Authorization header, which is never rendered.
+//
+// Substituting before httpcore composes the message, rather than rewriting the
+// finished message afterwards as this package used to, is what keeps the error
+// chain untouched: errors.Is still reaches httpcore's sentinel and still
+// reaches the transport's own cause through the *url.Error httpcore preserves,
+// because nothing is rewritten at all. httpcore applies the hook to that
+// rebuilt *url.Error too, so the ids cannot be read back out through the chain.
+//
+// Both the raw and the url.PathEscape'd form of each id are replaced, since the
+// path carries the escaped one, and the longest string is replaced first so that
+// an id which is a prefix of the other cannot leave a fragment of it behind.
+func redactPath(s settings) func(string) string {
+	subs := []struct{ from, to string }{
+		{s.account, accountPlaceholder},
+		{url.PathEscape(s.account), accountPlaceholder},
+		{s.namespace, namespacePlaceholder},
+		{url.PathEscape(s.namespace), namespacePlaceholder},
+	}
+	slices.SortFunc(subs, func(a, b struct{ from, to string }) int {
+		return len(b.from) - len(a.from)
+	})
+
+	return func(path string) string {
+		for _, sub := range subs {
+			if sub.from != "" {
+				path = strings.ReplaceAll(path, sub.from, sub.to)
+			}
+		}
+		return path
+	}
 }
 
 // valueFor turns the raw response body into a mamori.Value, applying the
@@ -382,41 +423,16 @@ func valueFor(b []byte, ref mamori.Ref, namespace string) (mamori.Value, error) 
 	}, nil
 }
 
-// classifyStatus maps a Workers KV REST API status onto a mamori
-// classification sentinel, wrapping statusErr so both the sentinel and the
-// diagnostic context survive in the errors.Is chain. 404 is handled by its own
-// branch in both get and bulkGet and never reaches this function.
+// Status classification comes from httpcore.ClassifyStatus, inside
+// httpcore.Client.Do, rather than from a mapping copied into this package. 404
+// is the one status get and bulkGet each take back, to give it a message of
+// their own.
 //
-// The mapping follows ordinary HTTP semantics: 401 for a missing or invalid
-// API token, 403 for a token that authenticates but lacks permission to read
-// this namespace, 429 for rate limiting, and 400 for a malformed request. One
-// caveat is worth being honest about, because it is the kind of thing a
-// misconfiguration hides behind rather than announces: a 404 from this API
-// means either an absent key or an absent namespace, and Cloudflare's response
-// does not reliably distinguish the two, so a namespace id that is simply
-// wrong presents as every key in it silently falling back to its default,
-// exactly like a genuinely absent key would. Cloudflare has not published a
-// stable enough error-code vocabulary in the response body to key this
-// mapping on anything but the status, so codes not listed here report
-// unknown rather than being guessed at.
-func classifyStatus(code int, statusErr error) error {
-	if statusErr == nil {
-		return nil
-	}
-	var sentinel error
-	switch {
-	case code == http.StatusUnauthorized:
-		sentinel = mamori.ErrUnauthenticated
-	case code == http.StatusForbidden:
-		sentinel = mamori.ErrPermissionDenied
-	case code == http.StatusTooManyRequests:
-		sentinel = mamori.ErrRateLimited
-	case code == http.StatusBadRequest:
-		sentinel = mamori.ErrInvalid
-	case code >= 500:
-		sentinel = mamori.ErrUnavailable
-	default:
-		return statusErr
-	}
-	return fmt.Errorf("%w: %w", sentinel, statusErr)
-}
+// One caveat of that 404 is worth being honest about, because it is the kind
+// of thing a misconfiguration hides behind rather than announces: a 404 from
+// this API means either an absent key or an absent namespace, and Cloudflare's
+// response does not reliably distinguish the two, so a namespace id that is
+// simply wrong presents as every key in it silently falling back to its
+// default, exactly like a genuinely absent key would. Cloudflare has not
+// published a stable enough error-code vocabulary in the response body to key
+// anything on but the status.

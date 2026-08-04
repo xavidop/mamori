@@ -6,22 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 )
 
-// errBodyLimit bounds how much of a non-200 response body access reads, so
-// a hostile or broken upstream cannot put an unbounded response into an
-// error string. The 404 branch drains within this same bound (see access's
-// doc comment on why an absent secret needs that drain), and the 200 path
-// now drains within it too, right after its own Decode call, so every
-// branch that can be entered shares one connection-reuse discipline rather
-// than the 200 and 404 paths silently differing.
+// errBodyLimit bounds how much of a failing response body reaches an error
+// string, so a hostile or broken upstream cannot put an unbounded response
+// into one. httpcore hands errorDetail at most Config.MaxBody bytes and always
+// drains the rest on every branch, so the connection-reuse discipline this
+// file used to hand-roll per branch now comes from one place; this constant is
+// only about how much of that body is worth quoting.
 const errBodyLimit = 4096
 
 // Resolve fetches ref's secret from Secret Manager.
@@ -65,123 +63,101 @@ type accessResponse struct {
 // "latest_enabled", or a decimal revision number - see parseRef's doc
 // comment), and returns the decoded envelope.
 //
-// The full request URL, including its query string, is assembled into u
-// BEFORE http.NewRequestWithContext is called, deliberately: a malformed
-// WithBaseURL makes url.Parse fail inside NewRequestWithContext itself, and
-// that failure - like every other transport-level failure this method can
-// produce - is a *url.Error whose Error() renders the exact string handed to
-// it. Building the query string in first, rather than adding it to req.URL
-// afterwards, means that failure mode genuinely carries the project id, the
-// same way the live-transport failure below does; see
-// sanitizeTransportError's doc comment for why that matters.
+// The project id travels in the query string, which is exactly where
+// httpcore's URL redaction removes it from: every error httpcore returns
+// renders the request URL with its query and any userinfo stripped, and a
+// transport failure's own *url.Error is rebuilt with that redacted URL rather
+// than discarded, so errors.Is still reaches the underlying cause. That is
+// what this package used to keep with a hand-rolled sanitizeTransportError at
+// four call sites. The secret key never appears in a URL at all: it travels in
+// the X-Auth-Token header, which is never rendered.
 func (p *Provider) access(ctx context.Context, s settings, path, name, revision string) (accessResponse, error) {
-	u := p.baseURL + "/regions/" + url.PathEscape(s.region) +
-		"/secrets-by-path/versions/" + url.PathEscape(revision) + "/access"
-
-	q := url.Values{}
-	q.Set("secret_path", path)
-	q.Set("secret_name", name)
-	q.Set("project_id", s.projectID)
-	u += "?" + q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	client, err := p.clientFor(s)
 	if err != nil {
-		return accessResponse{}, sanitizeTransportError(err)
+		return accessResponse{}, err
 	}
-	req.Header.Set("X-Auth-Token", s.secretKey)
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := client.Do(ctx, httpcore.Request{
+		Path: "/regions/" + url.PathEscape(s.region) +
+			"/secrets-by-path/versions/" + url.PathEscape(revision) + "/access",
+		Query: url.Values{
+			"secret_path": {path},
+			"secret_name": {name},
+			"project_id":  {s.projectID},
+		},
+	})
 	if err != nil {
-		return accessResponse{}, sanitizeTransportError(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		// The secret name is absent, the requested revision does not exist,
-		// or the requested revision is DISABLED (Scaleway makes a disabled
-		// version inaccessible, not merely non-default - see the package doc
-		// comment on the ?revision default); see classifyStatus's doc comment
-		// for why the response does not reliably distinguish any of these.
-		//
-		// That a disabled revision arrives here as a 404 specifically is the
-		// one part of this not confirmed from a published source. Scaleway
-		// documents the inaccessibility but not the status it returns, and 404
-		// is the reading consistent with an inaccessible version being absent
-		// from the caller's view. If it turns out to be a 403, the sentinel
-		// changes from ErrNotFound to ErrPermissionDenied and a disabled
-		// revision would fail loudly rather than degrading to the field's
-		// default. The live integration test is what would reveal it.
-		// Drain and discard a bounded amount of the body before returning:
-		// this provider caches nothing (see Resolve's doc comment), so an
-		// absent secret is read again on every poll tick, and leaving the
-		// body unread here would prevent the connection being reused, paying
-		// a fresh TCP and TLS handshake on every one of those ticks.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
-		return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: secret %q not found: %w", name, mamori.ErrNotFound)
-	}
-	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		statusErr := fmt.Errorf("mamori/scaleway-sm: unexpected status %d accessing secret %q: %s",
-			resp.StatusCode, name, strings.TrimSpace(string(msg)))
-		return accessResponse{}, classifyStatus(resp.StatusCode, statusErr)
+		if errors.Is(err, mamori.ErrNotFound) {
+			// The secret name is absent, the requested revision does not
+			// exist, or the requested revision is DISABLED (Scaleway makes a
+			// disabled version inaccessible, not merely non-default - see the
+			// package doc comment on the ?revision default); the response does
+			// not reliably distinguish any of these.
+			//
+			// That a disabled revision arrives here as a 404 specifically is
+			// the one part of this not confirmed from a published source.
+			// Scaleway documents the inaccessibility but not the status it
+			// returns, and 404 is the reading consistent with an inaccessible
+			// version being absent from the caller's view. If it turns out to
+			// be a 403, the sentinel changes from ErrNotFound to
+			// ErrPermissionDenied and a disabled revision would fail loudly
+			// rather than degrading to the field's default. The live
+			// integration test is what would reveal it.
+			return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: secret %q not found: %w", name, mamori.ErrNotFound)
+		}
+		// One %w: the cause already carries the sentinel httpcore classified
+		// it with, and adding a second would replace that kind rather than
+		// duplicate it.
+		return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: accessing secret %q: %w", name, err)
 	}
 
 	var body accessResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
 		return accessResponse{}, fmt.Errorf("mamori/scaleway-sm: decoding access response for secret %q: %w: %w", name, mamori.ErrInvalid, err)
 	}
-	// Decode consumes a well-formed single JSON value, so this is normally a
-	// no-op; draining explicitly, rather than relying on that, is what makes
-	// this path's connection-reuse behavior a decision instead of an
-	// accident of Decode's internals, matching the 404 branch above (see
-	// errBodyLimit's doc comment).
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 	return body, nil
 }
 
-// sanitizeTransportError strips a *url.Error down to its underlying reason,
-// discarding the request URL it would otherwise render into Error().
+// clientFor builds the httpcore client for one read.
 //
-// The request URL built in access embeds the project id in its query string
-// (see access's doc comment), and http.Client.Do wraps every
-// transport-level failure - a refused connection, a timeout, a cancelled
-// context - in a *url.Error whose Error() renders the full request URL.
-// Without this, an ordinary network hiccup, not even a bug in this
-// provider, would put the project id into a returned error's text, reached
-// here through the client's transport (and, for a malformed WithBaseURL,
-// through url.Parse inside http.NewRequestWithContext itself) instead of a
-// hand-rolled url.Parse call.
-//
-// providers/cloudflare-kv never actually shipped this leak: its own
-// sanitizeTransportError is present in the very commit that introduced its
-// resolve.go. What THAT module shipped, and had to fix in review, was a test
-// gap - only 1 of its 4 sanitize call sites was pinned by a test, not a
-// missing sanitizer. providers/vercel-gc did ship a real leak of this
-// shape, but in a different place: parseConnectionString ran the connection
-// string, token included, through url.Parse, and the fix moved the token out
-// of the URL entirely and into the Authorization header. Its transport path
-// has no sanitizer to this day, correctly, because its URL carries no
-// credential to leak.
-//
-// Wrapping urlErr.Err with %w, rather than discarding it, keeps
-// errors.Is(_, context.Canceled) (and similar checks) working: *url.Error
-// already unwraps to the same underlying error via its own Unwrap method,
-// so this changes only the rendered message, never the errors.Is chain.
-//
-// The final `return err` is deliberate, not a missed case: by construction
-// only a *url.Error carries a rendered request URL, so any other error type
-// already has nothing to strip, and wrapping it here would add noise
-// without removing anything sensitive.
-func sanitizeTransportError(err error) error {
-	if err == nil {
-		return nil
+// It is built per call rather than cached because the secret key, project id
+// and region are resolved per resolve, reading the environment lazily (see
+// settingsFor): caching would pin whichever set happened to be resolved first.
+// Construction performs no network call and reuses the provider's
+// *http.Client, so the connection pool is shared across every read.
+func (p *Provider) clientFor(s settings) (*httpcore.Client, error) {
+	c, err := httpcore.New(httpcore.Config{
+		BaseURL:     p.baseURL,
+		HTTPClient:  p.httpClient,
+		Auth:        httpcore.HeaderAuth("X-Auth-Token", s.secretKey),
+		ErrorDetail: errorDetail,
+	})
+	if err != nil {
+		// The base URL is operator-supplied and carries no credential: the
+		// project id is added per request as a query parameter, and the secret
+		// key is a header. httpcore quotes only the base URL it was given.
+		return nil, fmt.Errorf("mamori/scaleway-sm: building the API client: %w", err)
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return fmt.Errorf("mamori/scaleway-sm: request failed: %w", urlErr.Err)
+	return c, nil
+}
+
+// errorDetail is httpcore's Config.ErrorDetail hook: it quotes a bounded
+// prefix of a failing response's body into the error message.
+//
+// Embedding the body verbatim, bounded by errBodyLimit, is a deliberate house
+// convention shared with providers/doppler, providers/cloudflare-kv and
+// providers/vercel-gc: the verbatim text is what actually tells an operator
+// what the upstream rejected the request for, and the bound is what stops a
+// hostile or broken upstream turning that diagnostic into an unbounded string.
+//
+// httpcore calls this only for a status it has already decided is a failure,
+// which is what makes it safe in a secret manager: on a 200 the body carries
+// the secret payload, and that body is never shown this hook.
+func errorDetail(_ int, body []byte) string {
+	if len(body) > errBodyLimit {
+		body = body[:errBodyLimit]
 	}
-	return err
+	return strings.TrimSpace(string(body))
 }
 
 // valueFor turns resp into a mamori.Value: it verifies resp.DataCrc32
@@ -270,46 +246,19 @@ func valueFor(resp accessResponse, ref mamori.Ref, region string) (mamori.Value,
 	}, nil
 }
 
-// classifyStatus maps a Secret Manager access-route status onto a mamori
-// classification sentinel, wrapping statusErr so both the sentinel and the
-// diagnostic context survive in the errors.Is chain. 404 is handled by its
-// own branch in access and never reaches this function.
+// Status classification comes from httpcore.ClassifyStatus, inside
+// httpcore.Client.Do, rather than from a mapping copied into this package. 404
+// is the one status access takes back, to give it a message of its own.
 //
-// The mapping follows ordinary HTTP semantics: 401 for a missing or invalid
-// API secret key, 403 for a key that authenticates but lacks permission to
-// read this secret, 429 for rate limiting, and 400 for a malformed request.
-// One caveat is worth being explicit about, because it is exactly the kind
-// of thing a misconfiguration hides behind rather than announces: a 404
-// from this API does not distinguish an unknown secret from a KNOWN secret
-// whose requested revision does not exist OR whose requested revision has
-// been disabled - disabling a version makes it inaccessible on Scaleway, not
-// merely non-default, so a caller who pinned ?revision=latest before a
-// revocation gets the identical 404 an entirely absent secret would. Either
-// way it degrades silently to the field's default or optional handling,
-// exactly as if the secret had never existed at all - see the package doc
-// comment for why ?revision defaults to "latest_enabled" rather than
-// "latest" for precisely this reason. Scaleway has not published a stable
-// enough error-code vocabulary in the response body to key this mapping on
-// anything but the status, so codes not listed here report unknown rather
-// than being guessed at.
-func classifyStatus(code int, statusErr error) error {
-	if statusErr == nil {
-		return nil
-	}
-	var sentinel error
-	switch {
-	case code == http.StatusUnauthorized:
-		sentinel = mamori.ErrUnauthenticated
-	case code == http.StatusForbidden:
-		sentinel = mamori.ErrPermissionDenied
-	case code == http.StatusTooManyRequests:
-		sentinel = mamori.ErrRateLimited
-	case code == http.StatusBadRequest:
-		sentinel = mamori.ErrInvalid
-	case code >= 500:
-		sentinel = mamori.ErrUnavailable
-	default:
-		return statusErr
-	}
-	return fmt.Errorf("%w: %w", sentinel, statusErr)
-}
+// One caveat of that 404 is worth being explicit about, because it is exactly
+// the kind of thing a misconfiguration hides behind rather than announces: a
+// 404 from this API does not distinguish an unknown secret from a KNOWN secret
+// whose requested revision does not exist OR whose requested revision has been
+// disabled - disabling a version makes it inaccessible on Scaleway, not merely
+// non-default, so a caller who pinned ?revision=latest before a revocation
+// gets the identical 404 an entirely absent secret would. Either way it
+// degrades silently to the field's default or optional handling, exactly as if
+// the secret had never existed at all - see the package doc comment for why
+// ?revision defaults to "latest_enabled" rather than "latest" for precisely
+// this reason. Scaleway has not published a stable enough error-code
+// vocabulary in the response body to key anything on but the status.

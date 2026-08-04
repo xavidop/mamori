@@ -1,8 +1,11 @@
 # mamori providers reference
 
 Each provider is a separate Go module (except the core built-ins). Add the
-module, then blank-import it so it registers its scheme. Ref syntax is
-`scheme://path#key?opts`; `#key` selects a field from a structured payload.
+module, then blank-import it so it registers its scheme - except `https`,
+whose `New` takes operator-supplied endpoints and returns an error, so it
+needs an ordinary import and an explicit `New(...)` call instead (see the
+`https` row below). Ref syntax is `scheme://path#key?opts`; `#key` selects a
+field from a structured payload.
 
 For authentication details and every option, see https://mamorigo.dev/docs/providers .
 
@@ -26,14 +29,21 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
+| `infisical` | `infisical://` | `infisical://DB_PASSWORD`, `infisical://DB_PASSWORD?env=staging&path=/backend`, `infisical://DB_CREDS#/creds/password`. The whole ref path is the secret NAME; project/environment/folder come from options or `?project=`/`?env=`/`?path=`, never from the path. Machine identity Universal Auth via `INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET`. |
+| `hcp-vault-secrets` | `hcp-vs://` | `hcp-vs://DB_PASSWORD`, `hcp-vs://DB_PASSWORD?app=web&org=<uuid>&project=<uuid>`, `hcp-vs://DB_CREDS#/creds/password`. HCP Vault Secrets, NOT self-hosted `vault://`. The whole ref path is the secret NAME; organization/project/app come from options or `?org=`/`?project=`/`?app=`, never from the path. Service principal via `HCP_CLIENT_ID`/`HCP_CLIENT_SECRET`. Static secrets only. |
 | `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
+| `bitwarden` | `bitwarden-sm://` | Bitwarden **Secrets Manager** (the `bws` machine-account product), not the consumer password manager. A secret is addressed by its **UUID**, never its name, because the list endpoint returns names as ciphertext and omits values: `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d`, `bitwarden-sm://6b3f9e0c-9f9a-4a5c-9a09-af9601317f2d#password`. Reads `BWS_ACCESS_TOKEN`. Decrypts client side with the Go standard library alone. |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
+| `supabase` | `supabase://` | `supabase://db-password`, `supabase://api-creds#/stripe/key` (needs project-side setup SQL) |
 | `k8s` | `k8s-secret://` `k8s-cm://` | `k8s-secret://ns/name#key` |
 | `consul` | `consul://` | `consul://app/config` |
 | `etcd` | `etcd://` | `etcd://app/config` |
+| `nacos` | `nacos://` | `nacos://prod/db.json#password` |
 | `vercel-gc` | `vercel-gc://` | `vercel-gc://my-flag`, `vercel-gc://ecfg_abc/my-flag` |
 | `cloudflare-kv` | `cloudflare-kv://` | `cloudflare-kv://log-level`, `cloudflare-kv://log-level?namespace=abcd1234` |
+| `heroku` | `heroku://` | Heroku config vars. `heroku://DATABASE_URL`, `heroku://my-app/API_TOKEN`, `heroku://SERVICE_ACCOUNT#/private_key`. The grammar is `heroku://<VAR>` or `heroku://<app>/<VAR>`; a third segment is refused. App precedence: ref path > `WithApp` > `HEROKU_APP` > `HEROKU_APP_NAME` (dyno metadata). Auth is `HEROKU_API_KEY`. **A `BatchProvider`**: one GET returns every config var of an app, so N refs cost one request per app. **Always `Sensitive`** - add-ons write `DATABASE_URL` into the same namespace as `LOG_LEVEL`. |
+| `https` | `https://` | generic REST config/secrets. The authority is a **registered `Endpoint.Name`, not a hostname** - `https://billing/cfg#/db/pass` resolves against whatever `BaseURL` the endpoint named `billing` was registered with via `httpsprov.New`, never against a host literally named `billing`. **This is the one module you do NOT blank-import**: it has no `init`, because an `Endpoint` is entirely operator-supplied and `New` returns an error. Import it normally, call `httpsprov.New(...)`, and pass the result to `mamori.WithProvider`. |
 | `postgres` | `postgres://` | connection-string backed |
 | `mysql` | `mysql://` | connection-string backed |
 | `sqlite` | `sqlite://` | file-backed |
@@ -48,6 +58,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcs` | `gcs://` | Google Cloud Storage object |
 | `azblob` | `azblob://` | Azure Blob Storage object |
 | `launchdarkly` `unleash` `flagsmith` `configcat` `split` `growthbook` `flipt` `goff` | feature-flag schemes | one module per flag backend |
+| `posthog` | `posthog://` | PostHog flag evaluated for one distinct id (set provider-wide with `WithDistinctID`, not per ref). No fragment gives `true`/`false` for a boolean flag and the variant key for a multivariate one; `#enabled`, `#variant`, `#payload` name a facet. `posthog://new-checkout`, `posthog://pricing-test#variant` |
 | `openfeature` | `openfeature://` | vendor-neutral flag standard; evaluates through whatever `openfeature.FeatureProvider` your app installs. `openfeature://new-checkout?type=bool`, `openfeature://limits#/upload/maxMB?type=object` |
 | `viper` | `viper://` | reads whatever a `*viper.Viper` resolved for a key, inheriting its precedence (Set > flags > env > config file > k/v store > defaults); for incremental migration off an existing Viper setup. `viper://server.port`, `viper://db#/creds/port` |
 | `mamori` | `mamori://` | client of a mamori config server (native watch) |
@@ -57,7 +68,10 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 Store these in `secret.String` / `secret.Bytes`, never a plain `string`:
 
 - Always secret: `aws-sm`, `gcp-sm`, `azure-kv`, `vault`, `op`, `sops`,
-  `doppler`, `scaleway-sm`, `k8s-secret`.
+  `doppler`, `infisical`, `hcp-vs`, `scaleway-sm`, `supabase`, `k8s-secret`,
+  `bitwarden-sm`, `heroku` (not a secret manager, but Heroku add-ons write
+  `DATABASE_URL` and `REDIS_URL` into the same unclassified config var
+  namespace as `LOG_LEVEL`).
 - Sometimes secret, and flagged anyway: `aws-ps` (SecureString params), `exec`
   (mamori marks all command output secret), `mamori` (relays whatever the
   server marks).
@@ -73,3 +87,14 @@ a custom provider, add its scheme: `mamori vet --secret-schemes=mysecrets ./...`
   wins; `onfail` handles a real error on the winner).
 - Middleware wraps any provider: `middleware.Cache`, `Audit`, `RateLimit`,
   `Failover`, `Prefix` (see https://mamorigo.dev/docs/middleware ).
+
+## Writing a new provider over a REST API
+
+`providers/httpcore` is not a provider and registers no scheme: it is the
+stdlib-only library the REST-backed providers are built on. Use it rather than
+hand-rolling `net/http`, and you inherit request building, `Bearer`/header/
+basic/query/OAuth2 authenticators, `ClassifyStatus` (plus its exact inverse
+`StatusForKind` for the conformance `Fail` hook), conditional GET via
+`Revalidator`, a bounded and always-drained response body, and a request path
+that cannot traverse out of the `BaseURL`. See
+https://mamorigo.dev/docs/writing-a-provider/httpcore .

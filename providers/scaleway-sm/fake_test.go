@@ -169,7 +169,7 @@ func (f *fakeSM) counts() int {
 // a disabled revision in favor of another. It reports false when no revision
 // satisfies the selector, which the caller turns into a 404 - the same
 // response an unknown secret produces, which is exactly the ambiguity
-// classifyStatus's doc comment warns about.
+// access's 404 branch warns about.
 func resolveRevisionSelector(revs map[uint32]secretRevision, selector string) (uint32, bool) {
 	switch selector {
 	case "latest":

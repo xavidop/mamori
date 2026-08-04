@@ -37,8 +37,14 @@ go get github.com/xavidop/mamori/providers/vault          # vault://
 go get github.com/xavidop/mamori/providers/k8s            # k8s-secret://  k8s-cm://
 go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
+go get github.com/xavidop/mamori/providers/heroku         # heroku://
+go get github.com/xavidop/mamori/providers/https          # https://
+go get github.com/xavidop/mamori/providers/hcp-vault-secrets # hcp-vs://
+go get github.com/xavidop/mamori/providers/infisical      # infisical://
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
-# ... gcp, azure, consul, doppler, onepassword, sops
+go get github.com/xavidop/mamori/providers/supabase       # supabase://
+go get github.com/xavidop/mamori/providers/bitwarden      # bitwarden-sm://
+# ... gcp, azure, consul, doppler, nacos, onepassword, sops
 ```
 
 ## Quick start
@@ -120,9 +126,13 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/k8s` | `k8s-secret://` · `k8s-cm://` | **native** (watch API) | ✅ |
 | `providers/consul` | `consul://` | **native** (blocking queries) | ✅ |
 | `providers/doppler` | `doppler://` | poll | ✅ |
+| `providers/infisical` | `infisical://` | poll | ✅ |
+| `providers/hcp-vault-secrets` | `hcp-vs://` | poll | ✅ |
 | `providers/scaleway-sm` | `scaleway-sm://` | poll | ✅ |
+| `providers/bitwarden` | `bitwarden-sm://` | poll | ✅ |
 | `providers/onepassword` | `op://` | poll | ✅ |
 | `providers/sops` | `sops://` | fsnotify | ✅ |
+| `providers/supabase` | `supabase://` | poll | ✅ |
 | `providers/postgres` | `postgres://` | **native** (LISTEN/NOTIFY) | ✅ |
 | `providers/mysql` | `mysql://` | poll | ✅ |
 | `providers/sqlite` | `sqlite://` | fsnotify | ✅ |
@@ -130,8 +140,11 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/dynamodb` | `dynamodb://` | poll | ✅ |
 | `providers/redis` | `redis://` | **native** (keyspace notifications) | ✅ |
 | `providers/etcd` | `etcd://` | **native** (watch API) | ✅ |
+| `providers/nacos` | `nacos://` | **native** (long-poll listener) | ✅ |
 | `providers/vercel-gc` | `vercel-gc://` | poll (digest) | ✅ |
 | `providers/cloudflare-kv` | `cloudflare-kv://` | poll | ✅ |
+| `providers/heroku` | `heroku://` | poll | ✅ |
+| `providers/https` | `https://` | poll | ✅ |
 | `providers/firestore` | `firestore://` | **native** (snapshot listeners) | ✅ |
 | `providers/firebase-rc` | `firebase-rc://` | poll | ✅ |
 | `providers/firebase-rtdb` | `firebase-rtdb://` | **native** (streaming) | no (chain preserved) |
@@ -147,6 +160,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/growthbook` | `growthbook://` | poll | no (chain preserved) |
 | `providers/flipt` | `flipt://` | poll | ✅ |
 | `providers/goff` | `goff://` (GO Feature Flag) | poll | ✅ |
+| `providers/posthog` | `posthog://` | poll | ✅ |
 | `providers/openfeature` | `openfeature://` ([OpenFeature](https://openfeature.dev) standard) | poll | ✅ |
 | `providers/viper` | `viper://` ([Viper](https://github.com/spf13/viper) config library) | poll | n/a (no error surface) |
 | `providers/mamori` | `mamori://` ([config server](#config-server) client) | **native** (SSE stream) | ✅ |

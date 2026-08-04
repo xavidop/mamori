@@ -380,16 +380,16 @@ func assertNoCredentialLeak(t *testing.T, err error) {
 // connection string; this provider has no connection string, but its request
 // URL embeds the account id and namespace id, and http.Client.Do wraps every
 // transport-level failure in a *url.Error whose Error() renders the full
-// request URL. Without sanitizing that, an ordinary network hiccup - not
+// request URL. Without redacting that, an ordinary network hiccup - not
 // even a bug in this provider - would put the account id and namespace id
 // into a returned error's text.
 //
-// This is one of four sanitizeTransportError call sites (the
-// NewRequestWithContext branch and the httpClient.Do branch, in each of get
-// and bulkGet); the other three are pinned by
-// TestResolveBatchTransportErrorNeverLeaksCredentials,
-// TestResolveMalformedBaseURLNeverLeaksCredentials, and
-// TestResolveBatchMalformedBaseURLNeverLeaksCredentials below.
+// A transport failure is the branch that renders the URL twice: once into
+// httpcore's own message, and once more into the *url.Error it rebuilds
+// around the cause. Both go through the redactPath hook this package hands
+// httpcore.Config, so this test fails if either site loses it, and
+// TestResolveBatchTransportErrorNeverLeaksCredentials drives the same pair
+// from the bulk path.
 func TestResolveTransportErrorNeverLeaksCredentials(t *testing.T) {
 	p := New(
 		WithAPIToken(secretToken),
@@ -425,18 +425,26 @@ func TestResolveBatchTransportErrorNeverLeaksCredentials(t *testing.T) {
 	assertNoCredentialLeak(t, err)
 }
 
-// TestResolveMalformedBaseURLNeverLeaksCredentials pins the
-// NewRequestWithContext branch in get, the one sanitizeTransportError call
-// site nothing previously exercised: a malformed WithBaseURL makes
-// url.Parse fail inside http.NewRequestWithContext itself, before any
-// network call, and that failure is also a *url.Error whose Error() renders
-// the full (unreachable) request URL - unsanitized, it would read
-// `parse "http://example.com/%zz/accounts/<account>/storage/kv/namespaces/<namespace>/values/k": ...`.
-func TestResolveMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
+// TestResolveMalformedBaseURLIsInvalid pins what a malformed WithBaseURL
+// actually does on the single-key path: httpcore.New rejects it at
+// construction, inside clientFor, and Resolve surfaces that as
+// mamori.ErrInvalid rather than as an unclassified error mamori would treat
+// as KindUnknown and keep retrying. A BaseURL that cannot be parsed is a
+// configuration mistake, and no amount of backing off will fix it.
+//
+// This test used to be TestResolveMalformedBaseURLNeverLeaksCredentials and
+// used to assert that no account or namespace id reached the error. That
+// assertion could not fail, before this migration or after it: the rejection
+// names the operator's configured BaseURL and nothing else, because no
+// request path is ever built. The name promised a leak check the body did not
+// perform. The genuine leak guarantee is driven end to end, on a path that
+// really does render both ids, by TestResolveTransportErrorNeverLeaksCredentials
+// and TestResolveBatchTransportErrorNeverLeaksCredentials above.
+func TestResolveMalformedBaseURLIsInvalid(t *testing.T) {
 	p := New(
-		WithAPIToken(secretToken),
-		WithAccountID(secretAccount),
-		WithNamespaceID(secretNamespace),
+		WithAPIToken(testToken),
+		WithAccountID(testAccount),
+		WithNamespaceID(testNamespace),
 		WithBaseURL("http://example.com/%zz"),
 	)
 
@@ -444,17 +452,19 @@ func TestResolveMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error from a malformed base URL")
 	}
-	assertNoCredentialLeak(t, err)
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("got %v (kind %q), want an error satisfying mamori.ErrInvalid", err, mamori.ErrorKind(err))
+	}
 }
 
-// TestResolveBatchMalformedBaseURLNeverLeaksCredentials is
-// TestResolveMalformedBaseURLNeverLeaksCredentials's counterpart for
-// bulkGet's NewRequestWithContext branch.
-func TestResolveBatchMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
+// TestResolveBatchMalformedBaseURLIsInvalid is
+// TestResolveMalformedBaseURLIsInvalid's counterpart for the bulk path, which
+// reaches clientFor through bulkGet rather than get.
+func TestResolveBatchMalformedBaseURLIsInvalid(t *testing.T) {
 	p := New(
-		WithAPIToken(secretToken),
-		WithAccountID(secretAccount),
-		WithNamespaceID(secretNamespace),
+		WithAPIToken(testToken),
+		WithAccountID(testAccount),
+		WithNamespaceID(testNamespace),
 		WithBaseURL("http://example.com/%zz"),
 	)
 
@@ -462,7 +472,9 @@ func TestResolveBatchMalformedBaseURLNeverLeaksCredentials(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error from a malformed base URL")
 	}
-	assertNoCredentialLeak(t, err)
+	if !errors.Is(err, mamori.ErrInvalid) {
+		t.Fatalf("got %v (kind %q), want an error satisfying mamori.ErrInvalid", err, mamori.ErrorKind(err))
+	}
 }
 
 // TestGetErrorBodyIsBounded pins errBodyLimit on get's single-key path: the

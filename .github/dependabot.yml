@@ -58,6 +58,13 @@ updates:
     directory: "/providers/etcd"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:etcd]
+  # Standard library only, on top of httpcore: the Nacos Open API is plain HTTP
+  # and the nacos-sdk-go is deliberately not used. The entry stays so the
+  # coverage check passes and so a future dependency is picked up automatically.
+  - package-ecosystem: gomod
+    directory: "/providers/nacos"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:nacos]
   - package-ecosystem: gomod
     directory: "/providers/redis"
     schedule: { interval: weekly }
@@ -143,6 +150,10 @@ updates:
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:goff]
   - package-ecosystem: gomod
+    directory: "/providers/posthog"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:posthog]
+  - package-ecosystem: gomod
     directory: "/providers/viper"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:viper]
@@ -159,6 +170,45 @@ updates:
     directory: "/providers/cloudflare-kv"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:cloudflare-kv]
+  # Not a provider: the shared HTTP resolve core the REST-backed providers build
+  # on. Standard library only, so this entry will rarely fire, and it stays for
+  # the same reason as cloudflare-kv above.
+  - package-ecosystem: gomod
+    directory: "/providers/httpcore"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:httpcore]
+  # Standard library only, on top of httpcore. Same reasoning again.
+  # Standard library only, on top of httpcore, and deliberately NOT HashiCorp's
+  # hcp-sdk-go. Same reasoning as https below: this entry will rarely fire, and
+  # the coverage check requires every module to be listed regardless.
+  - package-ecosystem: gomod
+    directory: "/providers/hcp-vault-secrets"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:hcp-vault-secrets]
+  - package-ecosystem: gomod
+    directory: "/providers/heroku"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:heroku]
+  - package-ecosystem: gomod
+    directory: "/providers/infisical"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:infisical]
+  - package-ecosystem: gomod
+    directory: "/providers/supabase"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:supabase]
+  - package-ecosystem: gomod
+    directory: "/providers/https"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:https]
+  # Bitwarden Secrets Manager. Standard library only, on top of httpcore, and
+  # deliberately so: it decrypts client side with crypto/hkdf, crypto/aes and
+  # crypto/hmac rather than taking Bitwarden's cgo Rust SDK. Same reasoning as
+  # https above for why the entry stays despite rarely firing.
+  - package-ecosystem: gomod
+    directory: "/providers/bitwarden"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:bitwarden]
   # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
   # whichever provider the application installed, including vendors with no
   # dedicated module above.

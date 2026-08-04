@@ -12,8 +12,9 @@
 //	FeatureFlag    string `source:"firebase-rc://feature_flags#new_ui"`
 //
 // The provider reads the current *server* Remote Config template (the one used
-// by Admin SDK / server workloads) via the Firebase Remote Config REST API and
-// returns the named parameter's default (server-side) value. Parameters that do
+// by Admin SDK / server workloads) via the Firebase Remote Config REST API,
+// over github.com/xavidop/mamori/providers/httpcore, and returns the named
+// parameter's default (server-side) value. Parameters that do
 // not exist, or that are configured to use the in-app default (no server value),
 // resolve to an error satisfying errors.Is(err, mamori.ErrNotFound).
 //
@@ -31,12 +32,14 @@ package firebaserc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -204,10 +207,22 @@ func (p *Provider) buildFetcher(ctx context.Context) (templateFetcher, error) {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
+	// MaxBody is set explicitly rather than left at httpcore's 1 MiB default:
+	// a server Remote Config template is a whole project's parameter set, not
+	// a single value, and this provider has always allowed 16 MiB for one.
+	client, err := httpcore.New(httpcore.Config{
+		BaseURL:     baseURL,
+		HTTPClient:  httpClient,
+		MaxBody:     maxBodyBytes,
+		ErrorDetail: errorDetail,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("firebase-rc: building the Remote Config client: %w", err)
+	}
 	return &httpFetcher{
 		projectID:  projectID,
 		httpClient: httpClient,
-		baseURL:    baseURL,
+		client:     client,
 	}, nil
 }
 
@@ -277,66 +292,71 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 }
 
 // httpFetcher fetches the server Remote Config template over the REST API.
+//
+// httpClient is retained alongside the httpcore client purely so Close can
+// release its idle connections; every request goes through client.
 type httpFetcher struct {
 	projectID  string
 	httpClient *http.Client
-	baseURL    string
+	client     *httpcore.Client
 }
 
 var _ templateFetcher = (*httpFetcher)(nil)
 
-func (f *httpFetcher) fetchTemplate(ctx context.Context) (*template, error) {
-	url := fmt.Sprintf("%s/projects/%s/remoteConfig", f.baseURL, f.projectID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("firebase-rc: building request: %w", err)
-	}
-	resp, err := f.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("firebase-rc: fetching template: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("firebase-rc: reading template response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		apiErr := fmt.Errorf("firebase-rc: Remote Config API returned %s: %s", resp.Status, snippet(body))
-		return nil, classifyFirebaseRC(resp.StatusCode, apiErr)
-	}
-	return decodeTemplate(body)
-}
-
-// classifyFirebaseRC maps a Remote Config REST API HTTP status onto a mamori
-// classification sentinel. Unlike the Azure and GCP SDKs, the REST API has no
-// structured error type to pattern-match with errors.As; the status code is
-// already in hand at the fetch call site (fetchTemplate), so it is classified
-// directly there rather than recovered from the error afterward.
+// fetchTemplate reads the current server template.
 //
-// A status this provider has no mapping for (e.g. 409 Conflict) is returned
-// unclassified rather than guessed at.
-func classifyFirebaseRC(statusCode int, err error) error {
-	if err == nil {
-		return nil
+// The status is classified by httpcore.Client.Do, with one status taken back:
+// see notFoundIsNotAMissingParameter below.
+func (f *httpFetcher) fetchTemplate(ctx context.Context) (*template, error) {
+	resp, err := f.client.Do(ctx, httpcore.Request{
+		Path: "/projects/" + url.PathEscape(f.projectID) + "/remoteConfig",
+	})
+	if err != nil {
+		return nil, notFoundIsNotAMissingParameter(err)
 	}
-	var sentinel error
-	switch {
-	case statusCode == http.StatusForbidden:
-		sentinel = mamori.ErrPermissionDenied
-	case statusCode == http.StatusUnauthorized:
-		sentinel = mamori.ErrUnauthenticated
-	case statusCode == http.StatusTooManyRequests:
-		sentinel = mamori.ErrRateLimited
-	case statusCode >= http.StatusInternalServerError:
-		sentinel = mamori.ErrUnavailable
-	case statusCode == http.StatusBadRequest:
-		sentinel = mamori.ErrInvalid
-	default:
-		return err
-	}
-	return fmt.Errorf("%w: %w", sentinel, err)
+	return decodeTemplate(resp.Body)
 }
+
+// notFoundIsNotAMissingParameter keeps an HTTP 404 from this API out of
+// mamori's not-found kind.
+//
+// httpcore.ClassifyStatus maps 404 to mamori.ErrNotFound, which is correct for
+// a provider whose request addresses one value: the value is absent. This
+// request addresses a whole project's template, so a 404 means the project does
+// not exist or the Remote Config API is not enabled on it - a misconfiguration
+// affecting every ref at once. ErrNotFound is the one kind that makes mamori
+// apply a field's default instead of failing, so letting it through would turn
+// a wrong project id into every firebase-rc field silently taking its default,
+// announcing nothing. A missing PARAMETER is reported as ErrNotFound by Resolve
+// itself, from the decoded template, and that is the only thing that should be.
+//
+// The cause is rendered into the message rather than wrapped, the one place in
+// this package that does so, and deliberately: errors.Is offers no way to veto
+// a sentinel that is already in the chain, so keeping the chain whole here
+// would keep mamori.ErrNotFound reachable with it. Everything the message
+// carried - the status, the API's own diagnostic snippet - survives as text,
+// and the kind goes back to being unclassified, exactly as it was before this
+// provider moved onto httpcore.
+func notFoundIsNotAMissingParameter(err error) error {
+	if errors.Is(err, mamori.ErrNotFound) {
+		return fmt.Errorf("firebase-rc: fetching Remote Config template: %s", err)
+	}
+	// One %w: the cause already carries the sentinel httpcore classified it
+	// with, and adding a second would replace that kind rather than duplicate
+	// it.
+	return fmt.Errorf("firebase-rc: fetching Remote Config template: %w", err)
+}
+
+// errorDetail is httpcore's Config.ErrorDetail hook: it lifts a short prefix of
+// a failing response's body into the error message, so an operator sees the
+// API's own diagnostic ("PERMISSION_DENIED", "Requested entity was not found")
+// rather than only a status. httpcore calls it only for a status it has
+// already decided is a failure, never for the 200 whose body is the template.
+//
+// A Remote Config template is not secret material (parameters are served to
+// clients), and the error envelope is a status plus a reason, so quoting a
+// bounded prefix of it discloses nothing a resolved value would.
+func errorDetail(_ int, body []byte) string { return snippet(body) }
 
 // restTemplate is the decoded subset of the Remote Config REST response.
 type restTemplate struct {

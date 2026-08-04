@@ -14,6 +14,7 @@ This is a **multi-module monorepo** unified by a `go.work` file:
 
 - Root module `github.com/xavidop/mamori` - core: `Load`/`Watch`, the reconciler, secret types, built-in providers (`env`/`file`/`exec`), `middleware/`, and the `providertest/` conformance kit. Its dependencies are deliberately minimal (validator, mapstructure, fsnotify).
 - `providers/<name>` - each provider is its **own module** so cloud SDKs never reach core consumers.
+- `providers/httpcore` - the shared HTTP resolve core. Not a provider and registers no scheme: it is the stdlib-only library the REST-backed providers are built on.
 - `x/otel` - the OpenTelemetry bridge.
 - `x/prom` - the Prometheus bridge (implements `mamori.Meter` directly against `prometheus/client_golang`, for shops that have not adopted OpenTelemetry).
 - `cmd/mamori` - the `mamori` CLI. It also ships the `mamori vet` `go vet` analyzer (`internal/vetcheck`) and the stdlib-only `source:` tag parsing they share (`internal/sourcetag`).
@@ -39,7 +40,11 @@ Requires **Go 1.26+**.
 
 ## Writing a provider
 
-Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) - it is the complete contract. In short:
+Read the [Write a provider guide](https://mamorigo.dev/docs/writing-a-provider) - it is the complete contract.
+
+**If your backend is a REST API, build on [`providers/httpcore`](providers/httpcore/) rather than hand-rolling the HTTP** - see the [HTTP core guide](https://mamorigo.dev/docs/writing-a-provider/httpcore). It is stdlib-only and gives you request building, `Authenticator`s (bearer, header, basic, query, OAuth2 client-credentials), `ClassifyStatus` and its exact inverse `StatusForKind` for your conformance `Fail` hook, conditional GET via `Revalidator`, a bounded and always-drained response body, and a request path that cannot traverse out of your `BaseURL`. Sixteen providers each hand-rolled those before it existed, and issue #107 was that duplication surfacing as inconsistent body draining. `providers/https` is a complete worked example.
+
+In short:
 
 1. Create `providers/<name>/` as its own module with `replace github.com/xavidop/mamori => ../..`.
 2. Implement `mamori.Provider` (`Scheme()` + `Resolve`). Add `WatchableProvider` **only** if the backend has native change notification; otherwise mamori polls. Add `BatchProvider` if the backend can resolve many refs in one call.

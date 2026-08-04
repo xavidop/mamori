@@ -74,10 +74,11 @@ Beyond 404, every other failure is classified by HTTP status, identically on bot
 | --- | --- |
 | 401 | `unauthenticated` |
 | 403 | `permission_denied` |
-| 429 | `rate_limited` |
-| 400 | `invalid` |
-| 5xx | `unavailable` |
-| anything else | `unknown` |
+| 408, 429 | `rate_limited` |
+| 400, 422 | `invalid` |
+| 5xx, and any other status not named above | `unavailable` |
+
+The mapping is `httpcore.ClassifyStatus`, shared with every other `httpcore`-backed provider. An unrecognized status reports `unavailable` (transient, so mamori backs off and retries) rather than `unknown`.
 
 An absent key and an absent namespace both return a plain 404 and are indistinguishable in the response. A namespace id that is simply wrong therefore presents exactly like a namespace full of genuinely absent keys: every field in your config silently falls back to its default, on either the single-key or the batch path. If everything unexpectedly defaults at once, check `Status()` before assuming the keys themselves are missing.
 

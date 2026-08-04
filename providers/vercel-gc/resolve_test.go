@@ -354,7 +354,7 @@ func TestResolveRecoversAfterFailureCleared(t *testing.T) {
 // TestResolveErrorClassification (above) fails the whole store, so every case
 // there is actually observed through the digest fetch: fetchDigest runs first,
 // and a whole-store failure lands on it before an items fetch ever happens.
-// This exercises the other half of classifyStatus's callers - a failure on the
+// This exercises the other half of the classified callers - a failure on the
 // items fetch itself - which otherwise has zero coverage. As above, the store
 // is bumped after priming so the digest fetch succeeds and snapshotFor
 // actually attempts (and fails) fetchItems.

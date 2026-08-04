@@ -9,18 +9,21 @@
 //
 //	DBPassword secret.String `source:"op://Production/postgres/password"`
 //
-// The provider talks to a 1Password Connect server over its REST API using only
-// the Go standard library. The Connect host comes from OP_CONNECT_HOST and the
-// access token from OP_CONNECT_TOKEN (sent as an "Authorization: Bearer" header).
-// Values are always marked Sensitive. 1Password Connect has no native change
-// notification, so this provider is not watchable; mamori polls it.
+// The provider talks to a 1Password Connect server over its REST API using
+// github.com/xavidop/mamori/providers/httpcore and the Go standard library
+// only, inheriting request building, status classification, body bounding and
+// URL redaction from one shared place. The Connect host comes from
+// OP_CONNECT_HOST and the access token from OP_CONNECT_TOKEN (sent as an
+// "Authorization: Bearer" header). Values are always marked Sensitive.
+// 1Password Connect has no native change notification, so this provider is not
+// watchable; mamori polls it.
 package onepassword
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +32,7 @@ import (
 	"time"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 )
 
 // Scheme is the URL scheme handled by this provider.
@@ -39,6 +43,12 @@ const (
 	envHost  = "OP_CONNECT_HOST"
 	envToken = "OP_CONNECT_TOKEN"
 )
+
+// errDetailLimit bounds how much of a failing response's body is quoted into
+// an error message. Connect error bodies are diagnostic JSON, not secret
+// values, but the bound is what stops a hostile or broken server turning that
+// diagnostic into an unbounded string.
+const errDetailLimit = 200
 
 func init() { mamori.Register(New()) }
 
@@ -104,9 +114,50 @@ func (p *Provider) effectiveToken() string {
 	return os.Getenv(envToken)
 }
 
+// clientFor builds the httpcore client for one resolve.
+//
+// It is built per call rather than cached because the host and token are read
+// lazily from the environment on every resolve (see effectiveHost and
+// effectiveToken): caching would pin whichever pair happened to be set on the
+// first one. Construction performs no network call and reuses the provider's
+// *http.Client, so the connection pool is shared across resolves regardless.
+func (p *Provider) clientFor(host, token string) (*httpcore.Client, error) {
+	c, err := httpcore.New(httpcore.Config{
+		BaseURL:     strings.TrimRight(host, "/"),
+		HTTPClient:  p.hc,
+		Auth:        httpcore.Bearer(token),
+		ErrorDetail: errorDetail,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("onepassword: building request: %w", err)
+	}
+	return c, nil
+}
+
+// errorDetail is httpcore's Config.ErrorDetail hook: it quotes a bounded
+// prefix of a failing response's body into the error message.
+//
+// Connect's error responses carry a free-text diagnostic message and no
+// machine-readable error code, and they are answers to a lookup rather than to
+// a request that contained a secret, so quoting them is safe. httpcore calls
+// this only for a status it has already decided is a failure, never for the
+// 200 whose body carries the item's field values.
+func errorDetail(_ int, body []byte) string {
+	msg := strings.TrimSpace(string(body))
+	if len(msg) > errDetailLimit {
+		msg = msg[:errDetailLimit]
+	}
+	return msg
+}
+
 // Resolve fetches the field named in ref from 1Password Connect. It returns an
 // error satisfying errors.Is(err, mamori.ErrNotFound) when the vault, item, or
 // field does not exist.
+//
+// A ref path containing a "." or ".." segment is rejected with
+// mamori.ErrInvalid. That check is not here: httpcore.Client.Do enforces it for
+// every provider built on it, in both the literal and the percent-encoded form,
+// so no provider can forget it.
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
 	host := p.effectiveHost()
 	if host == "" {
@@ -122,12 +173,17 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, err
 	}
 
-	vaultID, err := p.resolveVaultID(ctx, host, token, vaultRef)
+	client, err := p.clientFor(host, token)
 	if err != nil {
 		return mamori.Value{}, err
 	}
 
-	item, err := p.resolveItem(ctx, host, token, vaultID, itemRef)
+	vaultID, err := p.resolveVaultID(ctx, client, vaultRef)
+	if err != nil {
+		return mamori.Value{}, err
+	}
+
+	item, err := p.resolveItem(ctx, client, vaultID, itemRef)
 	if err != nil {
 		return mamori.Value{}, err
 	}
@@ -191,16 +247,20 @@ type item struct {
 	Fields  []itemField `json:"fields"`
 }
 
-// resolveVaultID resolves a vault name to its id. If the name filter returns no
-// match it treats the segment as a possible vault id and fetches it directly.
-func (p *Provider) resolveVaultID(ctx context.Context, host, token, vaultRef string) (string, error) {
+// resolveVaultID resolves a vault name to its id. If the name filter does not
+// produce a match it treats the segment as a possible vault id and fetches it
+// directly.
+//
+// A failed filter request is deliberately swallowed rather than returned: the
+// filter is an optimization, and the direct fetch below is the authoritative
+// answer for a segment that is an id rather than a name. That is what this
+// provider has always done for a non-200 filter response; a transport failure
+// now takes the same path as a status failure, since httpcore reports both as
+// an error, and the direct fetch fails identically a moment later.
+func (p *Provider) resolveVaultID(ctx context.Context, c *httpcore.Client, vaultRef string) (string, error) {
 	q := url.Values{}
 	q.Set("filter", fmt.Sprintf(`name eq "%s"`, vaultRef))
-	status, body, err := p.get(ctx, host, token, "/v1/vaults", q)
-	if err != nil {
-		return "", err
-	}
-	if status == http.StatusOK {
+	if body, err := get(ctx, c, "/v1/vaults", q); err == nil {
 		var vaults []vaultSummary
 		if err := json.Unmarshal(body, &vaults); err != nil {
 			return "", fmt.Errorf("onepassword: decoding vaults: %w", err)
@@ -211,39 +271,32 @@ func (p *Provider) resolveVaultID(ctx context.Context, host, token, vaultRef str
 	}
 
 	// Fall back to treating vaultRef as a vault id.
-	status, body, err = p.get(ctx, host, token, "/v1/vaults/"+url.PathEscape(vaultRef), nil)
+	body, err := get(ctx, c, "/v1/vaults/"+url.PathEscape(vaultRef), nil)
 	if err != nil {
-		return "", err
-	}
-	switch status {
-	case http.StatusOK:
-		var v vaultSummary
-		if err := json.Unmarshal(body, &v); err != nil {
-			return "", fmt.Errorf("onepassword: decoding vault: %w", err)
+		if errors.Is(err, mamori.ErrNotFound) {
+			return "", fmt.Errorf("onepassword: vault %q not found: %w", vaultRef, mamori.ErrNotFound)
 		}
-		if v.ID != "" {
-			return v.ID, nil
-		}
-		return vaultRef, nil
-	case http.StatusNotFound:
-		return "", fmt.Errorf("onepassword: vault %q not found: %w", vaultRef, mamori.ErrNotFound)
-	default:
-		return "", statusError("vault lookup", status, body)
+		return "", fmt.Errorf("onepassword: vault lookup: %w", err)
 	}
+	var v vaultSummary
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", fmt.Errorf("onepassword: decoding vault: %w", err)
+	}
+	if v.ID != "" {
+		return v.ID, nil
+	}
+	return vaultRef, nil
 }
 
 // resolveItem finds an item by title within a vault and fetches it in full
-// (including its fields).
-func (p *Provider) resolveItem(ctx context.Context, host, token, vaultID, itemRef string) (item, error) {
+// (including its fields). A failed title-filter request falls back to treating
+// itemRef as an item id, for the reason resolveVaultID's doc comment gives.
+func (p *Provider) resolveItem(ctx context.Context, c *httpcore.Client, vaultID, itemRef string) (item, error) {
 	q := url.Values{}
 	q.Set("filter", fmt.Sprintf(`title eq "%s"`, itemRef))
-	status, body, err := p.get(ctx, host, token, "/v1/vaults/"+url.PathEscape(vaultID)+"/items", q)
-	if err != nil {
-		return item{}, err
-	}
 
 	var itemID string
-	if status == http.StatusOK {
+	if body, err := get(ctx, c, "/v1/vaults/"+url.PathEscape(vaultID)+"/items", q); err == nil {
 		var items []itemSummary
 		if err := json.Unmarshal(body, &items); err != nil {
 			return item{}, fmt.Errorf("onepassword: decoding items: %w", err)
@@ -257,91 +310,35 @@ func (p *Provider) resolveItem(ctx context.Context, host, token, vaultID, itemRe
 		itemID = itemRef
 	}
 
-	status, body, err = p.get(ctx, host, token, "/v1/vaults/"+url.PathEscape(vaultID)+"/items/"+url.PathEscape(itemID), nil)
+	body, err := get(ctx, c, "/v1/vaults/"+url.PathEscape(vaultID)+"/items/"+url.PathEscape(itemID), nil)
 	if err != nil {
-		return item{}, err
-	}
-	switch status {
-	case http.StatusOK:
-		var it item
-		if err := json.Unmarshal(body, &it); err != nil {
-			return item{}, fmt.Errorf("onepassword: decoding item: %w", err)
+		if errors.Is(err, mamori.ErrNotFound) {
+			return item{}, fmt.Errorf("onepassword: item %q not found: %w", itemRef, mamori.ErrNotFound)
 		}
-		return it, nil
-	case http.StatusNotFound:
-		return item{}, fmt.Errorf("onepassword: item %q not found: %w", itemRef, mamori.ErrNotFound)
-	default:
-		return item{}, statusError("item lookup", status, body)
+		return item{}, fmt.Errorf("onepassword: item lookup: %w", err)
 	}
+	var it item
+	if err := json.Unmarshal(body, &it); err != nil {
+		return item{}, fmt.Errorf("onepassword: decoding item: %w", err)
+	}
+	return it, nil
 }
 
-// get performs a GET against the Connect API and returns the status code and body.
-func (p *Provider) get(ctx context.Context, host, token, path string, query url.Values) (int, []byte, error) {
-	u := strings.TrimRight(host, "/") + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// get performs one GET against the Connect API and returns the response body.
+// A non-2xx status comes back as an error already carrying the mamori sentinel
+// httpcore classified it with, so callers test it with errors.Is rather than
+// switching on a status code.
+func get(ctx context.Context, c *httpcore.Client, path string, query url.Values) ([]byte, error) {
+	resp, err := c.Do(ctx, httpcore.Request{
+		Path:   path,
+		Query:  query,
+		Header: http.Header{"Accept": {"application/json"}},
+	})
 	if err != nil {
-		return 0, nil, fmt.Errorf("onepassword: building request: %w", err)
+		// One %w: the cause already carries the sentinel that classifies it.
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := p.hc.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("onepassword: reading response: %w", err)
-	}
-	return resp.StatusCode, body, nil
-}
-
-// statusError builds an error for an unexpected HTTP status without leaking any
-// secret payload (Connect error bodies are diagnostic JSON, not secret values).
-// The status is routed through classifyOnePassword so callers can recover a
-// mamori classification sentinel with errors.Is or mamori.ErrorKind; a status
-// classifyOnePassword does not recognize comes back unclassified.
-func statusError(op string, status int, body []byte) error {
-	msg := strings.TrimSpace(string(body))
-	if len(msg) > 200 {
-		msg = msg[:200]
-	}
-	err := fmt.Errorf("onepassword: %s: unexpected status %d: %s", op, status, msg)
-	if sentinel := classifyOnePassword(status); sentinel != nil {
-		return fmt.Errorf("%w: %w", sentinel, err)
-	}
-	return err
-}
-
-// classifyOnePassword maps a Connect HTTP status onto a mamori classification
-// sentinel. Connect's error responses carry only a numeric status and a
-// free-text message, no machine-readable error code, so classification is by
-// status code alone.
-//
-// 404 is deliberately not handled here: resolveVaultID and resolveItem each
-// check for it directly, before falling into the statusError path this
-// function feeds, because a missing vault, item, or field needs its own
-// specific message naming what was not found. Statuses with no clear mamori
-// meaning are left unclassified (nil) rather than guessed at.
-func classifyOnePassword(status int) error {
-	switch {
-	case status == http.StatusForbidden:
-		return mamori.ErrPermissionDenied
-	case status == http.StatusUnauthorized:
-		return mamori.ErrUnauthenticated
-	case status == http.StatusTooManyRequests:
-		return mamori.ErrRateLimited
-	case status >= http.StatusInternalServerError:
-		return mamori.ErrUnavailable
-	case status == http.StatusBadRequest:
-		return mamori.ErrInvalid
-	default:
-		return nil
-	}
+	return resp.Body, nil
 }
 
 // Ensure Provider satisfies the core interface. Note: no Watch method is

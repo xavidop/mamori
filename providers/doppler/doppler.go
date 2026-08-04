@@ -2,8 +2,11 @@
 // (https://www.doppler.com), the SecretOps platform.
 //
 // Doppler has no official Go SDK, so this provider talks to the Doppler REST
-// API (https://api.doppler.com) directly with net/http. A single secret is
-// fetched per resolve using the "config/secret" endpoint.
+// API (https://api.doppler.com) directly, over
+// github.com/xavidop/mamori/providers/httpcore and the standard library only,
+// inheriting request building, status classification, body bounding and URL
+// redaction from one shared place. A single secret is fetched per resolve
+// using the "config/secret" endpoint.
 //
 // # Scheme
 //
@@ -34,7 +37,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +44,7 @@ import (
 	"time"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 )
 
 // defaultBaseURL is the Doppler REST API root.
@@ -50,16 +53,15 @@ const defaultBaseURL = "https://api.doppler.com"
 // scheme is the URL scheme this provider handles.
 const scheme = "doppler"
 
-// errBodyLimit bounds how much of a non-200 response body Resolve reads for
-// diagnostics, so a hostile or broken upstream cannot put an unbounded
-// response into an error string. The 404 branch below reads nothing at all
-// rather than reading up to this bound and discarding it: the not-found
-// message is already the whole story, so there is no diagnostic worth
-// paying a read for. The 200 path explicitly drains any bytes its own
-// decode did not consume, within this same bound, so that path and the
-// error path share one connection-reuse discipline instead of two silently
-// different ones; see the decode call below for why that drain is
-// deliberate rather than a hedge against Decode misbehaving.
+// secretPath is the single-secret read endpoint, joined onto the base URL.
+const secretPath = "/v3/configs/config/secret"
+
+// errBodyLimit bounds how much of a failing response body reaches an error
+// string, so a hostile or broken upstream cannot put an unbounded response
+// into one. httpcore hands errorDetail at most Config.MaxBody bytes and always
+// drains the rest, so the connection-reuse discipline this provider used to
+// hand-roll on every branch now comes from one place; this constant is only
+// about how much of that body is worth quoting.
 const errBodyLimit = 4096
 
 // Provider resolves doppler:// refs against the Doppler REST API. It is safe for
@@ -133,6 +135,11 @@ type secretResponse struct {
 
 // Resolve fetches a single secret named by ref.Key from the project/config
 // encoded in ref.Path. A 404 (or missing secret) is reported as ErrNotFound.
+//
+// A ref path containing a "." or ".." segment cannot escape the base URL:
+// httpcore.Client.Do rejects one for every provider built on it. Nothing here
+// interpolates ref.Path into a path anyway (the project and config travel as
+// query parameters), but the guarantee is inherited rather than re-stated.
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
 	project, config, err := parsePath(ref.Path)
 	if err != nil {
@@ -148,47 +155,38 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 		return mamori.Value{}, errors.New("mamori/doppler: no token; set DOPPLER_TOKEN or use doppler.WithToken")
 	}
 
-	endpoint := p.baseURL + "/v3/configs/config/secret"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	client, err := p.clientFor(token)
 	if err != nil {
 		return mamori.Value{}, err
 	}
-	q := url.Values{}
-	q.Set("project", project)
-	q.Set("config", config)
-	q.Set("name", name)
-	req.URL.RawQuery = q.Encode()
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := client.Do(ctx, httpcore.Request{
+		Path: secretPath,
+		Query: url.Values{
+			"project": {project},
+			"config":  {config},
+			"name":    {name},
+		},
+		Header: http.Header{"Accept": {"application/json"}},
+	})
 	if err != nil {
-		return mamori.Value{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// handled below
-	case http.StatusNotFound:
-		return mamori.Value{}, fmt.Errorf("mamori/doppler: secret %q not found in %s/%s: %w", name, project, config, mamori.ErrNotFound)
-	default:
-		// Read a bounded amount of the error body for diagnostics. Never log it.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		statusErr := fmt.Errorf("mamori/doppler: unexpected status %d fetching secret %q: %s", resp.StatusCode, name, strings.TrimSpace(string(msg)))
-		return mamori.Value{}, classifyDopplerStatus(resp.StatusCode, statusErr)
+		// A 404 is the only status with a message of its own: it names the
+		// project and config the secret was looked for in, which the status
+		// alone does not say. One %w, because the sentinel is already the
+		// classification.
+		if errors.Is(err, mamori.ErrNotFound) {
+			return mamori.Value{}, fmt.Errorf("mamori/doppler: secret %q not found in %s/%s: %w", name, project, config, mamori.ErrNotFound)
+		}
+		// One %w: the cause already carries the sentinel httpcore classified it
+		// with, and adding a second would replace that kind rather than
+		// duplicate it.
+		return mamori.Value{}, fmt.Errorf("mamori/doppler: fetching secret %q: %w", name, err)
 	}
 
 	var sr secretResponse
-	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+	if err := json.Unmarshal(resp.Body, &sr); err != nil {
 		return mamori.Value{}, fmt.Errorf("mamori/doppler: decoding secret %q: %w", name, err)
 	}
-	// Decode consumes a well-formed single JSON value, so this is normally a
-	// no-op; draining explicitly, rather than relying on that, is what makes
-	// the 200 path's connection-reuse behavior a decision instead of an
-	// accident of Decode's internals, matching the bound this provider's
-	// error path already applies (see errBodyLimit).
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errBodyLimit))
 
 	// Prefer the computed value (references resolved); fall back to raw.
 	val := sr.Value.Computed
@@ -209,6 +207,49 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	}, nil
 }
 
+// clientFor builds the httpcore client for one resolve.
+//
+// It is built per call rather than cached because the token is read lazily
+// from the environment on every resolve (see resolveToken): caching the client
+// would pin whichever token happened to be set on the first one. Construction
+// performs no network call and reuses the provider's *http.Client, so the
+// connection pool is shared across resolves regardless.
+func (p *Provider) clientFor(token string) (*httpcore.Client, error) {
+	c, err := httpcore.New(httpcore.Config{
+		BaseURL:     p.baseURL,
+		HTTPClient:  p.httpClient,
+		Auth:        httpcore.Bearer(token),
+		ErrorDetail: errorDetail,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mamori/doppler: building the API client: %w", err)
+	}
+	return c, nil
+}
+
+// errorDetail is httpcore's Config.ErrorDetail hook: it quotes a bounded
+// prefix of a failing response's body into the error message.
+//
+// Embedding the body verbatim, bounded, is a deliberate house convention
+// shared with providers/cloudflare-kv, providers/vercel-gc and
+// providers/scaleway-sm: the verbatim text is what actually tells an operator
+// what the upstream rejected the request for, and the bound is what stops a
+// hostile or broken upstream turning that diagnostic into an unbounded string.
+// It is safe here because httpcore calls this only for a status it has already
+// decided is a failure, never for the 200 whose body IS the secret.
+//
+// A 404 yields no detail: Resolve replaces that status with its own message
+// naming the project and config, so anything returned here would be discarded.
+func errorDetail(status int, body []byte) string {
+	if status == http.StatusNotFound {
+		return ""
+	}
+	if len(body) > errBodyLimit {
+		body = body[:errBodyLimit]
+	}
+	return strings.TrimSpace(string(body))
+}
+
 // resolveToken returns the configured token, or DOPPLER_TOKEN read lazily.
 func (p *Provider) resolveToken() string {
 	if p.token != "" {
@@ -226,42 +267,4 @@ func parsePath(path string) (project, config string, err error) {
 		return "", "", fmt.Errorf("mamori/doppler: path %q must be <project>/<config>", path)
 	}
 	return segs[0], segs[1], nil
-}
-
-// classifyDopplerStatus maps a Doppler REST API HTTP status onto a mamori
-// classification sentinel, wrapping statusErr (the error Resolve already
-// built from the response, carrying the status code and body for
-// diagnostics) so both the sentinel and that context survive in the
-// errors.Is chain. 404 is handled by its own branch in Resolve above and
-// never reaches this function.
-//
-// 429 is the confirmed case: Doppler's API reference documents rate limiting
-// explicitly, including the response headers that accompany a 429. 401 (a
-// missing or malformed token) is well established from Doppler's
-// token-based auth model and its own community support threads, though the
-// API reference's status-code section only describes the 2xx/4xx/5xx
-// categories in general terms rather than spelling out 401 by name. 403,
-// 400, and 5xx are mapped on ordinary HTTP semantics - defensible mappings,
-// not individually confirmed by Doppler's documentation. Codes not listed
-// above report unknown rather than being guessed at.
-func classifyDopplerStatus(code int, statusErr error) error {
-	if statusErr == nil {
-		return nil
-	}
-	var sentinel error
-	switch {
-	case code == http.StatusForbidden:
-		sentinel = mamori.ErrPermissionDenied
-	case code == http.StatusUnauthorized:
-		sentinel = mamori.ErrUnauthenticated
-	case code == http.StatusTooManyRequests:
-		sentinel = mamori.ErrRateLimited
-	case code >= 500:
-		sentinel = mamori.ErrUnavailable
-	case code == http.StatusBadRequest:
-		sentinel = mamori.ErrInvalid
-	default:
-		return statusErr
-	}
-	return fmt.Errorf("%w: %w", sentinel, statusErr)
 }

@@ -38,14 +38,25 @@ import (
 // SchemeSet.Add and the `--secret-schemes` flag on vet and explain.
 var defaultSecretSchemes = []string{
 	// Dedicated secret managers: every value they resolve is secret.
-	"aws-sm",     // AWS Secrets Manager
-	"gcp-sm",     // Google Cloud Secret Manager
-	"azure-kv",   // Azure Key Vault
-	"vault",      // HashiCorp Vault
-	"op",         // 1Password
-	"sops",       // Mozilla SOPS
-	"doppler",    // Doppler
-	"k8s-secret", // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
+	"aws-sm",       // AWS Secrets Manager
+	"gcp-sm",       // Google Cloud Secret Manager
+	"azure-kv",     // Azure Key Vault
+	"vault",        // HashiCorp Vault
+	"op",           // 1Password
+	"sops",         // Mozilla SOPS
+	"doppler",      // Doppler
+	"infisical",    // Infisical
+	"hcp-vs",       // HCP Vault Secrets (distinct from self-hosted vault above)
+	"supabase",     // Supabase Vault (vault.decrypted_secrets, over PostgREST)
+	"k8s-secret",   // Kubernetes Secret (k8s-cm, a ConfigMap, is not secret)
+	"bitwarden-sm", // Bitwarden Secrets Manager
+
+	// Not a secret manager, but every value it resolves is marked sensitive
+	// and this list is about what a field HOLDS, not what the backend calls
+	// itself. Heroku hands back an app's whole config var namespace with no
+	// per-var classification, and add-ons write DATABASE_URL and REDIS_URL,
+	// live credentials, into it.
+	"heroku", // Heroku config vars
 
 	// Conditionally secret, listed for the reason given above.
 	"aws-ps", // SSM Parameter Store: only SecureString params are secret
