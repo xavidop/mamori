@@ -5,7 +5,7 @@ title: Nacos provider
 
 # Nacos
 
-Application configuration from [Alibaba Nacos](https://nacos.io/), with **native watch** via its long-poll listener. It speaks the Nacos Open API directly over the standard library: `nacos-sdk-go` is deliberately not a dependency, because the two endpoints this needs are plain HTTP.
+Application configuration from [Alibaba Nacos](https://nacos.io/). This is one of the few mamori providers with a **native watch** rather than polling: Nacos's long-poll listener tells mamori when a configuration moves, so a change is picked up in about as long as it takes to read it back, not on the next poll tick.
 
 | | |
 | --- | --- |
@@ -41,47 +41,34 @@ nacos://[<group>/]<dataId>[#json-key]
 
 **Examples**
 
-- `nacos://application.properties` - the whole configuration `application.properties` in `DEFAULT_GROUP`.
-- `nacos://prod/db.json#password` - the `password` field of the JSON at dataId `db.json` in group `prod`.
-- `nacos://app.json#/database/dsn` - an RFC 6901 pointer into `app.json`.
+- `nacos://application.properties` is the whole configuration `application.properties` in `DEFAULT_GROUP`.
+- `nacos://prod/db.json#password` is the `password` field of the JSON at dataId `db.json` in group `prod`.
+- `nacos://app.json#/database/dsn` is an RFC 6901 pointer into `app.json`.
+
+```go
+type Config struct {
+	Raw    string        `source:"nacos://application.properties"`
+	DBPass secret.String `source:"nacos://prod/db.json#password"`
+	DSN    string        `source:"nacos://app.json#/database/dsn"`
+}
+```
 
 A path with more than two segments is rejected with `mamori.ErrInvalid` rather than guessed at, so `mamori doctor` catches the typo before deployment.
 
-## The namespace is not in the ref
+A Nacos configuration has a third coordinate, the namespace (`tenant` on the wire), and it is **not** in the ref. It lives on the provider (`WithNamespace`, or `NACOS_NAMESPACE`) because it is the boundary a set of credentials is issued against: one server address, one namespace, one login. One provider therefore serves one namespace; register a second provider to reach a second one.
 
-A Nacos configuration is addressed by three coordinates: namespace (called `tenant` on the wire), group, and dataId. Only the last two are in the ref. The namespace lives on the provider (`WithNamespace`, or `NACOS_NAMESPACE`) because it is the boundary a set of credentials is issued against: one server address, one namespace, one login. A ref that could name any namespace would make every struct tag able to reach another tenant's configuration whenever the credentials happened to span both, which is the same reasoning that keeps a raw URL out of a `https://` ref.
-
-## A raw body, not an envelope
-
-Nacos's v1 read endpoint answers with the configuration content itself, with no JSON wrapper. That is unusual among mamori's HTTP-backed providers, which nearly all unwrap a `{"data": ...}` envelope, and it is why this provider decodes nothing: the bytes on the wire **are** the value. A `#json-key` fragment then selects out of them.
-
-`Value.Version` is a hash of the bytes actually returned, not the response's `Last-Modified`. Nacos sends no `ETag`, and `Last-Modified` has one-second resolution, so two publishes inside the same second are indistinguishable through it. During a rollout, where a bad configuration is commonly corrected seconds after it is pushed, mamori would compare two identical versions and skip the correction entirely. Hashing the **selected** bytes rather than the whole document is equally deliberate: a field bound to `#log_level` must not report a change because an unrelated key in the same document moved, which would fire its `OnChange` and, for a credential, force a reconnect for nothing.
+The read endpoint answers with the configuration content itself and no JSON wrapper, so the bytes on the wire are the value and a `#json-key` selects out of them. `Value.Version` is a hash of the selected bytes, not the response's `Last-Modified`: that header has one-second resolution, so a bad configuration corrected seconds after it was pushed would otherwise look unchanged. Hashing the selected bytes also means a field bound to `#log_level` does not fire its `OnChange` because an unrelated key in the same document moved.
 
 ## Watch
 
-Nacos's change notification is neither a stream nor a blocking read of the value. It is a **comparison**: one round POSTs "here is the MD5 I believe this configuration currently has", and the server holds the request open until either that belief becomes wrong or the hold elapses. Nothing is pushed, and the response names only *which* configuration moved, never its content, so a round that reports a change is followed by an ordinary read.
+Nacos's change notification is a **comparison**, not a stream. One round POSTs the MD5 mamori believes the configuration currently has, and the server holds the request open until either that belief becomes wrong or the hold elapses (30s by default, `WithLongPollTimeout`). The response names only *which* configuration moved, never its content, so a round that reports a change is followed by an ordinary read.
 
-The loop is [`httpcore.LongPoll`](/docs/writing-a-provider/httpcore/): one goroutine, one round at a time, a client deadline strictly longer than the hold the server was given, closure on context cancellation, and no re-attempt of a round already reported. This provider supplies only what a baseline is and what a round sends.
+Two consequences worth knowing:
 
-That protocol shape is also why the provider can honestly declare `providertest.Config.WatchDeliversBaseline`. The baseline read and the MD5 the first round subscribes with come from the same response, so a write landing between them is answered rather than dropped: the round simply carries an MD5 that is already stale, and the server replies immediately instead of parking. A stream-based watch has to attach before it reads, because its notifications only cover what happens afterwards; a comparison-based one carries the "before" with it in every request.
+- **No update is missed at startup.** The baseline read and the MD5 the first round subscribes with come from the same response, so a write landing between them is answered immediately rather than dropped. A stream-based watch has to attach before it reads; this one carries the "before" with it in every request.
+- **A configuration that disappears emits nothing.** The field keeps its last good value, matching mamori's polling adapter, which is likewise silent for a key that does not exist. Republishing the configuration fires the watch again.
 
-A configuration that disappears emits nothing, matching mamori's polling adapter, which is silent for a key that does not exist: the field keeps its last good value. The watch resets its remembered MD5 to the empty digest, which is what a Nacos client sends for content it does not hold, so the round parks properly and a republish fires.
-
-### The wire format
-
-The probe is the value of the `Listening-Configs` form field on `POST /nacos/v1/cs/configs/listener`:
-
-```text
-dataId  0x02  group  0x02  contentMD5  0x02  tenant  0x01
-```
-
-with the tenant field and its preceding separator omitted when there is no namespace. `0x02` is ASCII STX and `0x01` is ASCII SOH, both invisible; because the probe travels as an ordinary `application/x-www-form-urlencoded` value they reach the wire as `%02` and `%01`. The header `Long-Pulling-Timeout: 30000` says how long to hold, in milliseconds.
-
-`Long-Pulling-Timeout` is spelled that way on purpose. It is Nacos's own spelling, and the server decides whether to park a request purely on whether that header is present. Correcting the spelling does not break the watch, which is what makes it dangerous: Nacos falls back to *short* polling and answers immediately either way, so every behavioural test would still pass while the loop hammered the server as fast as it could.
-
-The response is the part most easily got wrong. The server assembles `dataId 0x02 group 0x02 tenant 0x01` and then URL-encodes the whole string, so the body on the wire carries the **literal characters** `%02` and `%01`, not the control bytes. Splitting the raw body on `\x01` finds nothing, and the watch reports "unchanged" forever: it never fires, never errors, and never logs. This provider decodes first, tolerates the un-encoded form as a fallback for whatever proxy sits in front of the endpoint, and pins the encoded shape with a test.
-
-An empty body means the hold elapsed with nothing to report, which is the ordinary outcome several times an hour for every watched configuration.
+The loop itself is [`httpcore.LongPoll`](/docs/writing-a-provider/httpcore/): one goroutine, one round at a time, closing on context cancellation. Because the watch is native, you do not need `WithPollInterval` for a `nacos://` ref.
 
 ## Error classification
 
@@ -96,11 +83,9 @@ Every failure goes through `httpcore.ClassifyStatus`:
 | 408, 429 | `rate_limited` |
 | anything else | `unavailable` |
 
-400, 403, 404 and 500 are named in Nacos's own error table for these endpoints. 409 is not, but the server writes it with `requested file is being modified, please try later.`, and it lands on `unavailable`, which is the transient kind mamori retries. 401, 408, 422 and 429 are the general HTTP mappings inherited from `httpcore` rather than a claim that Nacos itself emits them; a fronting gateway or an auth-enabled deployment can.
+A configuration that does not exist is a 404, which becomes `mamori.ErrNotFound`, so the field's `default:` applies. A 409 means the configuration is being modified right now; it lands on `unavailable`, the transient kind mamori retries. 401, 408, 422 and 429 come from `httpcore`'s general table rather than from Nacos itself, and a fronting gateway or an auth-enabled deployment can produce them.
 
-A configuration that does not exist is a 404 with the body `config data not exist`, which becomes `mamori.ErrNotFound`, so the field's `default:` applies.
-
-**No response body ever reaches an error.** `httpcore`'s `ErrorDetail` hook is left nil, because on a 200 that same body *is* the configuration: there is no envelope field this provider could select and be certain it is not the value. The error names the coordinates instead (`dataId=... group=...`), so a wrong group is distinguishable from a wrong dataId.
+**No response body ever reaches an error message**, because on a 200 that same body *is* the configuration. Errors name the coordinates instead (`dataId=... group=...`), so a wrong group is distinguishable from a wrong dataId.
 
 ## Configuration
 
@@ -118,27 +103,17 @@ A configuration that does not exist is a 404 with the body `config data not exis
 
 ```go
 p := nacos.New(
-    nacos.WithServerAddr("http://nacos.svc.cluster.local:8848"),
-    nacos.WithNamespace("2f9d1b0c-..."),
-    nacos.WithCredentials(os.Getenv("NACOS_USERNAME"), os.Getenv("NACOS_PASSWORD")),
+	nacos.WithServerAddr("http://nacos.svc.cluster.local:8848"),
+	nacos.WithNamespace("2f9d1b0c-..."),
+	nacos.WithCredentials(os.Getenv("NACOS_USERNAME"), os.Getenv("NACOS_PASSWORD")),
 )
 cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 ```
 
-Supplying only one of username and password is a configuration error rather than a silent fallback to unauthenticated requests, which would work against a server with auth disabled and fail with an opaque 403 against every other one.
+Supplying only one of username and password is a configuration error rather than a silent fallback to unauthenticated requests, which would work against a server with auth disabled and fail with an opaque 403 against every other one. For any other Nacos auth mode, including the accessKey/secretKey signature Alibaba Cloud's hosted MSE Nacos issues, pass an `httpcore.Authenticator` to `WithAuth`.
 
-### The access token travels in the query string
+**Nacos carries its access token in the query string**, which this provider follows, and a stock Nacos deployment is cleartext `http` on port 8848. A query parameter is in the request line, which a proxy's access log and the server's own request log record in plaintext. Put a TLS terminator in front of Nacos and point `NACOS_SERVER_ADDR` at the `https://` address unless the network between your application and Nacos is already private. Neither the password nor the token is held in a readable struct field, and `httpcore` strips the query from every error it returns, including the `*url.Error` that `net/http` wraps a transport failure in.
 
-Nacos documents carrying its token as a query parameter, and this provider does that. It is worth knowing what it costs: a query parameter is in the request line, which a proxy's access log and the server's own request log record in plaintext, and a stock Nacos deployment is cleartext `http` on port 8848. Put a TLS terminator in front of Nacos and point `NACOS_SERVER_ADDR` at the `https://` address if the network between your application and Nacos is not already private.
+This provider speaks the **v1 Open API**, which is what publishes the HTTP long-poll listener, and Nacos documents 2.x as compatible with it, so one code path serves 1.x and 2.x servers. Nacos 3.0 rebuilt the admin surface; on 3.x, confirm the v1 compatibility endpoints are enabled before relying on this provider.
 
-Neither the password nor the token is held in any readable struct field, and `httpcore` strips the query from every error it returns, including the `*url.Error` that `net/http` wraps a transport failure in. A test asserts that neither value appears in an error's text.
-
-### Other authentication modes
-
-Nacos's auth is pluggable. Username/password is implemented here; the others are header injection, which is exactly what an `httpcore.Authenticator` is, so `WithAuth` is the seam. That covers the accessKey/secretKey signature Alibaba Cloud's hosted MSE Nacos issues, and the server identity header used for server-to-server calls.
-
-## Which Nacos version this targets
-
-**Nacos 2.x, using the v1 Open API, which works unchanged against a 1.x server.** The reason is the listener: Nacos publishes an HTTP long-poll listener only at v1. The v2 API added a JSON envelope for reads and moved change notification to gRPC, which this module cannot speak within its dependency budget, and Nacos's own documentation states that 2.X is compatible with the 1.X OpenAPI, so the v1 read and the v1 listener are one coherent pair. Nacos 3.0 rebuilt the admin surface, but its `config/listener` endpoint is a query for *which clients are listening*, not a long-poll listener; on 3.x, verify the v1 compatibility endpoints are enabled before relying on this provider.
-
-Verified with an in-process fake `http.RoundTripper` that implements the listener protocol as the real server does, including the URL-encoded response, so the conformance kit runs without a live backend and both watch cases execute for real rather than skipping. A separate test builds a listener that never reports a change and asserts the watch harness fails against it, which is what keeps the watch assertions from being vacuous. A `//go:build integration` test exercises a real Nacos server when `MAMORI_NACOS_ADDR` is set. See the [module README](https://github.com/xavidop/mamori/tree/main/providers/nacos) for the documentation sources behind every row above, and for which of them are documented rather than live-verified.
+Verified with an in-process fake `http.RoundTripper` that implements the listener protocol as the real server does, so the conformance kit runs without a live backend and both watch cases execute for real. A `//go:build integration` test exercises a real Nacos server when `MAMORI_NACOS_ADDR` is set. Rows above follow Nacos's published documentation where nobody here could verify them live.
