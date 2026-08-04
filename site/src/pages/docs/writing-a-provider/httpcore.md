@@ -51,6 +51,8 @@ resp, err := c.Do(ctx, httpcore.Request{Path: ref.Path})
 | `Revalidator` | Turns a repeated poll into a conditional GET. |
 | `Version` | Derives `Value.Version` from ETag, then Last-Modified, then a body hash. |
 | `LongPoll` | Drives the watch loop for a backend that holds a request open. |
+| `SSEDecoder` | Frames a server-sent-events byte stream, with bounded memory. |
+| `SSEStream` | The same over an `*http.Response`, tied to a context. |
 
 `OAuth2ClientCredentials` requires an `https://` `TokenURL` and rejects any other scheme at construction, wrapping `mamori.ErrInvalid`. The grant POSTs `client_secret` in the form body, so a cleartext token endpoint hands that secret to anything on the path, and the scheme is checked against a closed set so an `ftp://` typo fails at startup rather than on every exchange. `OAuth2Config.AllowInsecure` opts into `http://` for a local test identity provider, and into cleartext `http` only.
 
@@ -110,6 +112,43 @@ You write `Round`, and optionally `Baseline`. Everything else is the part that i
 
 [`providers/nacos`](/docs/providers/nacos/) is the worked example.
 
+## Server-sent events
+
+If your backend pushes a stream of events rather than answering a held-open request, you have a native watch of a different shape. `SSEDecoder` frames the stream; `SSEStream` is the same thing over an `*http.Response`.
+
+```go
+resp, err := p.openStream(ctx, ref) // your request, your auth
+if err != nil {
+    return nil, err
+}
+
+stream := httpcore.NewSSEStream(ctx, resp, httpcore.SSEConfig{})
+defer stream.Close()
+
+for {
+    ev, err := stream.Next()
+    if err != nil {
+        return err // io.EOF at a clean end, a context error on cancel
+    }
+    switch ev.Name {
+    case "put", "patch":
+        // ev.Data is the frame's data fields joined with "\n".
+    }
+}
+```
+
+You write the request and decide what each event name means. The framing, and the two bounds below, are the part that is the same for every SSE backend.
+
+- **Two bounds, not one, and they guard different attacks.** `MaxLine` stops a server that opens a line and never sends a newline. `MaxFrame` stops one that sends `data:` forever and never the blank line that would dispatch the frame. Per-line bounding alone does not prevent the second: every line stays small while the accumulated frame grows without limit. Both default to 1 MiB.
+- **Peak memory is `MaxFrame + MaxLine`, not `MaxFrame`.** The line buffer exists alongside the accumulating frame. `MaxFrame` also does not count the event name, which arrives on a line and is bounded by `MaxLine`.
+- **A breach is retryable, not terminal.** Both bound errors wrap `mamori.ErrUnavailable` rather than `ErrInvalid`, because `Report` treats an invalid field as terminal: a hostile or misconfigured server would otherwise mark the field permanently unhealthy instead of letting your loop reconnect.
+- **`ev.Data` is yours to keep.** It is freshly allocated per frame and never reused, so you can retain it past the next `Next` without copying. A decoder that recycled one buffer would be faster and would corrupt any consumer that decodes JSON out of a frame it still holds.
+- **No goroutine, and the body is closed exactly once.** `Close` is safe to call alongside a blocked `Next`, and cancelling the context ends the stream.
+
+**There is no reconnect loop here, deliberately.** The two providers that stream disagree about every part of one: a fixed versus an exponential backoff, one endpoint versus rotation, whether a disconnect is reported to the caller, whether a freshness guard outlives the connection. A shared loop would need a hook for each and end up larger than either. Write the loop in your provider, and give it a growing, capped wait so a stream that fails identically every time cannot become a hot loop.
+
+[`providers/firebase-rtdb`](/docs/providers/firebase-rtdb/) is the worked example.
+
 ## Error classification
 
 | HTTP status | mamori kind |
@@ -136,7 +175,7 @@ Fail: func(ctx context.Context, key string, err error) error {
 
 - **No retry.** mamori's reconciler already backs off and retries a failed resolve. A second retry layer inside the provider would multiply against it, turning a configured five attempts into twenty-five.
 - **No vendor error-envelope parsing.** Only you know which field of your backend's error shape is safe to surface, hence the `ErrorDetail` hook rather than a built-in guess.
-- **No SSE.** Server-sent events are a separate, planned capability. Long polling is supported (`LongPoll`, above); a server-pushed event stream is not.
+- **No reconnect loop.** The framing is here (`SSEDecoder` / `SSEStream`, above) and so is the long-poll loop (`LongPoll`), but reconnecting a dropped stream is your provider's job, for the reason given in that section.
 
 ## Next
 

@@ -40,6 +40,9 @@ type sdkBackend struct {
 	dbURL       string
 	tokenSource oauth2.TokenSource
 	httpClient  *http.Client
+	// sse bounds the decoder every stream is read through. Its zero value
+	// selects httpcore's one-megabyte defaults; WithMaxFrameBytes replaces it.
+	sse httpcore.SSEConfig
 }
 
 // compile-time check that sdkBackend satisfies the provider's backend contract.
@@ -48,7 +51,7 @@ var _ backend = (*sdkBackend)(nil)
 // newSDKBackend builds the live backend from Application Default Credentials and
 // the configured (or FIREBASE_DATABASE_URL) database URL. It is the default
 // Provider.newBackend and is invoked lazily on first use.
-func newSDKBackend(ctx context.Context, dbURL, projectID string) (backend, error) {
+func newSDKBackend(ctx context.Context, dbURL, projectID string, sse httpcore.SSEConfig) (backend, error) {
 	if dbURL == "" {
 		dbURL = os.Getenv("FIREBASE_DATABASE_URL")
 	}
@@ -78,6 +81,7 @@ func newSDKBackend(ctx context.Context, dbURL, projectID string) (backend, error
 		dbURL:       strings.TrimRight(dbURL, "/"),
 		tokenSource: creds.TokenSource,
 		httpClient:  &http.Client{},
+		sse:         sse,
 	}, nil
 }
 
@@ -122,22 +126,17 @@ func (b *sdkBackend) Stream(ctx context.Context, path string) (changeStream, err
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("stream status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 	}
-	// httpcore.SSEConfig's zero value selects the shared one-megabyte ceilings
-	// on a single line and on one frame's accumulated data. This provider's own
-	// decoder had NEITHER bound: it read a line with bufio.Reader.ReadBytes,
-	// which grows until a newline arrives and nothing obliges a Realtime
-	// Database endpoint (or anything impersonating one) to ever send one, and it
-	// appended data: lines into one payload with no total. Either shape was an
-	// unbounded allocation driven entirely by the far end of the socket.
+	// b.sse bounds the read. Its zero value selects httpcore's one-megabyte
+	// ceilings on a single line and on one frame's accumulated data, and
+	// WithMaxFrameBytes moves both for a caller who watches a larger node.
 	//
-	// The ceiling is the same one mamori applies to every HTTP-resolved
-	// configuration value (httpcore.DefaultMaxBody), and it is deliberately not
-	// made configurable here: a Realtime Database node this provider is asked to
-	// watch holds configuration, and a configuration value that does not fit in
-	// a megabyte is the mistake that ceiling exists to catch. A node larger than
-	// that now surfaces as a repeated stream error rather than growing the
-	// process, which is loud where the old behaviour was silent.
-	return &sseStream{s: httpcore.NewSSEStream(ctx, resp, httpcore.SSEConfig{})}, nil
+	// This provider's own decoder had NEITHER bound: it read a line with
+	// bufio.Reader.ReadBytes, which grows until a newline arrives and nothing
+	// obliges a Realtime Database endpoint (or anything impersonating one) to
+	// ever send one, and it appended data: lines into one payload with no total.
+	// Either shape was an unbounded allocation driven entirely by the far end of
+	// the socket.
+	return &sseStream{s: httpcore.NewSSEStream(ctx, resp, b.sse)}, nil
 }
 
 // sseStream adapts httpcore's bounded SSE stream to changeStream.

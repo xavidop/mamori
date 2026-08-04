@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -114,11 +115,14 @@ func TestSSEDecoderRejectsOverLongLine(t *testing.T) {
 }
 
 // eofWithData returns its payload and io.EOF from the SAME Read call. io.Reader
-// explicitly permits that, and it is what makes the decoder's explicit length
-// check on every token necessary rather than decorative: bufio.Scanner hands
-// back whatever is buffered as a final token once it has seen EOF, WITHOUT
-// consulting its own maximum token size, so the last line of a stream is the one
-// place a scanner-only bound does not hold.
+// explicitly permits that, and it is the one case the decoder's explicit length
+// check exists for: bufio.Scanner hands back whatever is buffered as a final
+// token once it has seen EOF, WITHOUT consulting its own maximum token size, so
+// the last line of a stream is the one place the scanner's ceiling does not
+// hold. What that lets through is still bounded by the buffer holding it, which
+// is capped at MaxLine+1, so the gap is exactly the one byte of headroom the
+// scanner is given and nothing more. One byte over the bound is therefore
+// precisely what this fixture sends.
 type eofWithData struct{ b []byte }
 
 func (e *eofWithData) Read(p []byte) (int, error) {
@@ -205,6 +209,77 @@ func TestSSEDecoderAcceptsFrameExactlyAtTheBound(t *testing.T) {
 	}
 	if got, want := string(ev.Data), "aaaaa\nbbbbb"; got != want {
 		t.Fatalf("Data = %q, want %q", got, want)
+	}
+}
+
+func TestSSEDecoderAcceptsLineExactlyAtTheBound(t *testing.T) {
+	// The line bound's own edge, and the counterpart of the frame bound's above.
+	// The scanner needs one byte of headroom over MaxLine to be able to RETURN a
+	// line of exactly MaxLine bytes rather than fail on it, and that headroom is
+	// only observable once MaxLine is past the starting buffer: with the
+	// scanner's ceiling set to MaxLine instead of MaxLine+1, it fills its buffer
+	// with a line that is entirely legal, finds no newline in it because the
+	// newline is the byte after, and reports the line as too long. A 1 MiB frame
+	// a backend is entitled to send would be refused.
+	const maxLine = 8192
+	const prefix = "data: "
+	line := prefix + strings.Repeat("a", maxLine-len(prefix))
+	if len(line) != maxLine {
+		t.Fatalf("fixture is %d bytes, want exactly MaxLine (%d)", len(line), maxLine)
+	}
+	dec := httpcore.NewSSEDecoder(strings.NewReader(line+"\n\n"), httpcore.SSEConfig{MaxLine: maxLine})
+
+	ev, err := dec.Next()
+	if err != nil {
+		t.Fatalf("Next() err = %v, want the frame carrying a line of exactly MaxLine bytes", err)
+	}
+	if got, want := len(ev.Data), maxLine-len(prefix); got != want {
+		t.Fatalf("Data is %d bytes, want %d", got, want)
+	}
+}
+
+func TestSSEDecoderAcceptsAMaxIntLineBound(t *testing.T) {
+	// math.MaxInt is a plausible way for a caller to spell "do not bound a
+	// line", and SSEConfig is exported API: it must not panic. MaxLine+1
+	// overflows negative there, and a negative length is a makeslice panic, so
+	// the failure this pins is a crash at construction rather than a wrong
+	// answer.
+	dec := httpcore.NewSSEDecoder(strings.NewReader("data: hello\n\n"), httpcore.SSEConfig{MaxLine: math.MaxInt})
+
+	ev, err := dec.Next()
+	if err != nil {
+		t.Fatalf("Next() err = %v, want a frame", err)
+	}
+	if got := string(ev.Data); got != "hello" {
+		t.Fatalf("Data = %q, want %q", got, "hello")
+	}
+}
+
+func TestSSEDecoderMaxFrameDoesNotBoundTheEventName(t *testing.T) {
+	// SSEConfig documents two roofs rather than one, and this is the claim that
+	// makes the distinction load bearing: MaxFrame counts a frame's DATA, so an
+	// event name is bounded by MaxLine alone and a 900-byte name passes a
+	// MaxFrame of 16. Peak memory while a frame accumulates is therefore
+	// MaxFrame plus MaxLine, not MaxFrame.
+	//
+	// It is documented rather than closed: folding the name into MaxFrame would
+	// silently change what every existing MaxFrame setting means without
+	// lowering that peak, since the line buffer MaxLine sizes exists either way.
+	name := strings.Repeat("n", 900)
+	dec := httpcore.NewSSEDecoder(
+		strings.NewReader("event: "+name+"\ndata: xyz\n\n"),
+		httpcore.SSEConfig{MaxFrame: 16},
+	)
+
+	ev, err := dec.Next()
+	if err != nil {
+		t.Fatalf("Next() err = %v, want the frame: MaxFrame does not count the event name", err)
+	}
+	if len(ev.Name) != len(name) {
+		t.Fatalf("Name is %d bytes, want %d", len(ev.Name), len(name))
+	}
+	if got := string(ev.Data); got != "xyz" {
+		t.Fatalf("Data = %q, want %q", got, "xyz")
 	}
 }
 
@@ -389,6 +464,46 @@ func TestSSEStreamClosesTheBodyExactlyOnce(t *testing.T) {
 	}
 	if got := body.count(); got != 1 {
 		t.Fatalf("body closed %d times, want exactly 1", got)
+	}
+}
+
+// opaqueContext is a context that hides the standard library's internal
+// cancelCtx marker from context.AfterFunc by refusing to answer Value.
+//
+// It exists to make Close's stop() observable. On an ordinary cancellable
+// context, AfterFunc appends its registration to the parent's child list and
+// stop() removes it again, so failing to call stop() grows a list inside the
+// parent for as long as that parent lives - real, unbounded growth on a watch
+// context that outlives many reconnects, but a list, not a goroutine, and
+// nothing a goroutine count can see. When the parent does not expose that fast
+// path, AfterFunc falls back to a goroutine per registration and stop() is what
+// ends it, so the very same missing call becomes countable.
+type opaqueContext struct{ context.Context }
+
+func (opaqueContext) Value(any) any { return nil }
+
+func TestSSEStreamCloseReleasesItsContextRegistration(t *testing.T) {
+	// One long-lived context, many streams, each ended by Close - the shape of a
+	// watch that reconnects. The context is deliberately NOT cancelled between
+	// streams: cancellation would release every registration by itself and hide
+	// exactly what this test is here to see.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	settle(t)
+	before := runtime.NumGoroutine()
+
+	for i := range 50 {
+		body := &countingBody{closed: make(chan struct{})}
+		s := httpcore.NewSSEStream(opaqueContext{ctx}, &http.Response{StatusCode: http.StatusOK, Body: body}, httpcore.SSEConfig{})
+		if err := s.Close(); err != nil {
+			t.Fatalf("iteration %d: Close() err = %v", i, err)
+		}
+	}
+
+	settle(t)
+	if after := runtime.NumGoroutine(); after > before+2 {
+		t.Fatalf("goroutines grew from %d to %d across 50 closed streams: Close did not release its context registrations", before, after)
 	}
 }
 

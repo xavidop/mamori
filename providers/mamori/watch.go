@@ -296,7 +296,7 @@ func readSSE(ctx context.Context, stream *httpcore.SSEStream, name string, ch ch
 		if err != nil {
 			return
 		}
-		if !dispatchSSEFrame(ctx, name, ev.Name, string(ev.Data), ch, guard) {
+		if !dispatchSSEFrame(ctx, name, ev.Name, ev.Data, ch, guard) {
 			return // ctx is done; sendUpdate already observed it
 		}
 	}
@@ -324,12 +324,15 @@ func readSSE(ctx context.Context, stream *httpcore.SSEStream, name string, ch ch
 // freshnessGuard for what the guard does with an update.
 //
 // data is the frame's data: lines already joined with "\n" by the decoder,
-// which is where that join moved to; it is not this function's to perform.
-func dispatchSSEFrame(ctx context.Context, name, event, data string, ch chan<- mamori.Update, guard *freshnessGuard) bool {
+// which is where that join moved to; it is not this function's to perform. It
+// stays []byte all the way from the decoder into json.Unmarshal: the decoder
+// allocates it fresh per frame and nothing here needs a string, so converting
+// would copy up to a megabyte per frame for nothing.
+func dispatchSSEFrame(ctx context.Context, name, event string, data []byte, ch chan<- mamori.Update, guard *freshnessGuard) bool {
 	switch event {
 	case "update":
 		var vb valueBody
-		if err := json.Unmarshal([]byte(data), &vb); err != nil {
+		if err := json.Unmarshal(data, &vb); err != nil {
 			return true
 		}
 
@@ -378,7 +381,7 @@ func dispatchSSEFrame(ctx context.Context, name, event, data string, ch chan<- m
 
 	case "error":
 		var vb valueBody
-		if err := json.Unmarshal([]byte(data), &vb); err != nil || vb.Error == nil {
+		if err := json.Unmarshal(data, &vb); err != nil || vb.Error == nil {
 			return true
 		}
 		var watchErr error

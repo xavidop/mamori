@@ -384,7 +384,7 @@ func TestLazyBackendFactory(t *testing.T) {
 	fake.set("k", "lazy")
 	calls := 0
 	p := New()
-	p.newBackend = func(context.Context, string, string) (backend, error) {
+	p.newBackend = func(context.Context, string, string, httpcore.SSEConfig) (backend, error) {
 		calls++
 		return fake, nil
 	}
@@ -495,6 +495,219 @@ func TestWatchClosesOnCancel(t *testing.T) {
 	}
 }
 
+// scriptedBackend counts Stream attempts and hands out whatever stream the test
+// asks for. It exists to observe the RATE of reconnects, which the fake used by
+// the other watch tests cannot: that one hands out streams that stay open.
+type scriptedBackend struct {
+	mu        sync.Mutex
+	attempts  int
+	newStream func() changeStream
+	// streamErr, when set, makes every Stream call fail outright instead of
+	// returning a connection: a database that is refusing connections rather
+	// than one that answers and then breaks.
+	streamErr error
+}
+
+func (b *scriptedBackend) Get(ctx context.Context, path string) ([]byte, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	return []byte(`"v"`), "etag-1", nil
+}
+
+func (b *scriptedBackend) Stream(ctx context.Context, path string) (changeStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.attempts++
+	err := b.streamErr
+	b.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return b.newStream(), nil
+}
+
+func (b *scriptedBackend) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.attempts
+}
+
+// failingStream is a connection that opens and then fails on its first frame,
+// which is exactly what a node larger than the frame ceiling produces: the
+// Realtime Database answers every stream with a put of the whole node.
+type failingStream struct{}
+
+func (failingStream) Recv() (string, []byte, error) {
+	return "", nil, httpcore.ErrSSEFrameTooLong
+}
+func (failingStream) Close() error { return nil }
+
+// workingStream delivers one put and then ends cleanly, the way an idle proxy or
+// a restarting server drops a connection that was doing its job.
+type workingStream struct{ sent bool }
+
+func (s *workingStream) Recv() (string, []byte, error) {
+	if !s.sent {
+		s.sent = true
+		return "put", nil, nil
+	}
+	return "", nil, io.EOF
+}
+func (s *workingStream) Close() error { return nil }
+
+// drain consumes ch until it closes, so a watch under test is never blocked on
+// an unread channel.
+func drain(ch <-chan mamori.Update) {
+	go func() {
+		for range ch { //nolint:revive // draining is the point
+		}
+	}()
+}
+
+func TestWatchBacksOffWhenEveryStreamFailsImmediately(t *testing.T) {
+	// The failure that has no natural end: the node is bigger than the frame
+	// ceiling, so every connection breaks on its first frame. With a fixed
+	// reconnect wait this is a permanent hot loop at the configured rate. The
+	// wait must grow instead, and it must NOT be reset by the fact that the
+	// connection itself succeeded, since it always does.
+	be := &scriptedBackend{newStream: func() changeStream { return failingStream{} }}
+	p := New(withBackend(be), WithReconnectBackoff(5*time.Millisecond))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := p.Watch(ctx, mustRef(t, "firebase-rtdb://watched"))
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	drain(ch)
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+
+	// Doubling from a 5ms floor, jittered to [d/2, d], puts the eighth attempt
+	// at 2.5+5+10+20+40+80+160 = 317.5ms at the earliest, so this window holds
+	// at most seven. A wait that never grew would fit sixty or more.
+	if got := be.count(); got > 15 {
+		t.Fatalf("%d reconnect attempts in 300ms with a 5ms floor: the backoff is not growing", got)
+	} else if got < 2 {
+		t.Fatalf("%d reconnect attempts in 300ms: the watch is not retrying at all", got)
+	}
+}
+
+func TestWatchBacksOffWhenTheStreamWillNotOpen(t *testing.T) {
+	// The other unbounded failure, and a separate branch of the loop: the
+	// database refuses the connection outright, so there is no stream to consume
+	// and the retry decision is made before consume is ever reached. A database
+	// that is down must not be dialled at the floor rate for as long as the
+	// watch lives either.
+	be := &scriptedBackend{
+		newStream: func() changeStream { return failingStream{} },
+		streamErr: errors.New("connection refused"),
+	}
+	p := New(withBackend(be), WithReconnectBackoff(5*time.Millisecond))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := p.Watch(ctx, mustRef(t, "firebase-rtdb://watched"))
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	drain(ch)
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+
+	// Same arithmetic as above: an eighth attempt needs 317.5ms at the least.
+	if got := be.count(); got > 15 {
+		t.Fatalf("%d dial attempts in 300ms with a 5ms floor: the backoff is not growing", got)
+	} else if got < 2 {
+		t.Fatalf("%d dial attempts in 300ms: the watch is not retrying at all", got)
+	}
+}
+
+func TestWatchResetsBackoffAfterAStreamDelivers(t *testing.T) {
+	// The other half of the same rule. A connection that delivered an event and
+	// then dropped says nothing bad about the server's health, so the next
+	// attempt must go back to the floor rather than inheriting a wait grown from
+	// earlier failures. Without the reset these same 300ms hold about seven.
+	be := &scriptedBackend{newStream: func() changeStream { return &workingStream{} }}
+	p := New(withBackend(be), WithReconnectBackoff(5*time.Millisecond))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := p.Watch(ctx, mustRef(t, "firebase-rtdb://watched"))
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	drain(ch)
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+
+	if got := be.count(); got < 15 {
+		t.Fatalf("only %d reconnects in 300ms with a 5ms floor after streams that delivered: the backoff is not resetting", got)
+	}
+}
+
+func TestNextReconnectBackoff(t *testing.T) {
+	cases := []struct {
+		name     string
+		d, floor time.Duration
+		want     time.Duration
+	}{
+		{"doubles", 2 * time.Second, 2 * time.Second, 4 * time.Second},
+		{"stops at the cap", 20 * time.Second, 2 * time.Second, reconnectBackoffCap},
+		{"never exceeds the cap", time.Minute, 2 * time.Second, reconnectBackoffCap},
+		// A floor above the cap is a deliberate configuration; capping below it
+		// would retry more often than the caller asked for.
+		{"honours a floor above the cap", 2 * time.Minute, 2 * time.Minute, 2 * time.Minute},
+		{"cannot wrap negative", time.Duration(1) << 62, 2 * time.Second, reconnectBackoffCap},
+	}
+	for _, tc := range cases {
+		if got := nextReconnectBackoff(tc.d, tc.floor); got != tc.want {
+			t.Errorf("%s: nextReconnectBackoff(%v, %v) = %v, want %v", tc.name, tc.d, tc.floor, got, tc.want)
+		}
+	}
+}
+
+func TestReconnectJitterStaysInTheUpperHalf(t *testing.T) {
+	// Equal jitter, not full jitter: the wait must stay close to d so that a
+	// grown backoff is not undone by a draw near zero.
+	for range 200 {
+		got := reconnectJitter(4 * time.Second)
+		if got < 2*time.Second || got > 4*time.Second {
+			t.Fatalf("reconnectJitter(4s) = %v, want within [2s, 4s]", got)
+		}
+	}
+	if got := reconnectJitter(0); got != 0 {
+		t.Fatalf("reconnectJitter(0) = %v, want 0", got)
+	}
+}
+
+func TestWithMaxFrameBytesReachesTheBackend(t *testing.T) {
+	// The option's whole purpose is to reach the decoder, so a Provider that
+	// stored the number and never passed it on would be the entire bug.
+	var got httpcore.SSEConfig
+	p := New(WithMaxFrameBytes(4 << 20))
+	p.newBackend = func(_ context.Context, _, _ string, sse httpcore.SSEConfig) (backend, error) {
+		got = sse
+		return newFakeBackend(), nil
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "firebase-rtdb://k")); !errors.Is(err, mamori.ErrNotFound) {
+		t.Fatalf("Resolve err = %v, want ErrNotFound from the empty fake", err)
+	}
+	if got.MaxLine != 4<<20 || got.MaxFrame != 4<<20 {
+		t.Fatalf("backend built with %+v, want both bounds at 4 MiB", got)
+	}
+	// Not positive is ignored, leaving httpcore's defaults selected.
+	if p := New(WithMaxFrameBytes(0)); p.sse != (httpcore.SSEConfig{}) {
+		t.Fatalf("WithMaxFrameBytes(0) set %+v, want the zero config", p.sse)
+	}
+}
+
 func TestUnwrapJSONString(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -526,10 +739,17 @@ func TestUnwrapJSONString(t *testing.T) {
 // the streaming path can be driven without Application Default Credentials. The
 // Admin SDK client is nil: Stream never touches it.
 func newTestSDKBackend(url string) *sdkBackend {
+	return newTestSDKBackendWithBounds(url, httpcore.SSEConfig{})
+}
+
+// newTestSDKBackendWithBounds is newTestSDKBackend with explicit stream bounds,
+// the ones WithMaxFrameBytes sets in production.
+func newTestSDKBackendWithBounds(url string, sse httpcore.SSEConfig) *sdkBackend {
 	return &sdkBackend{
 		dbURL:       strings.TrimRight(url, "/"),
 		tokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}),
 		httpClient:  &http.Client{},
+		sse:         sse,
 	}
 }
 
@@ -638,39 +858,44 @@ func TestSDKBackendStreamBoundsAnUndispatchedFrame(t *testing.T) {
 	}
 }
 
-func TestSDKBackendStreamEndsOnContextCancel(t *testing.T) {
+func TestSDKBackendStreamRaisedBoundCarriesALargerNode(t *testing.T) {
+	// What WithMaxFrameBytes is for. This frame is past BOTH default ceilings at
+	// once (one data line of a megabyte and a kilobyte), which is what a node
+	// larger than the default looks like on this wire, since the database opens
+	// every stream with a put of the whole node. At the default it is refused;
+	// with the bounds raised it must arrive intact rather than being truncated
+	// or clamped back to the default.
+	const size = (1 << 20) + 1024
 	ts := sseTestServer(t, func(w http.ResponseWriter) {
-		_, _ = fmt.Fprint(w, "event: put\ndata: {}\n\n")
+		_, _ = fmt.Fprint(w, "event: put\ndata: "+strings.Repeat("z", size)+"\n\n")
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := newTestSDKBackend(ts.URL).Stream(ctx, "config/service")
+	be := newTestSDKBackendWithBounds(ts.URL, httpcore.SSEConfig{MaxLine: 4 << 20, MaxFrame: 4 << 20})
+	s, err := be.Stream(ctx, "config/service")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	defer func() { _ = s.Close() }()
-	if _, _, err := s.Recv(); err != nil {
-		t.Fatalf("first Recv err = %v", err)
-	}
 
-	// The second Recv blocks on a socket nothing is writing to. changeStream
-	// documents that cancelling ctx unblocks it and reports ctx.Err().
-	done := make(chan error, 1)
-	go func() {
-		_, _, err := s.Recv()
-		done <- err
-	}()
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Recv after cancel = %v, want context.Canceled", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Recv did not return within 3s of the context being cancelled")
+	name, data, err := s.Recv()
+	if err != nil {
+		t.Fatalf("Recv err = %v, want the frame the raised bound allows", err)
+	}
+	if name != "put" || len(data) != size {
+		t.Fatalf("Recv = (%q, %d bytes), want (%q, %d bytes)", name, len(data), "put", size)
 	}
 }
+
+// There is deliberately no test here that cancelling the context ends a live
+// stream. Stream builds its request with the same context it hands the SSE
+// stream, so net/http aborts the round trip and supplies context.Canceled on its
+// own: such a test passes with the stream's context translation deleted
+// entirely, and asserts nothing about the migrated code. httpcore's
+// TestSSEStreamCancelEndsADetachedStream covers that translation at the layer
+// that owns it, against a stream whose request is NOT bound to the cancelled
+// context, which is the only shape that can tell the two mechanisms apart.
 
 func TestSDKBackendStreamRejectsNon200(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

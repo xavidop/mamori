@@ -93,7 +93,8 @@ For explicit configuration, construct the provider yourself and register it:
 p := firebasertdb.New(
     firebasertdb.WithDatabaseURL("https://my-project-default-rtdb.firebaseio.com"),
     firebasertdb.WithProjectID("my-project"),          // optional; ADC usually supplies it
-    firebasertdb.WithReconnectBackoff(5*time.Second),  // optional; stream reconnect delay
+    firebasertdb.WithReconnectBackoff(5*time.Second),  // optional; base stream reconnect delay
+    firebasertdb.WithMaxFrameBytes(4<<20),             // optional; ceiling on one streamed change
 )
 cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 ```
@@ -104,7 +105,35 @@ cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 | --- | --- |
 | `WithDatabaseURL(url)` | Set the Realtime Database URL (else `FIREBASE_DATABASE_URL`) |
 | `WithProjectID(id)` | Set the Firebase/GCP project ID (optional) |
-| `WithReconnectBackoff(d)` | Delay before reconnecting a dropped stream / retrying (default 2s) |
+| `WithReconnectBackoff(d)` | Base delay before reconnecting a dropped stream / retrying (default 2s) |
+| `WithMaxFrameBytes(n)` | Ceiling on one streamed change, in bytes (default 1 MiB) |
+
+#### `WithMaxFrameBytes`
+
+The Realtime Database opens **every** stream with a `put` of the whole watched
+node, so this ceiling is in practice the largest node the provider can watch. A
+node whose pushed frame is over it never gets past the first frame of a
+connection: each attempt reports an `Update{Err: ...}` and reconnects, so the
+watch keeps running but never delivers a change, and `Resolve` keeps working
+because it reads through the Admin SDK and has never had this ceiling.
+
+Set it to the size of the largest node you watch, plus headroom. Expect the
+process to hold roughly **twice** that many bytes per open watch at the instant
+such a frame arrives - the line being read and the frame assembled out of it
+both hold it - which is why it defaults to 1 MiB rather than to no limit. Values
+that are not positive are ignored.
+
+#### `WithReconnectBackoff`
+
+This is the **floor**, not a fixed delay. Each consecutive attempt that delivers
+nothing doubles the wait, up to 30 seconds (or up to your value, if you set one
+longer than that), and the wait drops straight back to the floor as soon as a
+stream delivers anything. Every wait is jittered into the upper half of its
+range, so many processes dropped by the same database do not all reconnect on
+the same millisecond.
+
+If you leave it alone, a database that is down is retried at 2s, 4s, 8s, ... up
+to every 30s, and a healthy stream that drops is retried after about 2s.
 
 ## Native watch (SSE streaming)
 
@@ -123,11 +152,14 @@ ticker:
    correct while remaining native push, not polling.
 4. A `keep-alive` is a no-op; a server `cancel` terminates the watch; an
    `auth_revoked` reconnects with a fresh token; a dropped connection is surfaced
-   as `Update{Err: ...}` and reconnected after `WithReconnectBackoff`.
+   as `Update{Err: ...}` and reconnected after a wait that starts at
+   `WithReconnectBackoff` and doubles, capped at 30s, until a stream delivers
+   something.
    The stream is parsed by `httpcore`'s bounded SSE decoder, which caps a single
-   line and one frame's total data at 1 MiB each. A node whose pushed frame
-   exceeds either ceiling is surfaced as `Update{Err: ...}` and the connection is
-   re-established, rather than the payload growing without limit.
+   line and one frame's total data at `WithMaxFrameBytes` each, 1 MiB by default.
+   A node whose pushed frame exceeds that ceiling is surfaced as
+   `Update{Err: ...}` and the connection is re-established, rather than the
+   payload growing without limit.
 5. When the watch context is cancelled the in-flight request is aborted, the
    goroutine exits, and the channel is closed - no goroutine leaks (verified with
    `goleak`).

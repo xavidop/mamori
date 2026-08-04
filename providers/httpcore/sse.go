@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sync"
 
@@ -73,12 +74,20 @@ type SSEEvent struct {
 
 // SSEConfig bounds an SSE decoder. The zero value selects both defaults and is
 // the right choice unless a backend is known to send larger frames.
+//
+// The two bounds are two roofs, not one. MaxFrame counts only the frame's data,
+// so a frame's "event" name is bounded by MaxLine instead, that being the line
+// it arrives on: a 900-byte name passes a MaxFrame of 16. Peak memory while one
+// frame is accumulating is therefore MaxFrame plus MaxLine plus the slack append
+// leaves in the data buffer, not MaxFrame alone.
 type SSEConfig struct {
-	// MaxLine bounds a single line. Not positive selects DefaultSSEMaxLine.
+	// MaxLine bounds a single line, which includes the line an "event" name
+	// arrives on. Not positive selects DefaultSSEMaxLine.
 	MaxLine int
 	// MaxFrame bounds one frame's total accumulated data, including the
-	// newlines that join multiple data fields. Not positive selects
-	// DefaultSSEMaxFrame.
+	// newlines that join multiple data fields. It does not count the frame's
+	// event name; see this type's doc comment for the resulting peak. Not
+	// positive selects DefaultSSEMaxFrame.
 	MaxFrame int
 }
 
@@ -118,11 +127,18 @@ func NewSSEDecoder(r io.Reader, cfg SSEConfig) *SSEDecoder {
 	// maxLine bytes is a token it can return rather than one it rejects, and the
 	// starting buffer never exceeds that ceiling: a caller who bounds lines at
 	// 64 bytes must not have 4 KiB allocated on their behalf.
-	initial := sseInitialBuf
-	if initial > maxLine+1 {
-		initial = maxLine + 1
+	//
+	// The extra byte is only added when there is room for one. math.MaxInt is a
+	// plausible way for a caller to spell "do not bound this", and maxLine+1 on
+	// that value overflows negative, which makes both the allocation below and
+	// the scanner's ceiling nonsense (the allocation panics). At that setting the
+	// scanner grows until the machine says no, which is what was asked for.
+	scanMax := maxLine
+	if scanMax < math.MaxInt {
+		scanMax++
 	}
-	sc.Buffer(make([]byte, initial), maxLine+1)
+	initial := min(sseInitialBuf, scanMax)
+	sc.Buffer(make([]byte, initial), scanMax)
 
 	return &SSEDecoder{sc: sc, maxLine: maxLine, maxFrame: maxFrame}
 }
@@ -161,10 +177,14 @@ func (d *SSEDecoder) Next() (SSEEvent, error) {
 
 	for d.sc.Scan() {
 		line := d.sc.Bytes()
-		// Checked explicitly rather than relying on the scanner alone. The
-		// scanner only reports a too-long token once its buffer is full, so a
-		// line under the starting buffer size but over a small configured bound
-		// would otherwise slip through as an ordinary token.
+		// This reclaims the one byte of headroom the scanner is given (see
+		// NewSSEDecoder). The scanner's ceiling is maxLine+1, and at EOF it
+		// returns whatever is buffered as a final token without consulting that
+		// ceiling at all, so an unterminated last line of exactly maxLine+1
+		// bytes arrives here as an ordinary token. Nothing longer can arrive by
+		// either route, since the buffer holding it is itself capped at
+		// maxLine+1; the gap this closes is that single byte, not an unbounded
+		// read.
 		if len(line) > d.maxLine {
 			return SSEEvent{}, ErrSSELineTooLong
 		}
