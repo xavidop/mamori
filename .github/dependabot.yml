@@ -186,6 +186,18 @@ updates:
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:hcp-vault-secrets]
   - package-ecosystem: gomod
+    directory: "/providers/heroku"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:heroku]
+  - package-ecosystem: gomod
+    directory: "/providers/infisical"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:infisical]
+  - package-ecosystem: gomod
+    directory: "/providers/supabase"
+    schedule: { interval: weekly }
+    labels: [dependencies, go, provider:supabase]
+  - package-ecosystem: gomod
     directory: "/providers/https"
     schedule: { interval: weekly }
     labels: [dependencies, go, provider:https]
