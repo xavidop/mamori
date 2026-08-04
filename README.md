@@ -39,6 +39,7 @@ go get github.com/xavidop/mamori/providers/vercel-gc      # vercel-gc://
 go get github.com/xavidop/mamori/providers/cloudflare-kv  # cloudflare-kv://
 go get github.com/xavidop/mamori/providers/heroku         # heroku:// (config vars, batched)
 go get github.com/xavidop/mamori/providers/https          # https:// (generic REST)
+go get github.com/xavidop/mamori/providers/infisical      # infisical://
 go get github.com/xavidop/mamori/providers/scaleway-sm    # scaleway-sm://
 # ... gcp, azure, consul, doppler, onepassword, sops
 
@@ -131,6 +132,7 @@ cfg := w.Get() // lock-free snapshot; always the last *valid* config
 | `providers/k8s` | `k8s-secret://` · `k8s-cm://` | **native** (watch API) | ✅ |
 | `providers/consul` | `consul://` | **native** (blocking queries) | ✅ |
 | `providers/doppler` | `doppler://` | poll | ✅ |
+| `providers/infisical` | `infisical://` | poll | ✅ |
 | `providers/scaleway-sm` | `scaleway-sm://` | poll | ✅ |
 | `providers/onepassword` | `op://` | poll | ✅ |
 | `providers/sops` | `sops://` | fsnotify | ✅ |
