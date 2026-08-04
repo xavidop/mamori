@@ -29,7 +29,7 @@ Module path is `github.com/xavidop/mamori/providers/<name>`.
 | `gcp` | `gcp-sm://` | `gcp-sm://my-project/api-key` |
 | `azure` | `azure-kv://` `azure-appconfig://` | `azure-kv://vaultname/secret-name`, `azure-appconfig://mystore/db/port?label=prod` |
 | `doppler` | `doppler://` | `doppler://project/config#SECRET` |
-| `infisical` | `infisical://` | `infisical://DB_PASSWORD`, `infisical://DB_PASSWORD?env=staging&path=/backend`, `infisical://DB_CREDS#/creds/password`. The whole ref path is the secret NAME; project/environment/folder come from options or `?project=`/`?env=`/`?path=`, never from the path. Machine identity Universal Auth via `INFISICAL_CLIENT_ID`/`INFISICAL_CLIENT_SECRET`. |
+| `hcp-vault-secrets` | `hcp-vs://` | `hcp-vs://DB_PASSWORD`, `hcp-vs://DB_PASSWORD?app=web&org=<uuid>&project=<uuid>`, `hcp-vs://DB_CREDS#/creds/password`. HCP Vault Secrets, NOT self-hosted `vault://`. The whole ref path is the secret NAME; organization/project/app come from options or `?org=`/`?project=`/`?app=`, never from the path. Service principal via `HCP_CLIENT_ID`/`HCP_CLIENT_SECRET`. Static secrets only. |
 | `scaleway-sm` | `scaleway-sm://` | `scaleway-sm://prod/db-password`, `scaleway-sm://db-password?revision=7` |
 | `onepassword` | `op://` | `op://vault/item/field` |
 | `sops` | `sops://` | `sops://secrets.enc.yaml#key` |
