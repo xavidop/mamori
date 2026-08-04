@@ -3,14 +3,19 @@ package firebasertdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 	"github.com/xavidop/mamori/providertest"
+	"golang.org/x/oauth2"
 )
 
 // fakeBackend is an in-memory implementation of backend used by the conformance
@@ -509,47 +514,171 @@ func TestUnwrapJSONString(t *testing.T) {
 	}
 }
 
-func TestSSEDecoder(t *testing.T) {
-	// A representative Realtime Database SSE stream: an initial put, a heartbeat
-	// comment, a keep-alive event, a patch, a multi-line data event, then EOF.
-	payload := "" +
-		"event: put\n" +
-		"data: {\"path\":\"/\",\"data\":{\"a\":1}}\n" +
-		"\n" +
-		": heartbeat\n" +
-		"event: keep-alive\n" +
-		"data: null\n" +
-		"\n" +
-		"event: patch\n" +
-		"data: {\"path\":\"/\",\"data\":{\"b\":2}}\n" +
-		"\n" +
-		"event: put\n" +
-		"data: line1\n" +
-		"data: line2\n" +
-		"\n"
+// --- the live SSE path (sdk.go) ---
+//
+// These exercise sdkBackend.Stream against a real HTTP server rather than the
+// in-memory fakeBackend the conformance kit uses, because the fake never touches
+// the SSE code at all: before this provider moved onto httpcore's bounded
+// decoder, the streaming path was the one part of it with no test that could
+// observe a hostile server, and it was also the part with no memory bound.
 
-	dec := newSSEDecoder(strings.NewReader(payload))
-
-	type ev struct {
-		name string
-		data string
+// newTestSDKBackend builds an sdkBackend pointed at url with a static token, so
+// the streaming path can be driven without Application Default Credentials. The
+// Admin SDK client is nil: Stream never touches it.
+func newTestSDKBackend(url string) *sdkBackend {
+	return &sdkBackend{
+		dbURL:       strings.TrimRight(url, "/"),
+		tokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}),
+		httpClient:  &http.Client{},
 	}
-	want := []ev{
+}
+
+// sseTestServer serves body as an event stream and then holds the connection
+// open, the way the Realtime Database endpoint does between changes.
+func sseTestServer(t *testing.T, body func(w http.ResponseWriter)) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		body(w)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestSDKBackendStreamDecodesEvents(t *testing.T) {
+	ts := sseTestServer(t, func(w http.ResponseWriter) {
+		_, _ = fmt.Fprint(w, "event: put\ndata: {\"path\":\"/\",\"data\":{\"a\":1}}\n\n")
+		_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+		_, _ = fmt.Fprint(w, "event: keep-alive\ndata: null\n\n")
+		_, _ = fmt.Fprint(w, "event: patch\ndata: line1\ndata: line2\n\n")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := newTestSDKBackend(ts.URL).Stream(ctx, "config/service")
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	want := []struct{ name, data string }{
 		{"put", `{"path":"/","data":{"a":1}}`},
 		{"keep-alive", "null"},
-		{"patch", `{"path":"/","data":{"b":2}}`},
-		{"put", "line1\nline2"},
+		{"patch", "line1\nline2"},
 	}
 	for i, w := range want {
-		name, data, err := dec.next()
+		name, data, err := s.Recv()
 		if err != nil {
-			t.Fatalf("event %d: unexpected err %v", i, err)
+			t.Fatalf("event %d: Recv err = %v", i, err)
 		}
 		if name != w.name || string(data) != w.data {
 			t.Fatalf("event %d = (%q, %q), want (%q, %q)", i, name, data, w.name, w.data)
 		}
 	}
-	if _, _, err := dec.next(); err != io.EOF {
-		t.Fatalf("final next() err = %v, want io.EOF", err)
+}
+
+func TestSDKBackendStreamBoundsAnUnterminatedLine(t *testing.T) {
+	// The headline of the httpcore migration. The decoder this replaced read a
+	// line with bufio.Reader.ReadBytes('\n'): a server that sends bytes and no
+	// newline grew that buffer for as long as it kept sending, with no ceiling
+	// anywhere in the provider. Now the read stops at the ceiling and the stream
+	// reports it.
+	ts := sseTestServer(t, func(w http.ResponseWriter) {
+		chunk := []byte(strings.Repeat("x", 64*1024))
+		// Comfortably past the one-megabyte ceiling, and never a newline.
+		for range 64 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := newTestSDKBackend(ts.URL).Stream(ctx, "config/service")
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	if _, _, err := s.Recv(); !errors.Is(err, httpcore.ErrSSELineTooLong) {
+		t.Fatalf("Recv err = %v, want ErrSSELineTooLong", err)
+	}
+}
+
+func TestSDKBackendStreamBoundsAnUndispatchedFrame(t *testing.T) {
+	// The second bound, which the first does not imply: every line here is 32
+	// bytes, so no line bound is ever crossed, and the blank line that would
+	// dispatch the frame never comes. Only a per-frame total stops the payload
+	// growing for as long as the server keeps talking.
+	ts := sseTestServer(t, func(w http.ResponseWriter) {
+		_, _ = fmt.Fprint(w, "event: put\n")
+		line := "data: " + strings.Repeat("y", 26) + "\n"
+		for range (1 << 20 / 26) + 64 {
+			if _, err := fmt.Fprint(w, line); err != nil {
+				return
+			}
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := newTestSDKBackend(ts.URL).Stream(ctx, "config/service")
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	if _, _, err := s.Recv(); !errors.Is(err, httpcore.ErrSSEFrameTooLong) {
+		t.Fatalf("Recv err = %v, want ErrSSEFrameTooLong", err)
+	}
+}
+
+func TestSDKBackendStreamEndsOnContextCancel(t *testing.T) {
+	ts := sseTestServer(t, func(w http.ResponseWriter) {
+		_, _ = fmt.Fprint(w, "event: put\ndata: {}\n\n")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := newTestSDKBackend(ts.URL).Stream(ctx, "config/service")
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	if _, _, err := s.Recv(); err != nil {
+		t.Fatalf("first Recv err = %v", err)
+	}
+
+	// The second Recv blocks on a socket nothing is writing to. changeStream
+	// documents that cancelling ctx unblocks it and reports ctx.Err().
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := s.Recv()
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Recv after cancel = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Recv did not return within 3s of the context being cancelled")
+	}
+}
+
+func TestSDKBackendStreamRejectsNon200(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "permission denied", http.StatusForbidden)
+	}))
+	t.Cleanup(ts.Close)
+
+	if _, err := newTestSDKBackend(ts.URL).Stream(context.Background(), "config/service"); err == nil {
+		t.Fatal("Stream returned no error for a 403")
 	}
 }

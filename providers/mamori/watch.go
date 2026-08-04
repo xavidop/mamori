@@ -1,7 +1,6 @@
 package mamoriprov
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,10 +8,10 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/xavidop/mamori"
+	"github.com/xavidop/mamori/providers/httpcore"
 )
 
 const (
@@ -29,27 +28,6 @@ const (
 	// watchBackoffCap bounds exponential growth of the reconnect wait so a
 	// persistently unreachable server is retried at most this infrequently.
 	watchBackoffCap = 30 * time.Second
-
-	// sseScanInitialBuf is bufio.Scanner's starting buffer size; it grows as
-	// needed up to sseScanMaxLine.
-	sseScanInitialBuf = 4 * 1024
-	// sseScanMaxLine bounds a single SSE line. Without a bound, a hostile or
-	// broken server could stream one line with no newline forever and grow
-	// the scanner's internal buffer without limit; past this size Scan
-	// fails with bufio.ErrTooLong instead, which ends the read loop and
-	// triggers the normal reconnect-with-backoff path.
-	sseScanMaxLine = 1 << 20 // 1 MiB
-
-	// sseMaxFrameBytes bounds the TOTAL accumulated size of one frame's
-	// data: lines. sseScanMaxLine only bounds a single line; without a
-	// separate per-frame cap, a hostile or broken server could keep sending
-	// data: lines and never a blank line to dispatch the frame, growing
-	// dataLines without bound (OOM) even though every individual line stays
-	// under sseScanMaxLine. Past this size the frame is treated as a stream
-	// error, the same way a read error is: readSSE stops reading this
-	// connection so watchLoop reconnects with backoff, rather than
-	// delivering a truncated or oversized frame.
-	sseMaxFrameBytes = 1 << 20 // 1 MiB total per frame
 )
 
 // Watch implements mamori.WatchableProvider by opening a persistent
@@ -223,27 +201,41 @@ func (p *Provider) watchOnce(ctx context.Context, ep endpoint, name string, ch c
 		})
 		return false
 	}
-	defer func() { _ = resp.Body.Close() }()
-
 	if resp.StatusCode != http.StatusOK {
-		sendUpdate(ctx, ch, mamori.Update{Err: watchConnectError(name, resp)})
+		// The body belongs to this path: watchConnectError reads the error
+		// envelope out of it, and nothing else will ever look at it. On the 200
+		// path below the SSE stream takes ownership instead, so there is
+		// exactly one closer on each branch rather than a shared defer that
+		// closes a body the stream is also responsible for.
+		connErr := watchConnectError(name, resp)
+		_ = resp.Body.Close()
+		sendUpdate(ctx, ch, mamori.Update{Err: connErr})
 		return false
 	}
 
-	// Unblock a blocked Scan on ctx cancellation: closing the response body
-	// makes the scanner's in-flight (or next) Read on it return immediately
-	// with an error. This is the explicit, deterministic half of ctx
-	// cancellation support; http.NewRequestWithContext's own request
-	// context (used by p.do) would eventually have the transport do the
-	// same, but closing the body directly here does not depend on that
-	// transport-specific timing. stop cancels the callback once this
-	// function returns by any other path (a normal EOF, say) so it never
-	// fires - and therefore never leaks a goroutine - after the stream it
-	// would have torn down is already gone.
-	stop := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
-	defer stop()
+	// From here the stream owns the body, including closing it. It also ties
+	// the body to ctx, which is what unblocks a read parked on a socket the
+	// moment the watch is cancelled: closing the body makes the in-flight (or
+	// next) Read return immediately. That is the explicit, deterministic half
+	// of ctx cancellation support; http.NewRequestWithContext's own request
+	// context (used by p.do) would eventually have the transport do the same,
+	// but this does not depend on that transport-specific timing. The stream
+	// cancels its own callback registration when it is closed, so nothing is
+	// left running - and no goroutine is leaked - once this function returns
+	// by any other path, a normal EOF say.
+	//
+	// The zero SSEConfig selects the shared ceilings, which are the same
+	// one-megabyte numbers this file used to define for itself: one on a single
+	// line, because a server streaming one line with no newline forever would
+	// otherwise grow the read buffer without limit, and a SECOND one on a
+	// frame's total accumulated data, because per-line bounding alone still
+	// lets a server send data: forever and never the blank line that
+	// dispatches. Both live in httpcore now, with the full reasoning, and both
+	// apply to every provider that streams rather than only to this one.
+	stream := httpcore.NewSSEStream(ctx, resp, httpcore.SSEConfig{})
+	defer func() { _ = stream.Close() }()
 
-	readSSE(ctx, resp.Body, name, ch, guard)
+	readSSE(ctx, stream, name, ch, guard)
 	return true
 }
 
@@ -269,22 +261,23 @@ func watchConnectError(name string, resp *http.Response) error {
 	return fmt.Errorf("mamori: watch request for %q returned status %d kind %q: %s", name, resp.StatusCode, env.Error.Kind, env.Error.Message)
 }
 
-// readSSE reads SSE frames from body until the stream ends for any reason
-// (EOF, a read error, an over-long line, or ctx cancellation closing body
-// out from under it - see watchOnce), dispatching each complete frame via
-// dispatchSSEFrame as it is parsed.
+// readSSE reads SSE frames from stream until it ends for any reason (EOF, a
+// read error, an over-long line, an over-large frame, or ctx cancellation
+// closing the body out from under it - see watchOnce), dispatching each
+// complete frame via dispatchSSEFrame as it is parsed.
 //
-// Parsing follows the SSE spec's line-based framing: "event:" and "data:"
-// field lines accumulate into the current frame, a blank line dispatches
-// and resets it, and a line starting with ":" is a comment (the server's
-// heartbeat - see server/wire.go's writeSSEHeartbeat) that carries no field
-// at all and is ignored outright, never touching the accumulator. A single
-// optional leading space after the field's colon is trimmed per the spec;
-// any other field name (there are none on this wire today, but "id" and
-// "retry" are legal SSE fields) is accumulated into nothing and effectively
-// ignored.
+// The framing itself is httpcore.SSEDecoder's, not this file's, and it is the
+// same framing this loop used to implement by hand: "event:" and "data:" field
+// lines accumulate into the current frame, a blank line dispatches and resets
+// it, a line starting with ":" is a comment (the server's heartbeat - see
+// server/wire.go's writeSSEHeartbeat) that carries no field at all and is
+// ignored outright, a single optional leading space after the field's colon is
+// trimmed, and any other field name ("id" and "retry" are legal SSE fields,
+// though there are none on this wire today) is read and discarded. What the
+// shared decoder adds is that both memory ceilings now apply to every provider
+// that streams, not only to this one; see watchOnce for which ceilings.
 //
-// A disconnect here - the scanner returning false, however that happened -
+// A disconnect here - stream.Next returning an error, however that happened -
 // is NOT itself sent to ch as an Update. SSE streams are expected to drop
 // and get re-established periodically (idle proxies, server restarts, a
 // deliberate connection-per-poll-cycle server implementation); surfacing
@@ -293,55 +286,18 @@ func watchConnectError(name string, resp *http.Response) error {
 // already ensures reconnects do not hammer the server, which is the actual
 // risk a disconnect poses.
 //
-// A frame whose accumulated data: lines exceed sseMaxFrameBytes before a
-// blank line dispatches it is handled the same way: reading stops and the
-// (incomplete) frame is discarded rather than delivered, so the connection
-// tears down and watchLoop reconnects with backoff instead of the goroutine
-// hanging onto an ever-growing dataLines slice forever.
-func readSSE(ctx context.Context, body io.Reader, name string, ch chan<- mamori.Update, guard *freshnessGuard) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, sseScanInitialBuf), sseScanMaxLine)
-
-	var event string
-	var dataLines []string
-	var frameBytes int
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		switch {
-		case line == "":
-			if event != "" || dataLines != nil {
-				if !dispatchSSEFrame(ctx, name, event, dataLines, ch, guard) {
-					return // ctx is done; sendUpdate already observed it
-				}
-			}
-			event, dataLines, frameBytes = "", nil, 0
-
-		case strings.HasPrefix(line, ":"):
-			// Heartbeat/comment line: no field, deliberately not touching
-			// the accumulator, so the blank line that follows it dispatches
-			// nothing.
-
-		default:
-			field, value, _ := strings.Cut(line, ":")
-			value = strings.TrimPrefix(value, " ")
-			switch field {
-			case "event":
-				event = value
-			case "data":
-				frameBytes += len(value)
-				if frameBytes > sseMaxFrameBytes {
-					// Stream error: this frame has grown past the
-					// per-frame cap without a blank line to dispatch it.
-					// Stop reading this connection now, the same way an
-					// EOF or read error would end the loop, instead of
-					// delivering a truncated frame or growing dataLines
-					// without bound. watchLoop reconnects with backoff.
-					return
-				}
-				dataLines = append(dataLines, value)
-			}
+// A frame past either ceiling arrives here as exactly that: an error that ends
+// the loop, so the (incomplete) frame is discarded rather than delivered, the
+// connection tears down, and watchLoop reconnects with backoff instead of the
+// goroutine hanging onto an ever-growing payload forever.
+func readSSE(ctx context.Context, stream *httpcore.SSEStream, name string, ch chan<- mamori.Update, guard *freshnessGuard) {
+	for {
+		ev, err := stream.Next()
+		if err != nil {
+			return
+		}
+		if !dispatchSSEFrame(ctx, name, ev.Name, string(ev.Data), ch, guard) {
+			return // ctx is done; sendUpdate already observed it
 		}
 	}
 }
@@ -366,9 +322,10 @@ func readSSE(ctx context.Context, body io.Reader, name string, ch chan<- mamori.
 // frames: an "error" frame is a live signal about the CURRENT connection, not
 // a value, so it can never be out of order and is always forwarded. See
 // freshnessGuard for what the guard does with an update.
-func dispatchSSEFrame(ctx context.Context, name, event string, dataLines []string, ch chan<- mamori.Update, guard *freshnessGuard) bool {
-	data := strings.Join(dataLines, "\n")
-
+//
+// data is the frame's data: lines already joined with "\n" by the decoder,
+// which is where that join moved to; it is not this function's to perform.
+func dispatchSSEFrame(ctx context.Context, name, event, data string, ch chan<- mamori.Update, guard *freshnessGuard) bool {
 	switch event {
 	case "update":
 		var vb valueBody

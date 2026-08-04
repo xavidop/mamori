@@ -124,6 +124,10 @@ ticker:
 4. A `keep-alive` is a no-op; a server `cancel` terminates the watch; an
    `auth_revoked` reconnects with a fresh token; a dropped connection is surfaced
    as `Update{Err: ...}` and reconnected after `WithReconnectBackoff`.
+   The stream is parsed by `httpcore`'s bounded SSE decoder, which caps a single
+   line and one frame's total data at 1 MiB each. A node whose pushed frame
+   exceeds either ceiling is surfaced as `Update{Err: ...}` and the connection is
+   re-established, rather than the payload growing without limit.
 5. When the watch context is cancelled the in-flight request is aborted, the
    goroutine exits, and the channel is closed - no goroutine leaks (verified with
    `goleak`).
@@ -139,13 +143,16 @@ stays open.
 | `providertest.Run` conformance suite | **Verified** - runs against an in-memory fake backend (`go test ./...`) |
 | Resolve, scalar unquoting, JSON `#key` selection, not-found, version monotonicity, context cancellation | **Verified** (unit tests) |
 | Native SSE watch (baseline + change + delete + cancel/close, no goroutine leak) | **Verified** against the fake |
-| Server-Sent-Events parser (`event:`/`data:`, multi-line data, comments, keep-alive) | **Verified** (unit test over byte streams) |
+| Server-Sent-Events parser (`event:`/`data:`, multi-line data, comments, keep-alive) | **Verified** in `providers/httpcore` (unit tests over byte streams), which now owns the decoder |
+| Live SSE streaming path (frame decoding, both memory ceilings, cancellation, non-200) | **Verified** (unit tests over a local HTTP server, no credentials) |
 | End-to-end against a real Firebase Realtime Database | **Needs a live backend** - see the integration test |
 
 The unit and conformance tests use an in-memory fake that reproduces the database's
 ETag bump-on-write and push-on-change behavior, so `go test ./...` requires **no**
-Firebase project and **no** credentials. The live SSE streamer (Admin SDK read +
-REST streaming with an ADC token) is exercised only by the integration test.
+Firebase project and **no** credentials. The REST streaming half of the live
+backend is covered by unit tests that drive it against a local HTTP server with a
+static token, also without credentials; only the Admin SDK read path is exercised
+solely by the integration test.
 
 ### Live integration test
 
