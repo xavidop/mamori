@@ -481,13 +481,45 @@ func testConcurrentResolve(t *testing.T, c Config) {
 	}
 }
 
-// checkCloserContract runs the Close contract assertions against p and reports
-// the first violation. It is a pure function so it can itself be tested; the
-// testing.T wrapper below is what the conformance kit registers.
+// closedResolveBound is how long Resolve may take on a closed provider before
+// the contract treats it as having dialed.
 //
-// The caller must have already established that p implements io.Closer.
-func checkCloserContract(p mamori.Provider, ref mamori.Ref) error {
-	closer, ok := p.(io.Closer)
+// It exists because errors.Is(err, mamori.ErrUnavailable) alone cannot tell the
+// two outcomes apart. A provider that refuses locally reports unavailable, and
+// so does a provider that rebuilt its client, dialed a backend it should no
+// longer be talking to, and failed - httpcore's classifier makes unavailable
+// the default for any unclassified transport failure, and a dial into a runner
+// with no egress lands there every time. The two are distinguishable by cost,
+// not by error: refusing locally is a boolean read against a mutex, and dialing
+// is not. The margin is enormous rather than tight - microseconds against the
+// 730ms and 850ms measured on the gcp and gcs providers when they rebuilt a
+// real client after Close - so this bound sits far above any plausible honest
+// refusal and far below any plausible dial.
+const closedResolveBound = 250 * time.Millisecond
+
+// closedResolveDeadline bounds the post-close Resolve itself, so the defect
+// this case exists to catch cannot take the module's whole test binary down
+// with it. A dial into a firewall that drops rather than rejects blocks until
+// something else stops it; without a deadline that something else is `go test`'s
+// own timeout, which kills the binary with no attribution to this case.
+//
+// Residual gap, stated rather than papered over: a provider that ignores the
+// context it was handed can still block here, and no deadline the kit sets can
+// preempt it. Bounding the call would then mean abandoning a goroutine on every
+// run, which trades a diagnosable hang for a leak that NoGoroutineLeak would
+// report against the wrong case.
+const closedResolveDeadline = 2 * closedResolveBound
+
+// checkCloserContract runs the Close contract assertions and reports the first
+// violation. It is a pure function so it can itself be tested; the testing.T
+// wrapper below is what the conformance kit registers.
+//
+// It takes a constructor rather than one provider because the contract covers
+// two lifecycles that cannot share an instance: closing something that was
+// never used, and closing something that holds a live client. ref must name a
+// key the caller has already seeded, since the second lifecycle resolves it.
+func checkCloserContract(newProvider func() mamori.Provider, ref mamori.Ref) error {
+	cold, ok := newProvider().(io.Closer)
 	if !ok {
 		return errors.New("provider does not implement io.Closer")
 	}
@@ -495,8 +527,27 @@ func checkCloserContract(p mamori.Provider, ref mamori.Ref) error {
 	// Close on a provider that has never resolved must not dial or panic.
 	// Providers that build their client lazily (postgres, mysql) reach this
 	// path whenever a configured source turns out to be unused.
-	if err := closer.Close(); err != nil {
+	if err := cold.Close(); err != nil {
 		return fmt.Errorf("Close on a provider that never resolved: %w", err)
+	}
+
+	p := newProvider()
+	closer, ok := p.(io.Closer)
+	if !ok {
+		return errors.New("Config.New returned an io.Closer once and a non-closer the next call")
+	}
+
+	// Everything below runs against a provider that has resolved once, which is
+	// the lifecycle that matters and the one a cold instance cannot stand in
+	// for. A Close that is terminal only when there was nothing to release -
+	// the shape you get from an early return on a nil client - satisfies every
+	// assertion a never-resolved instance can make, and strands the connection
+	// and goroutine of every instance that was actually used.
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		return fmt.Errorf("Resolve before Close, of the key this case seeded: %w", err)
+	}
+	if err := closer.Close(); err != nil {
+		return fmt.Errorf("Close after a successful Resolve: %w", err)
 	}
 
 	// Idempotent.
@@ -507,14 +558,38 @@ func checkCloserContract(p mamori.Provider, ref mamori.Ref) error {
 	// Terminal: a closed provider reports unavailable rather than silently
 	// rebuilding the client it was just told to release.
 	//
-	// ref names a key that was never seeded, and ErrNotFound is still a
-	// failure here. That is the point: the closed check has to come before any
-	// use of the backend, so a provider cannot reach a released client to
-	// discover the key is missing. Order the check first and the key's
-	// existence stops mattering, which is the behavior this asserts.
-	_, err := p.Resolve(context.Background(), ref)
+	// ErrNotFound is a failure here even though ref names a key that was
+	// resolvable a moment ago. That is the point: the closed check has to come
+	// before any use of the backend, so a provider cannot reach a released
+	// client to discover anything about the key at all.
+	ctx, cancel := context.WithTimeout(context.Background(), closedResolveDeadline)
+	defer cancel()
+	start := time.Now()
+	_, err := p.Resolve(ctx, ref)
+	elapsed := time.Since(start)
+
 	if err == nil {
 		return errors.New("Resolve after Close returned a value; want mamori.ErrUnavailable")
+	}
+	// The deadline is checked before the sentinel, and reported as a contract
+	// failure rather than folded into the accepted path, because a timed-out
+	// dial classifies as unavailable in several providers (gcp maps gRPC
+	// DeadlineExceeded straight onto mamori.ErrUnavailable). Fold it in and
+	// this case passes the exact defect it exists to catch.
+	if ctx.Err() != nil {
+		return fmt.Errorf("Resolve after Close ran for %v, until this case's own %v deadline expired: "+
+			"a closed provider must refuse locally rather than dial. Blocking that long means the "+
+			"client was rebuilt and a backend contacted; the resulting error satisfying "+
+			"errors.Is(err, mamori.ErrUnavailable) does not make it conforming. Underlying error: %v",
+			elapsed, closedResolveDeadline, err)
+	}
+	if elapsed > closedResolveBound {
+		return fmt.Errorf("Resolve after Close took %v, over the %v bound: a closed provider is "+
+			"expected to refuse locally - a boolean check, microseconds - rather than dial. Taking "+
+			"this long means the client was rebuilt and a backend contacted, which is a contract "+
+			"violation even when the resulting error satisfies errors.Is(err, mamori.ErrUnavailable), "+
+			"since a failed dial classifies as unavailable too. Underlying error: %v",
+			elapsed, closedResolveBound, err)
 	}
 	if !errors.Is(err, mamori.ErrUnavailable) {
 		return fmt.Errorf("Resolve after Close = %v; want errors.Is(err, mamori.ErrUnavailable)", err)
@@ -526,11 +601,15 @@ func checkCloserContract(p mamori.Provider, ref mamori.Ref) error {
 // io.Closer. Providers that hold no releasable resource do not implement it and
 // skip this case, which is why the kit type-asserts rather than requiring it.
 func testCloser(t *testing.T, c Config) {
-	p := c.New()
-	if _, ok := p.(io.Closer); !ok {
+	if _, ok := c.New().(io.Closer); !ok {
 		t.Skip("provider does not implement io.Closer")
 	}
-	if err := checkCloserContract(p, c.parseRef(t, c.key("afterclose"))); err != nil {
+	// The checker resolves this key before closing, so it has to exist.
+	key := c.key("afterclose")
+	if err := c.Seed(context.Background(), key, "value"); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if err := checkCloserContract(c.New, c.parseRef(t, key)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -554,12 +633,19 @@ func testCloseDuringResolve(t *testing.T, c Config) {
 		t.Skip("provider does not implement io.Closer")
 	}
 
-	ctx := context.Background()
 	key := c.key("closerace")
-	if err := c.Seed(ctx, key, "value"); err != nil {
+	if err := c.Seed(context.Background(), key, "value"); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	ref := c.parseRef(t, key)
+
+	// The resolves are bounded so a provider that blocks on a released client
+	// cannot hang the module's test binary with no attribution. Unlike the
+	// deadline in checkCloserContract, this one is a stop and not a verdict:
+	// this case has no opinion on what any individual resolve returns, only
+	// that racing Close against them produces neither a panic nor a data race.
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout())
+	defer cancel()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

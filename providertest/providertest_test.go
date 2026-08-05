@@ -96,6 +96,51 @@ func TestConformanceKitPassesForCorrectProvider(t *testing.T) {
 	})
 }
 
+// closingFake gives the kit a provider that actually implements io.Closer, so
+// CloserContract and CloseDuringResolve run end to end here rather than skipping
+// and first executing inside some downstream provider module. It models the
+// shape a real connection-holding provider has: New hands back a fresh handle
+// onto shared backend data, closing one handle refuses further work on that
+// handle alone, and every other handle carries on.
+type closingFake struct {
+	*fakeBackend
+	mu     sync.Mutex
+	closed bool
+}
+
+func (f *closingFake) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
+	f.mu.Lock()
+	closed := f.closed
+	f.mu.Unlock()
+	if closed {
+		return mamori.Value{}, fmt.Errorf("%w: fake: provider is closed", mamori.ErrUnavailable)
+	}
+	return f.fakeBackend.Resolve(ctx, ref)
+}
+
+func (f *closingFake) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return nil
+}
+
+// The counterpart to TestConformanceKitPassesForCorrectProvider for a provider
+// with a lifecycle. Without it both closer cases skip everywhere in this repo,
+// and their wiring - the seed, the parseRef, the fan-out, the Close-error
+// assertion - would first run in a provider module, which is a bad place to
+// discover a bug in the harness rather than in the provider.
+func TestConformanceKitPassesForAClosingProvider(t *testing.T) {
+	backend := newFake()
+	providertest.Run(t, providertest.Config{
+		New:             func() mamori.Provider { return &closingFake{fakeBackend: backend} },
+		Ref:             func(key string) string { return "fake://" + key },
+		Seed:            func(_ context.Context, key, val string) error { backend.set(key, val); return nil },
+		Mutate:          func(_ context.Context, key, val string) error { backend.set(key, val); return nil },
+		NoResolveErrors: true,
+	})
+}
+
 // --- Watch: subscription timing ---
 //
 // WatchEmitsOnMutate has to mutate the backend after the watch is live, and
