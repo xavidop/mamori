@@ -16,8 +16,9 @@ import (
 // implements treatmentClient, so it drops straight into the provider via
 // withClient and the conformance kit runs with no live Split backend.
 type fakeSplit struct {
-	mu    sync.Mutex
-	store map[string]string // key: trafficKey \x00 feature -> treatment
+	mu        sync.Mutex
+	store     map[string]string // key: trafficKey \x00 feature -> treatment
+	destroyed bool              // set by Destroy, asserted by the ownership test
 }
 
 func newFake() *fakeSplit {
@@ -43,7 +44,24 @@ func (f *fakeSplit) Treatment(key, feature string) string {
 	return controlTreatment
 }
 
-func (f *fakeSplit) Destroy() {}
+// Destroy records the call rather than tearing anything down. It deliberately
+// does not affect Treatment: the conformance kit builds two providers over one
+// shared fake, and a fake that started returning "control" after the first
+// Destroy would report the resulting failure as "Resolve before Close",
+// pointing at the wrong thing.
+func (f *fakeSplit) Destroy() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.destroyed = true
+}
+
+// isDestroyed reports whether Destroy has been called, under the same lock
+// every other field of the fake is read through.
+func (f *fakeSplit) isDestroyed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.destroyed
+}
 
 func mustRef(t *testing.T, raw string) mamori.Ref {
 	t.Helper()
@@ -181,11 +199,12 @@ func TestResolveMissingAPIKey(t *testing.T) {
 func TestClose(t *testing.T) {
 	f := newFake()
 	p := New(withClient(f))
-	// The injected client is set, so Close destroys it.
+	// The client is injected, so Close leaves it alone and only marks the
+	// provider closed; TestCloseLeavesInjectedClientOpen asserts that split.
 	if err := p.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	// Close again with no client is fine.
+	// Close again is fine.
 	if err := p.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
@@ -272,5 +291,51 @@ func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("factory called %d times, want 0", calls)
+	}
+}
+
+// TestCloseLeavesInjectedClientOpen is the ownership half of the Close
+// contract: a client handed over by the caller belongs to the caller, so Close
+// must stop using it without destroying it. withClient stands in for the public
+// WithClient here, which wraps a caller-built *splitclient.SplitClient in an
+// sdkClient whose Destroy would tear down that very client. The second
+// assertion is what keeps this from being half a fix: the provider must still
+// go terminal, so declining to destroy the caller's client cannot be
+// implemented by declining to close at all.
+func TestCloseLeavesInjectedClientOpen(t *testing.T) {
+	f := newFake()
+	f.set(defaultKey, "new-checkout", "on")
+	p := New(withClient(f))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "split://new-checkout")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.isDestroyed() {
+		t.Error("Close destroyed an injected client; it belongs to the caller")
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "split://new-checkout")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDestroysSelfBuiltClient is the other side of the same rule: a client
+// the provider constructed for itself is the provider's to destroy.
+func TestCloseDestroysSelfBuiltClient(t *testing.T) {
+	f := newFake()
+	f.set(defaultKey, "new-checkout", "on")
+	p := New(WithAPIKey("sdk-key"))
+	p.newClient = func(context.Context) (treatmentClient, error) { return f, nil }
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "split://new-checkout")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !f.isDestroyed() {
+		t.Error("Close did not destroy a client the provider built itself")
 	}
 }
