@@ -407,3 +407,34 @@ func TestLazyFetcherCached(t *testing.T) {
 		t.Fatalf("fetches = %d, want 3 (one per resolve)", fake.fetches)
 	}
 }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract: a closed provider refuses locally rather than continuing to serve
+// through the fetcher whose connections it just released.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	fake := newFakeBackend()
+	fake.set("welcome_message", "Hello!")
+	p := New(WithFetcher(fake))
+
+	if _, err := p.Resolve(context.Background(), parse(t, "firebase-rc://welcome_message")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), parse(t, "firebase-rc://welcome_message")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseWithoutResolve covers the other lifecycle: a provider that never
+// built its fetcher is closed without resolving credentials or dialing.
+func TestCloseWithoutResolve(t *testing.T) {
+	if err := New().Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}

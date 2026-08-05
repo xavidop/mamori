@@ -89,6 +89,10 @@ type templateFetcher interface {
 type Provider struct {
 	mu      sync.Mutex
 	fetcher templateFetcher
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it a closed provider keeps serving through the fetcher whose idle
+	// connections were just released, as though nothing had happened.
+	closed bool
 
 	// Configuration used to build the default (REST) fetcher lazily on first use.
 	projectID  string
@@ -154,10 +158,15 @@ func init() { mamori.Register(New()) }
 func (p *Provider) Scheme() string { return scheme }
 
 // getFetcher returns the backing template fetcher, building the default REST
-// fetcher lazily (and caching it) on first use.
+// fetcher lazily (and caching it) on first use. A closed provider is refused
+// here, before the cached-fetcher check, so nothing is served or built after
+// Close.
 func (p *Provider) getFetcher(ctx context.Context) (templateFetcher, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("firebase-rc: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.fetcher != nil {
 		return p.fetcher, nil
 	}
@@ -227,10 +236,16 @@ func (p *Provider) buildFetcher(ctx context.Context) (templateFetcher, error) {
 }
 
 // Close releases idle connections held by a lazily-built HTTP client, if any.
-// It is safe to call multiple times.
+// It is terminal: every later Resolve reports unavailable without contacting
+// the Remote Config API. It is safe to call multiple times, and on a provider
+// that never resolved.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if hf, ok := p.fetcher.(*httpFetcher); ok && hf.httpClient != nil {
 		hf.httpClient.CloseIdleConnections()
 	}
