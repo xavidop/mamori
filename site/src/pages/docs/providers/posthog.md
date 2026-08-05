@@ -123,7 +123,7 @@ mamori.WithProvider(posthogprov.New(
 | `WithHTTPClient` | - | 30s-timeout client |
 | `WithMaxResponseBytes` | - | 1 MiB; raise it for a project whose flag payloads exceed it |
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting PostHog. Without `WithHTTPClient` it releases nothing: this provider builds no default client of its own to hold onto. A client injected with `WithHTTPClient` is never closed or invalidated, only its idle connections are returned to the pool, and only when that client's `Transport` is non-nil (a nil `Transport` resolves to the shared `http.DefaultTransport`, which `Close` leaves alone).
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting PostHog. Without `WithHTTPClient` it releases nothing: this provider builds no default client of its own to hold onto. A client injected with `WithHTTPClient` is never closed: `Close` may return its idle connections to the pool, but leaves the client usable.
 
 The credential is the *project API key* (`phc_...`), a public client-side token. PostHog's flag endpoint takes no `Authorization` header: the key travels in the request body as `api_key`, and never reaches a URL, an error, a log line, or a `Report`.
 

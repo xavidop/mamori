@@ -141,22 +141,14 @@ injected with `WithClient` belongs to the caller and is left open; `New`
 followed by `Close` with no prior `Resolve` never dials, so there is nothing
 to release.
 
-A `Watch` that was **already running** when `Close` was called is a different
-case and is **not** covered by that guarantee - and etcd's version of it is the
-dangerous one. Closing a self-dialed client closes the watch channel underneath
-that running watch; this provider's watch loop treats a closed channel as a
-plain return
-with no error emitted, and mamori's reconciler does the same with the resulting
-closed `Update` channel, so your `OnError` handler never fires and
-`Watcher.Get()` goes on serving the last value it saw, indefinitely. (etcd may,
-less commonly, deliver one final error update first, when its internal watch
-loop happens to exit through its error path instead - the silent case dominates
-but neither is a guarantee.) A client injected with `WithClient` is never
-closed, so a watch running on one keeps delivering live events. Either way,
-cancelling that watch's own context is the only reliable way to shut it down;
-never reach for `Close` to stop a `Watch`. See
-[Close does not stop a Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
-for what every other provider does here.
+`Close` does not stop a `Watch` that is already running, and on a client this
+provider dialed itself that watch can go quiet rather than fail: no error
+reaches your handler, and `Watcher.Get()` keeps serving the last value it saw,
+indefinitely. A client injected with `WithClient` is never closed, so a watch
+running on one keeps delivering live events. Either way, cancel the watch's
+own context to stop it; `Close` is not a substitute. [Close does not stop a
+Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
+compares every provider.
 
 ## Native watch (watch stream)
 

@@ -139,15 +139,12 @@ stream is owned end to end by that watch's own goroutine, which already closes
 the stream on context cancellation. `Close` deliberately adds no second
 teardown path for a running watch.
 
-A `Watch` that was **already running** when `Close` was called therefore keeps
-its stream open, and `Close` does not end it. It does not go quiet either:
-every `put`/`patch` the server pushes is re-resolved through the same closed
-check, so from then on each change arrives as an error update carrying
-`errors.Is(err, mamori.ErrUnavailable)` instead of a value, for as long as the
-stream lives. Cancelling that watch's own context is the only way to stop it.
-See
-[Close does not stop a Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
-for what every other provider does here.
+`Close` does not stop a `Watch` that is already running. Its stream stays
+open, but from then on every change the server pushes arrives as an error
+update carrying `errors.Is(err, mamori.ErrUnavailable)` instead of a value.
+Cancel the watch's own context to stop it. [Close does not stop a
+Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
+compares every provider.
 
 ## Native watch (SSE streaming)
 

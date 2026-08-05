@@ -132,6 +132,6 @@ mamori.WithProvider(heroku.New(
 
 The token and the app are read lazily at resolve time, so a blank import alone is enough once the environment is set, and a process whose credentials arrive after start still works.
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Heroku. Without `WithHTTPClient` it releases nothing: this provider builds no default client of its own to hold onto. A client injected with `WithHTTPClient` is never closed or invalidated, only its idle connections are returned to the pool, and only when that client's `Transport` is non-nil (a nil `Transport` resolves to the shared `http.DefaultTransport`, which `Close` leaves alone).
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Heroku. Without `WithHTTPClient` it releases nothing: this provider builds no default client of its own to hold onto. A client injected with `WithHTTPClient` is never closed: `Close` may return its idle connections to the pool, but leaves the client usable.
 
 Verified against an in-process HTTP fake, so the conformance kit runs without a Heroku account. Nobody on this project has one, so the wire shape follows the published Platform API reference rather than a live capture, and the `//go:build integration` tests are how the first person with a token confirms it.

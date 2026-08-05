@@ -58,9 +58,11 @@ What it catches is narrower and easy to miss otherwise: a provider that strips, 
 
 ## `Close`
 
-If your provider type-asserts to `io.Closer`, the kit runs the Close contract automatically; a provider with no `Close` method skips this case rather than failing it. Two things are checked: `testCloser` builds a fresh provider and closes it without resolving first (must not dial or panic), then resolves once, closes, closes again (idempotent), and asserts the next `Resolve` refuses locally and fast with `errors.Is(err, mamori.ErrUnavailable)` rather than rebuilding the client it was just told to release. `testCloseDuringResolve` races `Close` against a batch of in-flight resolves under `-race`; any individual resolve may succeed or fail, but none may panic or race.
+Give your provider a `Close` method and the kit runs the [Close contract](/docs/writing-a-provider/#the-contract) against it. A provider without one skips this case rather than failing it, so there is nothing to configure either way.
 
-What the kit cannot check generically is rule five of the [contract](/docs/writing-a-provider/#the-contract): that `Close` never closes a client the caller injected. `Config` has no generic notion of "the client I handed you," so that guarantee needs its own unit test per provider, alongside the SDK-mapping table test `ErrorClassification` already asks for.
+It closes a provider that has never resolved (which must not dial or panic), then resolves, closes twice, and checks that the next `Resolve` refuses locally and fast with `errors.Is(err, mamori.ErrUnavailable)` rather than quietly rebuilding the client it was just told to release. Both a slow refusal and the right error for the wrong reason fail here: a provider that redials a dead backend also reports unavailable, so the case bounds how long the refusal may take. It then races `Close` against resolves already in flight, which is why this case is worth running under `-race`.
+
+One rule it cannot check for you is the last one in the contract: that `Close` leaves a client the caller injected open. The kit has no way to know which client you were handed, so that one needs a unit test in your own package.
 
 ## Build and test the module
 

@@ -167,17 +167,13 @@ flag tracker's event listeners. A client injected with `WithClient` belongs to
 the caller and is left connected; `New` followed by `Close` with no prior
 `Resolve` never connects, so there is nothing to release.
 
-A `Watch` that was **already running** when `Close` was called is a different
-case and is **not** covered by that guarantee. `Close` never reaches into a
-running watch to end it, and the flag-change listener captured its client
-before the loop started, so it never passes the closed check again; what it
-does from there is decided by the closed SDK client, not by this provider, and
-it is not guaranteed to report `mamori.ErrUnavailable`. A watch running on a
-client injected with `WithClient` is unaffected, since `Close` never touches
-that client. Cancelling the watch's own context is the only reliable way to
-shut it down. See
-[Close does not stop a Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
-for the shapes this takes across providers.
+`Close` does not stop a `Watch` that is already running. What it does next is
+decided by the closed SDK client rather than by this provider, so it is not
+guaranteed to report `mamori.ErrUnavailable`. A watch running on a client
+injected with `WithClient` is unaffected, since `Close` never touches that
+client. Cancel the watch's own context to stop it. [Close does not stop a
+Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
+compares every provider.
 
 ## Native watch (streaming flag tracker)
 

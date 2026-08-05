@@ -34,7 +34,9 @@ Providers that hold no releasable handle (`env:`, `file://`, `aws-sm://`, and ot
 
 ### Which providers get a Close
 
-A provider earns a `Close` method when it holds a releasable resource: a dialed connection, a pool, a streaming client, a background refresh goroutine. `providers/sqlite` is the one deliberate exception. It opens and closes a fresh `*sql.DB` inside every `Resolve`, so it holds nothing between calls, yet it still ships a terminal-only `Close`: it sits beside `providers/postgres` and `providers/mysql`, and a caller sweeping `Close` across the database providers at shutdown would be surprised to find sqlite alone still serving. So the rule is: a provider gets `Close` when it holds a releasable resource, or when its siblings do.
+A provider has a `Close` method when it holds a releasable resource: a dialed connection, a pool, a streaming client, a background refresh goroutine. If you are writing one, that is the test to apply.
+
+Calling `Close` is always safe where it exists, even when the provider had nothing to release. `sqlite` is the case in point: it opens and closes a connection inside every `Resolve`, so it holds nothing between calls, but it still has a `Close` so that shutting down every database provider together does what you expect.
 
 ### The contract
 
@@ -46,16 +48,31 @@ A provider `Close` is:
 - **Terminal.** After `Close`, `Resolve` returns an error satisfying `errors.Is(err, mamori.ErrUnavailable)`, locally and fast, without touching the backend.
 - **Never the owner of an injected client.** A pool or client passed in through an option such as `WithPool`, `WithDB`, `WithClient` or `WithHTTPClient` belongs to the caller. Track what you built yourself and release only that.
 
-`io.Closer` is how the [conformance kit](/docs/writing-a-provider/conformance/) discovers that a provider holds a releasable resource; that type assertion is `providertest`'s job, not core's. mamori itself never asserts a `Provider` for `io.Closer` and never calls `Close` - only the caller who constructed the provider does.
+Use stdlib `io.Closer` rather than a mamori-specific interface. The [conformance kit](/docs/writing-a-provider/conformance/) picks it up from there and checks the first four rules for you.
 
 ### Close does not stop a Watch
 
-`Close` and a running `Watch` are two independent shutdown paths, on purpose. Cancelling a watch's `context.Context` is the only thing meant to stop it; giving `Close` a second, competing way to end a watch would create an ordering question with no good answer. So `Close` never deliberately reaches into an in-flight `Watch` to end it. What actually happens to that watch once the provider closes, though, is not one behavior - it is worth knowing which of these your provider does rather than assuming the comfortable case:
+`Close` never ends a `Watch` that is already running. Cancel the watch's context to stop it, and do that before you close the provider:
 
-- **Polling watches degrade to an error stream.** `pollWatch`'s loop resolves on every tick through the same closed-gated accessor `Resolve` uses, so a post-`Close` tick reports `mamori.ErrUnavailable`, emits it as `Update{Err: err}`, and the loop keeps polling and keeps erroring until its own context is cancelled.
-- **postgres depends on which pool it is watching through.** Its `Watch` captures its backend once via `backendFor`, before the loop starts, and every cycle after that calls the backend directly - it never re-enters `backendFor` and so never passes the closed gate again. With a self-opened pool, `Close` closes that pool, but only its idle connections; the `LISTEN` connection the watch already holds survives and keeps receiving `NOTIFY`s, so each cycle's follow-up `SELECT` fails to acquire a connection instead, with an error that `classifyPostgres` passes through unclassified rather than mapping to `mamori.ErrUnavailable` - a real error stream, just not the sentinel a reader would reasonably check for. With a pool injected through `WithPool`, `Close` never touches it at all, so the watch keeps serving live values, the same shape as k8s below.
-- **etcd and redis are worse than an error stream, when the client is self-dialed.** `Close` only tears down a client this provider dialed itself (`WithClient` leaves an injected client untouched, and that watch keeps delivering live events same as postgres's injected-pool case). On a self-dialed client, though, closing it closes every open watch channel (etcd) or ends the subscription's channel (redis). Both providers' watch loops treat a closed channel as a plain, silent return, with no error emitted - and mamori's own reconciler forwarder does the same with the resulting closed `Update` channel: it returns without ever calling `OnError`. So a watch on a self-dialed etcd or redis client that is already running when `Close` runs usually goes silently dead: `Get()` keeps serving the stale value, with nothing to distinguish "closed out from under you" from "quietly healthy" until you separately cancel that watch's own context. (etcd can, less commonly, deliver one final `Update{Err: ...}` first if its internal watch loop happens to exit through its error path rather than its context-done path - the silent case dominates but is not a guarantee.)
-- **k8s goes the other way: it keeps serving live values.** Its `Watch` captures its own clientset reference once, before the loop starts, and delivers `Added`/`Modified` events straight from the watch stream without ever revisiting the closed-gated accessor. `Close` on this provider also never invalidates that clientset - it only evicts idle HTTP connections, which redial on demand. So a k8s watch that was already running keeps reporting real cluster changes after `Close`, indefinitely (only the snapshot re-emitted each time the watch reconnects goes through `Resolve`, and will report `mamori.ErrUnavailable` there without ending the watch).
+```go
+ctx, cancel := context.WithCancel(context.Background())
+w, err := mamori.Watch[Config](ctx, mamori.WithProvider(p))
+// ...
+cancel()    // stops the watch
+w.Close()   // releases what mamori created
+p.Close()   // releases what you created
+```
+
+Close the provider while its watch is still running and the watch does not stop; what it does instead depends on the provider. One of the outcomes is silent, which is the reason to care:
+
+| What you see afterwards | Which providers |
+| --- | --- |
+| Errors arrive at your error handler and keep arriving | Any provider mamori polls, which is most of them |
+| Live values keep arriving, as if nothing had happened | k8s, and any provider whose client or pool you injected yourself with `WithClient` or `WithPool` |
+| Errors arrive, but carry the backend's own error rather than `mamori.ErrUnavailable`, so a check on that sentinel misses them | postgres, on a pool it opened itself |
+| Nothing arrives. Your error handler never fires and `Get()` keeps serving the last value indefinitely | etcd and redis, on a client they dialed themselves |
+
+That is a difference between providers rather than a promise mamori makes, so check the page of any provider not named here instead of assuming. Cancelling the context is the one shutdown path that behaves the same everywhere.
 
 This is a genuine, known inconsistency across providers, not a documented guarantee - do not assume a comfortable middle ground for a provider not named above without reading its `Watch` for yourself. The one thing true everywhere: cancelling the watch's own context is the only shutdown path you can rely on. Never reach for `Close` to stop a `Watch`.
 
