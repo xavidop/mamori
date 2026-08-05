@@ -597,6 +597,15 @@ func TestResolveAfterCloseIsUnavailable(t *testing.T) {
 // Disconnect already happened, and nil if this is the first one - which is
 // what proves Provider.Close left the injected client alone.
 //
+// resolveBackend is called directly, before Close, to force its
+// "if p.client != nil" branch (mongodb.go) to actually run - the same branch
+// a real Resolve would take. Without that call the injected-client build site
+// is never reached, and the p.ownClient assertion below cannot fail even if
+// that branch wrongly set p.ownClient = true (a real bug: it would make Close
+// disconnect every WithClient caller's client the first time anything
+// resolved through it). It builds no real connection - mongoBackend wraps the
+// client as-is - so this needs no reachable server either.
+//
 // It also proves the other half of rule 5's ordering requirement - that Close
 // still marks the provider closed on the not-owned path - since a Close that
 // returned early here (skipping p.closed = true to avoid touching the
@@ -612,6 +621,13 @@ func TestCloseDoesNotDisconnectInjectedClient(t *testing.T) {
 	}
 	p := New(WithClient(client), WithDatabase("app"))
 
+	if _, err := p.resolveBackend(context.Background()); err != nil {
+		t.Fatalf("resolveBackend: %v", err)
+	}
+	if p.ownClient {
+		t.Fatal("resolveBackend claimed ownership of a client injected via WithClient")
+	}
+
 	if err := p.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -625,6 +641,42 @@ func TestCloseDoesNotDisconnectInjectedClient(t *testing.T) {
 
 	if _, err := p.Resolve(context.Background(), mustRef(t, "mongodb://cfg/a#value")); !errors.Is(err, mamori.ErrUnavailable) {
 		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
+	}
+}
+
+// TestCloseReleasesSelfBuiltClient is the positive half of rule 5's ownership
+// tracking, the mirror image of TestCloseDoesNotDisconnectInjectedClient
+// above: a client this provider dialed itself must actually be released, not
+// merely left alone. Without this, deleting "p.ownClient = true" from
+// resolveBackend's dial branch (mongodb.go) leaves every other test in this
+// file green, since none of them ever force that branch and then check the
+// client came back released.
+func TestCloseReleasesSelfBuiltClient(t *testing.T) {
+	p := New(WithURI("mongodb://203.0.113.1:27017"), WithDatabase("app"))
+
+	// resolveBackend's dial branch calls mongo.Connect, which never dials
+	// synchronously, so this reaches the p.ownClient = true build site without
+	// a reachable server.
+	if _, err := p.resolveBackend(context.Background()); err != nil {
+		t.Fatalf("resolveBackend: %v", err)
+	}
+	if !p.ownClient {
+		t.Fatal("resolveBackend did not claim ownership of the client it dialed")
+	}
+	client := p.client
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The provider-built client must actually have been disconnected: calling
+	// Disconnect on it ourselves now must report mongo.ErrClientDisconnected,
+	// not nil.
+	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Disconnect(dctx); !errors.Is(err, mongo.ErrClientDisconnected) {
+		t.Fatalf("self-built client Disconnect after provider Close: %v; want mongo.ErrClientDisconnected "+
+			"(a nil or different error here means Provider.Close did not actually disconnect it)", err)
 	}
 }
 
