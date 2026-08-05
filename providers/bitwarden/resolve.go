@@ -43,6 +43,12 @@ type secretResponse struct {
 // signal (a re-encryption changes it) and is safe to hold as a version string
 // because it is not the plaintext.
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return mamori.Value{}, fmt.Errorf("bitwarden: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.err != nil {
 		return mamori.Value{}, p.err
 	}

@@ -65,6 +65,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xavidop/mamori"
@@ -101,6 +102,13 @@ type Provider struct {
 	// as a classified error from the first Resolve, which is where
 	// `mamori doctor` looks.
 	err error
+	// httpClient is config.httpClient, held here only so Close can release its
+	// idle connections. It is never used to build a request directly; sess and
+	// api (each built from it) are.
+	httpClient *http.Client
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // Option configures a Provider.
@@ -224,10 +232,10 @@ func New(opts ...Option) *Provider {
 	}
 
 	if err := checkScheme("identity URL", c.identityURL, c.allowInsecure); err != nil {
-		return &Provider{err: err}
+		return &Provider{err: err, httpClient: c.httpClient}
 	}
 	if err := checkScheme("API URL", c.apiURL, c.allowInsecure); err != nil {
-		return &Provider{err: err}
+		return &Provider{err: err, httpClient: c.httpClient}
 	}
 
 	identity, err := httpcore.New(httpcore.Config{
@@ -245,7 +253,7 @@ func New(opts ...Option) *Provider {
 		ErrorDetail: identityErrorDetail,
 	})
 	if err != nil {
-		return &Provider{err: fmt.Errorf("bitwarden: identity URL: %w", err)}
+		return &Provider{err: fmt.Errorf("bitwarden: identity URL: %w", err), httpClient: c.httpClient}
 	}
 
 	sess := &session{
@@ -266,10 +274,10 @@ func New(opts ...Option) *Provider {
 		// error shape has been established as free of it.
 	})
 	if err != nil {
-		return &Provider{err: fmt.Errorf("bitwarden: API URL: %w", err)}
+		return &Provider{err: fmt.Errorf("bitwarden: API URL: %w", err), httpClient: c.httpClient}
 	}
 
-	return &Provider{sess: sess, api: api}
+	return &Provider{sess: sess, api: api, httpClient: c.httpClient}
 }
 
 // identityErrorDetail extracts RFC 6749's "error" code from a rejected token
@@ -317,6 +325,26 @@ func init() { mamori.Register(New()) }
 
 // Scheme returns "bitwarden-sm".
 func (p *Provider) Scheme() string { return scheme }
+
+// Close marks the provider closed and returns its idle HTTP connections to the
+// pool. It is idempotent, and afterwards Resolve reports
+// errors.Is(err, mamori.ErrUnavailable) locally, without contacting Bitwarden.
+//
+// A client supplied through WithHTTPClient is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the caller's
+// own use of that client is unaffected by closing this provider. This is safe
+// even on a Provider built from a failed New (p.err set, httpClient still
+// recorded): Close never dials, so there is nothing for the earlier failure to
+// have left half-done.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.httpClient != nil {
+		p.httpClient.CloseIdleConnections()
+	}
+	return nil
+}
 
 // Ensure Provider satisfies the core interface at compile time. Watch is
 // deliberately absent; see the package doc.
