@@ -396,3 +396,57 @@ func mustRef(t *testing.T, s string) mamori.Ref {
 	}
 	return ref
 }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract. The factory records every call, so the assertion is not that the
+// post-close Resolve was merely slow or merely failed, but that no client was
+// built at all: without the closed guard, Close's nil backend reads as "not yet
+// created" and the next Resolve dials Firestore on ambient credentials.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	store := newFakeStore()
+	store.set("config", "app", map[string]interface{}{"host": "db.internal"})
+	var calls int
+	p := New()
+	p.newBackend = func(context.Context) (backend, error) {
+		calls++
+		return store, nil
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "firestore://config/app")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "firestore://config/app")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+	// Watch shares the same accessor, so it is terminal for the same reason.
+	if _, err := p.Watch(context.Background(), mustRef(t, "firestore://config/app")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Watch after Close = %v; want ErrUnavailable", err)
+	}
+	if calls != 1 {
+		t.Fatalf("factory called %d times, want 1: a closed provider rebuilt its client", calls)
+	}
+}
+
+// TestCloseWithoutResolveDoesNotBuildAClient covers the other lifecycle: a
+// configured-but-unused provider is closed without ever having dialed.
+func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
+	var calls int
+	p := New()
+	p.newBackend = func(context.Context) (backend, error) {
+		calls++
+		return newFakeStore(), nil
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory called %d times, want 0", calls)
+	}
+}

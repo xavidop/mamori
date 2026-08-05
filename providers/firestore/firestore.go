@@ -93,6 +93,12 @@ type Provider struct {
 
 	mu      sync.Mutex
 	backend backend
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it the nil backend Close leaves behind is indistinguishable from one that
+	// was never built, and the next Resolve or Watch would silently dial
+	// Firestore on ambient credentials to rebuild what it was just told to
+	// release.
+	closed bool
 	// newBackend builds the backing backend on first use. Overridable in tests.
 	newBackend func(ctx context.Context) (backend, error)
 }
@@ -156,10 +162,14 @@ func init() { mamori.Register(New()) }
 func (p *Provider) Scheme() string { return scheme }
 
 // getBackend returns the backing backend, creating it lazily on first use.
-// Concurrent callers share one backend.
+// Concurrent callers share one backend. A closed provider is refused here,
+// before the nil check, so no client is ever rebuilt after Close.
 func (p *Provider) getBackend(ctx context.Context) (backend, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("firestore: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.backend != nil {
 		return p.backend, nil
 	}
@@ -174,10 +184,17 @@ func (p *Provider) getBackend(ctx context.Context) (backend, error) {
 	return b, nil
 }
 
-// Close releases the backing client, if one has been created.
+// Close releases the backing client, if one has been created. It is terminal:
+// every later Resolve or Watch reports unavailable without touching the
+// backend. Calling it more than once, or on a provider that never resolved, is
+// a no-op.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if p.backend == nil {
 		return nil
 	}
