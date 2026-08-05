@@ -126,6 +126,7 @@ type Provider struct {
 	mu         sync.Mutex
 	be         backend // resolved backend (injected or lazily built)
 	newBackend func(ctx context.Context, dbURL, projectID string, sse httpcore.SSEConfig) (backend, error)
+	closed     bool
 }
 
 // Option configures a Provider.
@@ -215,11 +216,40 @@ func init() { mamori.Register(New()) }
 // Scheme returns "firebase-rtdb".
 func (p *Provider) Scheme() string { return scheme }
 
+// Close marks the provider closed. Afterwards Resolve and Watch report
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed
+// check getBackend already applies, without contacting the database. It is
+// idempotent and safe to call on a provider that never resolved.
+//
+// It sets the flag only, and deliberately adds no second teardown path. A
+// stream Watch opens is owned end to end by that watch's own goroutine (see
+// consume, whose defer always closes it), and context cancellation is
+// already the single, sufficient way to end a watch; closing a stream from
+// here as well would race the shutdown that already exists rather than
+// improve on it. There is also nothing else to release: this provider holds
+// no WithHTTPClient option and no *http.Client of its own to call
+// CloseIdleConnections on - the one sdkBackend builds lives inside sdk.go,
+// private to the SDK-backed implementation, and is never a client a caller
+// injected.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	return nil
+}
+
 // getBackend returns the backing backend, building it lazily on first use.
 // Concurrent callers share one backend.
+//
+// The closed check runs first, ahead of the p.be != nil cache check, so a
+// closed provider refuses locally even when a backend built before Close is
+// still sitting in p.be.
 func (p *Provider) getBackend(ctx context.Context) (backend, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: firebase-rtdb: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.be != nil {
 		return p.be, nil
 	}
