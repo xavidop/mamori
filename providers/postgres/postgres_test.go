@@ -686,12 +686,29 @@ func TestWatchRejectsMaliciousChannel(t *testing.T) {
 // --- Close ---
 
 // TestCloseWithoutResolveNeverDials pins the "safe with no prior use" half of
-// the Close contract: a provider configured for a DSN but never resolved has
-// no pool at all, so Close must not build one just to tear it down. The DSN
-// points at 203.0.113.1, a TEST-NET-3 address reserved for documentation (RFC
-// 5737) that nothing routes to; if backendFor were reached here, a dial
-// attempt would hang or error rather than succeed, and this test would fail
-// or time out instead of passing quickly.
+// the Close contract, but be precise about what it does and does not prove.
+// What it proves: Close() on a never-resolved provider returns without error
+// and without panicking, twice. Because Close operates on p.ownPool directly
+// and never calls backendFor, that is true here regardless of the DSN.
+//
+// What it does NOT prove, despite the black-hole DSN below: that reaching
+// backendFor from Close would hang or error. It would not. pgxpool.New (pgx
+// v5.10.0, pgxpool/pool.go:210-339,568-593) never dials synchronously -
+// puddle builds a connection lazily on first Acquire, and the background
+// createIdleResources goroutine is a no-op with the default MinConns/
+// MinIdleConns of 0, which this DSN does not change. A defective Close that
+// called backendFor before setting p.closed would still return from
+// pgxpool.New in well under a millisecond with no error, so a wall-clock or
+// error-based assertion here cannot tell a correct Close from that
+// regression - this test would pass either way.
+//
+// TestResolveAfterCloseIsUnavailable, immediately below, is the test with
+// real teeth against that regression: it goes on to call Resolve, which -
+// if the closed check in backendFor were skipped or misordered - would
+// force a genuine QueryRow/Acquire dial to this same black-hole address
+// under a context with no deadline, hanging or erroring rather than
+// returning ErrUnavailable in microseconds. That is what actually protects
+// rule 2 end to end; this test only protects Close() in isolation.
 func TestCloseWithoutResolveNeverDials(t *testing.T) {
 	p := New(WithDSN("postgres://user:pw@203.0.113.1:5432/db"))
 	if err := p.Close(); err != nil {
@@ -705,7 +722,11 @@ func TestCloseWithoutResolveNeverDials(t *testing.T) {
 // TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
 // once Close has run, Resolve must refuse locally (via the p.closed check in
 // backendFor) rather than lazily building a pool from the DSN and dialing the
-// black-hole address.
+// black-hole address. Unlike TestCloseWithoutResolveNeverDials above, this
+// test has real teeth against a broken closed-check: with no deadline on the
+// context, a defective ordering would hang this test (or fail slowly) rather
+// than pass instantly for the wrong reason, because it exercises Resolve, not
+// just Close, and Resolve is the path that actually reaches QueryRow/Acquire.
 func TestResolveAfterCloseIsUnavailable(t *testing.T) {
 	p := New(WithDSN("postgres://user:pw@203.0.113.1:5432/db"))
 	if err := p.Close(); err != nil {

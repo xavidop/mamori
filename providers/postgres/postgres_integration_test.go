@@ -142,3 +142,53 @@ func TestIntegrationResolveWatchAndVersionColumn(t *testing.T) {
 		t.Fatal("LISTEN/NOTIFY watch did not deliver the update")
 	}
 }
+
+// TestIntegrationCloseReleasesLazilyBuiltPool exercises the one line in Close
+// that actually releases a live OS resource: p.ownPool.Close() on a pool
+// backendFor built itself. Nothing else in this package's Close coverage
+// reaches that line: the unit tests in postgres_test.go inject a fakeBackend
+// with no real pool, and TestIntegrationConformance and
+// TestIntegrationResolveWatchAndVersionColumn above both construct via
+// WithPool, which hands the provider an already-built pool and bypasses
+// backendFor's lazy-construction path entirely.
+//
+// This test constructs with WithDSN instead, so Resolve forces backendFor to
+// build the pool itself, then reads the unexported p.ownPool field - valid
+// here because this file, like postgres_test.go, is package postgres - to
+// get a handle on the exact pool Close is responsible for releasing. It
+// deliberately does not treat that field read as the proof of release: the
+// assertion after Close is behavioral, against the pool's own public API
+// (Acquire), not against Provider's internal state.
+func TestIntegrationCloseReleasesLazilyBuiltPool(t *testing.T) {
+	admin := livePool(t)
+	table := fmt.Sprintf("mamori_it_close_%d", time.Now().UnixNano())
+	setupTable(t, admin, table)
+	if err := upsert(admin, table)(context.Background(), "k", "v"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	p := New(WithDSN(dsn))
+	ref := mustRef(t, "postgres://"+table+"/k")
+
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("Resolve to force the lazy pool build: %v", err)
+	}
+
+	pool := p.ownPool
+	if pool == nil {
+		t.Fatal("backendFor did not record an owned pool; nothing for this test to verify")
+	}
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// A closed pgxpool.Pool refuses Acquire locally (puddle.ErrClosedPool)
+	// rather than dialing, so this is a fast, live assertion that Close
+	// actually released the pool object, not merely that Provider's own
+	// bookkeeping (p.ownPool, p.be) was zeroed out.
+	if _, err := pool.Acquire(context.Background()); err == nil {
+		t.Fatal("pool.Acquire succeeded after provider Close; want the underlying pool released")
+	}
+}
