@@ -53,13 +53,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer srv.Close()
+	defer srv.Close() // releases the server's own resources, never the providers
 
 	if err := srv.Serve(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
 ```
+
+`srv.Close()` releases only what the server itself created: its listeners, its
+upstream watch goroutines, and its contexts. A provider passed in through
+`server.WithProvider` is **not** one of them - it belongs to whoever
+constructed it, exactly as under `mamori.WithProvider`, and the server never
+closes it. That matters here more than anywhere else: this is a long-lived
+operator process fanning out to backends, so it is a likely place to be
+holding a provider with a real connection (postgres, redis, mongodb, etcd,
+...). Close those yourself, after `srv.Close()`. See
+[Who closes a provider](https://mamorigo.dev/docs/writing-a-provider/#who-closes-a-provider).
 
 A client reads a value over the v1 wire protocol:
 

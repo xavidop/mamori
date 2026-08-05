@@ -69,6 +69,8 @@ func main() {
 
 `New` starts nothing: it validates every security invariant (a `Policy` is configured, auth is configured or `NoAuth()` is explicit, `NoAuth()` is never combined with TCP, every binding parses and passes its scheme gate) and returns a `*Server`. `Serve(ctx)` begins upstream watching, binds every transport, and blocks until a listener fails or the server is closed. `Close()` is idempotent and safe even if `Serve` never ran, so defer it unconditionally right after `New`.
 
+`Close()` releases only what the server itself created: its listeners, its upstream watch goroutines, and its contexts. A provider passed in through `server.WithProvider` is **not** one of them. It belongs to whoever constructed it, exactly as under `mamori.WithProvider`, and the server never asserts it for `io.Closer` and never closes it. That is worth spelling out here more than anywhere else, because this is a long-lived operator process fanning out to backends, so it is a likely place to be holding a provider with a real connection behind it (`postgres`, `redis`, `mongodb`, `etcd`, ...). Close those yourself, after `srv.Close()`. See [Who closes a provider](/docs/writing-a-provider/#who-closes-a-provider).
+
 A client resolves a binding through the `mamori://` provider ([mamoriprov](/docs/providers/mamori/)):
 
 ```go

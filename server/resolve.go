@@ -377,6 +377,13 @@ func (s *Server) readiness() (state string, ready bool) {
 // be calling lookup (resolve.go) while the resolver goroutines it reads from
 // are being canceled underneath it.
 //
+// Close releases only what this Server created. A provider handed to it
+// through WithProvider is NOT one of those things: it belongs to whoever
+// constructed it, exactly as it does under mamori.WithProvider, and this
+// Server never asserts it for io.Closer and never calls Close on it. A
+// long-lived operator process holding, say, a postgres or redis provider
+// must close that provider itself, separately from and after this Close.
+//
 // It is idempotent and safe to call even if Serve/start was never called at
 // all: closeTransports is a no-op with no listeners bound, and resolveCancel
 // is nil with nothing to cancel or wait for - so a caller can unconditionally
