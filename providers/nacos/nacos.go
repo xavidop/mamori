@@ -110,6 +110,8 @@ type Provider struct {
 	// the identical error, so the difference is invisible from the outside and
 	// a test written without this cannot tell the two apart.
 	builds int
+	// closed is set once by Close and never cleared. See core.
+	closed bool
 }
 
 // Option configures a Provider.
@@ -233,11 +235,36 @@ func init() { mamori.Register(New()) }
 // Scheme returns "nacos".
 func (p *Provider) Scheme() string { return scheme }
 
+// Close marks the provider closed and returns its idle HTTP connections to the
+// pool. It is idempotent, and afterwards Resolve and Watch report
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
+// core already applies, without contacting the Nacos server.
+//
+// A client supplied through WithHTTPClient is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the caller's
+// own use of that client is unaffected by closing this provider.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.httpClient != nil {
+		p.httpClient.CloseIdleConnections()
+	}
+	return nil
+}
+
 // core returns the shared httpcore.Client, building it on first use from the
 // ambient environment overlaid with whatever options were supplied.
+//
+// The closed check runs first, ahead of the p.client != nil cache check, so a
+// closed provider refuses locally even when a client built before Close is
+// still sitting in p.client.
 func (p *Provider) core() (*httpcore.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("nacos: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.client != nil {
 		return p.client, nil
 	}
