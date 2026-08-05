@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.11.1](https://github.com/xavidop/mamori/compare/v1.11.0...v1.11.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **site:** lay the five idea cards out as three and two, not four and one ([#148](https://github.com/xavidop/mamori/issues/148)) ([7536940](https://github.com/xavidop/mamori/commit/7536940ec0a155b8e88efa64f7eb738d78e9d7de))
+
 # [1.11.0](https://github.com/xavidop/mamori/compare/v1.10.0...v1.11.0) (2026-08-04)
 
 
