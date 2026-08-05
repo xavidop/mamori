@@ -29,6 +29,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xavidop/mamori"
@@ -58,6 +59,9 @@ type Provider struct {
 	host  string
 	token string
 	hc    *http.Client
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // Option configures a Provider.
@@ -100,6 +104,24 @@ func New(opts ...Option) *Provider {
 // Scheme returns "op".
 func (p *Provider) Scheme() string { return Scheme }
 
+// Close marks the provider closed and returns its idle HTTP connections to the
+// pool. It is idempotent, and afterwards Resolve reports
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
+// clientFor already applies, without contacting Connect.
+//
+// A client supplied through WithHTTPClient is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the caller's
+// own use of that client is unaffected by closing this provider.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.hc != nil {
+		p.hc.CloseIdleConnections()
+	}
+	return nil
+}
+
 func (p *Provider) effectiveHost() string {
 	if p.host != "" {
 		return p.host
@@ -121,7 +143,17 @@ func (p *Provider) effectiveToken() string {
 // effectiveToken): caching would pin whichever pair happened to be set on the
 // first one. Construction performs no network call and reuses the provider's
 // *http.Client, so the connection pool is shared across resolves regardless.
+//
+// The closed check runs first, so a closed provider refuses locally rather
+// than building a client and reaching for the network.
 func (p *Provider) clientFor(host, token string) (*httpcore.Client, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("%w: onepassword: provider is closed", mamori.ErrUnavailable)
+	}
+
 	c, err := httpcore.New(httpcore.Config{
 		BaseURL:     strings.TrimRight(host, "/"),
 		HTTPClient:  p.hc,
