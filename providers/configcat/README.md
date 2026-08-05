@@ -64,6 +64,14 @@ It releases the underlying ConfigCat SDK client and its background auto-polling
 goroutine. This provider has no option to inject a pre-built client, so the
 client `Close` releases is always the one it built itself.
 
+**Upgrade note.** `Close` used to return nothing; it now returns `error` (always
+`nil` today, but part of the signature). `p.Close()` and `defer p.Close()` both
+still compile unchanged, since a discarded or deferred return works either way.
+What breaks: a `Close` method value assigned to a `func()` variable, and code
+that relied on `*Provider` satisfying an interface declaring `Close()` with no
+return value. Neither is a common pattern, which is why this is a plain note
+rather than a `BREAKING CHANGE` footer on the commit that made it.
+
 ## Polling / Watch
 
 ConfigCat has no push-style change notification, so this provider is **not** watchable and mamori polls it. There are two independent cadences:
