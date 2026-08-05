@@ -58,7 +58,10 @@ Implement stdlib `io.Closer`, not a mamori-specific interface, when your provide
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.closed = true // makes every later Resolve/Watch report mamori.ErrUnavailable
+	// Every later Resolve, and any Watch started after Close, now reports
+	// mamori.ErrUnavailable. A Watch already running is NOT covered by that:
+	// see "Close does not stop a Watch".
+	p.closed = true
 	if !p.ownClient || p.client == nil {
 		return nil // never built, or injected by the caller: nothing to release
 	}
@@ -67,5 +70,13 @@ func (p *Provider) Close() error {
 	return err
 }
 ```
+
+Two things about that snippet are worth spelling out.
+
+**`p.closed = true` is set unconditionally, before the ownership check.** That is the part that actually matters, and it is what makes `Close` terminal on the two paths that release nothing: a provider that never built a client, and one handed an injected client it does not own. Setting the flag after an early `return nil` on either path would leave that provider quietly alive after `Close`, still resolving against a client its caller has just been told to stop using, which is a rule-four violation whether or not any test happens to catch it.
+
+**Two prologue shapes ship in-tree, and both are correct.** Most providers do what this snippet does and rely on the nil/ownership checks for idempotency; nine (`gcp`, `gcs`, `firestore`, `mysql`, `split`, `unleash`, `growthbook`, `firebase-rc`, `configcat`) open with an explicit `if p.closed { return nil }` instead. If you read one of those and then this page, you have not found a contradiction. The snippet above is the recommended shape for a new provider, the early-return shape is fine, and the rule either must satisfy is the one above: `p.closed = true` set unconditionally before any ownership check.
+
+And note what `Close` does **not** do: it does not stop a `Watch` that is already running. Only that watch's own context does. See [Close does not stop a Watch](/docs/writing-a-provider/#close-does-not-stop-a-watch) for what each provider's already-running watch actually does once its provider closes, which is not one behavior.
 
 Next: prove it all with the [Conformance](/docs/writing-a-provider/conformance/) kit.
