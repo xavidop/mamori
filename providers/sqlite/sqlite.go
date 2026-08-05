@@ -75,6 +75,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -153,6 +154,9 @@ type Provider struct {
 	// queryerFor's real path (open the real *sql.DB, adapt it with dbQueryer) is
 	// unaffected and identical to before this seam existed.
 	decorateQueryer func(queryer) queryer
+
+	mu     sync.Mutex
+	closed bool // Close has run; every later resolve/watch reports unavailable
 }
 
 // Option configures a Provider.
@@ -257,9 +261,43 @@ func (p *Provider) open() (*sql.DB, error) {
 	return db, nil
 }
 
+// isClosed reports whether Close has run.
+func (p *Provider) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
+}
+
+// Close marks the provider closed so every later Resolve/Watch refuses
+// locally instead of opening another connection to the database file.
+//
+// There is no client-injection option for this provider (grep "^func With"
+// in this package: WithPath, WithDSN, WithVersionColumn, WithSensitive,
+// WithDebounce - none of them accepts a caller-supplied *sql.DB), so rule 5
+// (never close a caller-injected client) is vacuous here: every *sql.DB this
+// provider ever opens is its own. It is also already released well before
+// Close could ever reach it - Resolve opens a fresh *sql.DB per call and
+// closes it again before returning (see the `defer db.Close()` in Resolve),
+// so there is no persistent handle for Close to release. Close's only job is
+// therefore the closed flag itself, which is what makes every later
+// Resolve/Watch terminal. Close is idempotent and safe for concurrent use.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	return nil
+}
+
 // Resolve fetches the current value for ref. A missing row (sql.ErrNoRows) or a
 // missing #json-field yields an error satisfying errors.Is(err, mamori.ErrNotFound).
+//
+// The closed check runs first, ahead of everything else including ctx.Err(),
+// so a closed provider always refuses locally rather than opening a fresh
+// connection to the database file.
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
+	if p.isClosed() {
+		return mamori.Value{}, fmt.Errorf("%w: sqlite: provider is closed", mamori.ErrUnavailable)
+	}
 	if err := ctx.Err(); err != nil {
 		return mamori.Value{}, err
 	}
@@ -408,7 +446,13 @@ func classifySqlite(err error) error {
 // fsnotify. It emits the current value as a baseline, then re-queries and emits
 // on each (debounced) write to the file. The channel is closed and the watcher
 // released when ctx is cancelled; the goroutine never leaks.
+//
+// A closed provider refuses here too, before an fsnotify watcher is ever
+// created, so Close is terminal for Watch as well as Resolve.
 func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Update, error) {
+	if p.isClosed() {
+		return nil, fmt.Errorf("%w: sqlite: provider is closed", mamori.ErrUnavailable)
+	}
 	path := p.filePath()
 	if path == "" {
 		return nil, errors.New("sqlite: cannot watch without a file path; use sqlite.WithPath or set SQLITE_PATH")

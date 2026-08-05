@@ -449,6 +449,51 @@ func TestIdentifierAllowlistRejectsInjection(t *testing.T) {
 	}
 }
 
+// --- Close ---
+//
+// sqlite has no client-injection option (see Close's doc comment), so rule 5
+// is vacuous for this provider: there is no "caller-injected" path to prove
+// untouched. These tests cover the two halves of the contract that do apply -
+// safe with no prior use, and terminal after Close - not ownership.
+
+// TestCloseWithoutUseIsSafe pins the "safe with no prior use" half of the
+// Close contract: Close on a provider that never resolved must not touch the
+// filesystem and must not panic, and a second Close must stay clean.
+func TestCloseWithoutUseIsSafe(t *testing.T) {
+	p := New()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.isClosed check
+// at the top of Resolve) rather than opening a fresh connection to the
+// database file it was told to stop using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	path := newKVTable(t, "cfg")
+	if err := writeKV(path, "cfg", "k", "v"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	p := New(WithPath(path))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "sqlite://cfg/k")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "sqlite://cfg/k")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
 func TestValidIdent(t *testing.T) {
 	good := []string{"key", "value", "my_table", "_x", "Col123", "V"}
 	bad := []string{"", "1abc", "has space", "a;b", "a-b", `a"b`, "a.b", "a)b", "table--", "a b; DROP"}
