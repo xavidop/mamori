@@ -36,6 +36,12 @@ const features = [
   },
 ];
 
+// The heading below counts these cards rather than stating a number somebody has
+// to remember to change: it read "Four ideas, composed." for as long as the fifth
+// card had been sitting under it. Same reasoning as the category counts below.
+const numberWords = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+const featureCount = numberWords[features.length] ?? String(features.length);
+
 // Providers are summarized on the landing by category; the full gallery lives in
 // the docs. Each card links to a representative provider page.
 //
@@ -169,10 +175,10 @@ const operational = [
     <div class="wrap">
       <div class="section__head">
         <span class="eyebrow">principles</span>
-        <h2>Four ideas, composed.</h2>
+        <h2>{featureCount} ideas, composed.</h2>
         <p>Each does one thing, through a well-defined interface, testable on its own.</p>
       </div>
-      <div class="features">
+      <div class="features features--ideas">
         {
           features.map((f) => (
             <article class="card feature">
@@ -516,6 +522,42 @@ cfg := w.<span class="f">Get</span>() <span class="c">// lock-free; always the l
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 1.1rem;
+  }
+  /* An odd number of cards leaves the last one stranded in a row of its own on
+     the default auto-fit track list, which reads as a mistake rather than a
+     card. Laying the ideas out on six columns lets five of them fill two whole
+     rows: three at two columns each, then two at three. The wider bottom pair
+     also absorbs the longest copy, so the row heights stay close. */
+  .features--ideas {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .features--ideas > * {
+    grid-column: span 2;
+  }
+  .features--ideas > *:nth-child(n + 4) {
+    grid-column: span 3;
+  }
+  /* Two up, with the last card spanning the pair so it is never orphaned. */
+  @media (max-width: 1024px) {
+    .features--ideas {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .features--ideas > *,
+    .features--ideas > *:nth-child(n + 4) {
+      grid-column: span 1;
+    }
+    .features--ideas > *:last-child {
+      grid-column: span 2;
+    }
+  }
+  @media (max-width: 640px) {
+    .features--ideas {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .features--ideas > *,
+    .features--ideas > *:last-child {
+      grid-column: span 1;
+    }
   }
   .feature__k {
     font-family: var(--font-mono);
