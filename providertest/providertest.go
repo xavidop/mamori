@@ -536,6 +536,17 @@ func checkCloserContract(newProvider func() mamori.Provider, ref mamori.Ref) err
 	if !ok {
 		return errors.New("Config.New returned an io.Closer once and a non-closer the next call")
 	}
+	// Release p on the failure paths below too. The Resolve on line 553 has to
+	// succeed before anything closes p, so a provider whose client was already
+	// built would otherwise keep its connection and goroutine for the rest of
+	// the suite. NoGoroutineLeak runs last, against the snapshot Run took, so
+	// that stranded goroutine surfaces as a second, unrelated-looking failure
+	// and the author reads the leak report instead of the contract error that
+	// caused it. Idempotency is required by this same contract, and the
+	// assertions below call Close explicitly, so the extra call is a no-op on
+	// the passing path. The error is dropped because the explicit calls are
+	// what report it.
+	defer func() { _ = closer.Close() }()
 
 	// Everything below runs against a provider that has resolved once, which is
 	// the lifecycle that matters and the one a cold instance cannot stand in
