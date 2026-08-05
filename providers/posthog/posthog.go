@@ -221,8 +221,9 @@ type Provider struct {
 	httpClient       *http.Client
 	maxBody          int64
 
-	mu  sync.Mutex
-	cli *httpcore.Client
+	mu     sync.Mutex
+	cli    *httpcore.Client
+	closed bool
 }
 
 // Option configures a Provider.
@@ -328,9 +329,16 @@ func (p *Provider) Scheme() string { return scheme }
 
 // client returns the HTTP client, building it lazily from the configured host
 // on first use. Concurrent callers share one client.
+//
+// The closed check runs first, ahead of the p.cli != nil cache check, so a
+// closed provider refuses locally even when a client built before Close is
+// still sitting in p.cli.
 func (p *Provider) client() (*httpcore.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("mamori/posthog: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.cli != nil {
 		return p.cli, nil
 	}
@@ -355,6 +363,24 @@ func (p *Provider) client() (*httpcore.Client, error) {
 	}
 	p.cli = c
 	return c, nil
+}
+
+// Close marks the provider closed and returns its idle HTTP connections to the
+// pool. It is idempotent, and afterwards Resolve reports
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
+// client already applies, without contacting PostHog.
+//
+// A client supplied through WithHTTPClient is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the caller's
+// own use of that client is unaffected by closing this provider.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.httpClient != nil {
+		p.httpClient.CloseIdleConnections()
+	}
+	return nil
 }
 
 // projectAPIKey returns the configured project API key, falling back to
