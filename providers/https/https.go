@@ -41,6 +41,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/providers/httpcore"
@@ -91,12 +92,21 @@ type endpoint struct {
 	header    http.Header
 	sensitive bool
 	reval     *httpcore.Revalidator
+	// client is Endpoint.Client verbatim (nil when the caller left it unset,
+	// in which case httpcore.New built its own internal default that this
+	// package holds no reference to). It is kept only so Close can release its
+	// idle connections; every actual request goes through reval, not this
+	// field directly.
+	client *http.Client
 }
 
 // Provider resolves https:// refs against registered endpoints. It is safe for
 // concurrent use.
 type Provider struct {
 	endpoints map[string]*endpoint
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // New validates endpoints and returns a Provider. Register it with
@@ -177,6 +187,7 @@ func New(endpoints ...Endpoint) (*Provider, error) {
 			header:    e.Header.Clone(),
 			sensitive: e.Sensitive,
 			reval:     httpcore.NewRevalidator(client, 0),
+			client:    e.Client,
 		}
 	}
 	return &Provider{endpoints: out}, nil
@@ -204,3 +215,26 @@ func cloneQuery(v url.Values) url.Values {
 
 // Scheme returns "https".
 func (p *Provider) Scheme() string { return scheme }
+
+// Close marks the provider closed and returns each endpoint's idle HTTP
+// connections to its pool. It is idempotent, and afterwards Resolve reports
+// errors.Is(err, mamori.ErrUnavailable) locally, without contacting any
+// endpoint.
+//
+// An Endpoint.Client the caller supplied is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the
+// caller's own use of that client is unaffected by closing this provider. An
+// endpoint left with no Client uses an internal default httpcore.New built
+// for it, which this package holds no reference to and therefore cannot
+// (and need not) release here.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	for _, ep := range p.endpoints {
+		if ep.client != nil {
+			ep.client.CloseIdleConnections()
+		}
+	}
+	return nil
+}

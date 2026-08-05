@@ -28,6 +28,13 @@ import (
 // Query options are passed through untouched. Decoding a resolved value is
 // core's job, not a provider's.
 func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return mamori.Value{}, fmt.Errorf("https: provider is closed: %w", mamori.ErrUnavailable)
+	}
+
 	name, path := splitEndpoint(ref.Path)
 	ep, ok := p.endpoints[name]
 	if !ok {
