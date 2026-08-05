@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"testing"
 
 	"github.com/xavidop/mamori"
@@ -145,5 +146,63 @@ func TestCloseReleasesIdleConnections(t *testing.T) {
 	}
 	if ct.closes != 3 {
 		t.Fatalf("CloseIdleConnections called %d times, want 3 (one per shared endpoint reference)", ct.closes)
+	}
+}
+
+// connReused issues one GET against target through http.DefaultClient and
+// reports whether the round trip reused a pooled connection rather than
+// dialing a new one.
+func connReused(t *testing.T, target string) bool {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	var reused bool
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	_ = resp.Body.Close()
+	return reused
+}
+
+// TestCloseDoesNotEvictTheSharedDefaultTransport pins the second half of the
+// nil-Transport guard, the half this provider's own endpoint defaults never
+// exercise: newEndpoints always gives its own default client a real
+// *http.Transport built from the parsed endpoint (see the fix commit's doc
+// comment on Close), so the guard's `Transport != nil` clause has nothing to
+// protect UNLESS a caller sets Config.HTTPClient to &http.Client{} - no
+// Transport set, which net/http resolves to the process-global
+// http.DefaultTransport, the exact transport http.DefaultClient uses.
+//
+// Before this test, removing that clause from Close's loop left every suite
+// in this module green: TestCloseWithoutResolve sets no HTTPClient at all,
+// and the other two tests inject one WITH a real Transport, so none would
+// notice a missing Transport check. This test injects exactly the shape
+// that check exists for, and would fail without it.
+func TestCloseDoesNotEvictTheSharedDefaultTransport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	if connReused(t, srv.URL) {
+		t.Fatal("first request unexpectedly reused a connection; test setup is broken")
+	}
+
+	p := New(Config{Endpoint: "https://example.invalid", HTTPClient: &http.Client{}})
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if !connReused(t, srv.URL) {
+		t.Fatal("Close evicted the process-global http.DefaultTransport's idle connection pool; " +
+			"a Config.HTTPClient whose Transport is nil must never have CloseIdleConnections called on it")
 	}
 }
