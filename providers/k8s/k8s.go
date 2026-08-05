@@ -231,19 +231,26 @@ func (p *Provider) Close() error {
 // It does not call rc.Client.CloseIdleConnections() directly. http.Client's
 // own method resolves a nil Transport to the process-global
 // http.DefaultTransport before checking whether that implements
-// CloseIdleConnections, and on the REAL default (in-cluster / kubeconfig,
-// no client certificate) path rc.Client.Transport is not nil but unwraps,
-// through several client-go RoundTripperWrapper layers (at minimum
+// CloseIdleConnections, and rc.Client.Transport is not nil but can still
+// unwrap, through several client-go RoundTripperWrapper layers (at minimum
 // *transport.userAgentRoundTripper, since NewForConfig always sets a
-// UserAgent), to exactly that same shared http.DefaultTransport -
-// client-go's own transport cache hands it back verbatim for a config with
-// no custom TLS material (transport.New, via tlsCache.get). Releasing there
-// would evict connections belonging to whatever other code in the process
-// also leaves its Transport unset, not just this provider's own traffic -
-// the identical hazard WithHTTPClient guards against in every HTTP-backed
-// mamori provider, reached here through a chain of wrappers instead of a
-// single nil check. See closeIdleConnectionsSafely for the unwrap-and-refuse
-// logic that replaces the single check those providers use.
+// UserAgent), to exactly that same shared http.DefaultTransport - client-go's
+// own transport cache hands it back verbatim for a config with no TLS
+// material at all (transport.New, via tlsCache.get). This is NOT the
+// in-cluster or kubeconfig case: rest.InClusterConfig sets a CAFile, and a
+// typical kubeconfig sets CAData, either of which makes TLSConfigFor return
+// non-nil and skips the shortcut. The actual trigger is narrower - no CA, no
+// client cert, not insecure, no ServerName or NextProtos, and no custom
+// dialer or proxy - which in practice means a plain-http host: kubectl
+// proxy, or an in-process test server, exactly what this package's own
+// TestCloseDoesNotEvictTheSharedDefaultTransportViaDefaultConfig builds.
+// Releasing there would evict connections belonging to whatever other code
+// in the process also leaves its Transport unset, not just this provider's
+// own traffic - the identical hazard WithHTTPClient guards against in every
+// HTTP-backed mamori provider, reached here through a chain of wrappers
+// instead of a single nil check. See closeIdleConnectionsSafely for the
+// unwrap-and-refuse logic that replaces the single check those providers
+// use.
 func closeIdleConnections(client kubernetes.Interface) {
 	rc, ok := client.CoreV1().RESTClient().(*rest.RESTClient)
 	if !ok || rc == nil || rc.Client == nil {
@@ -261,16 +268,27 @@ func closeIdleConnections(client kubernetes.Interface) {
 //
 // It is a local copy rather than a call to that shared helper because the
 // shared helper does not stop at the process-global http.DefaultTransport:
-// unwrapped all the way down, an ordinary in-cluster or default-kubeconfig
-// connection with no client certificate bottoms out at exactly that shared
-// transport (see closeIdleConnections's doc comment), and calling
-// CloseIdleConnections on it would evict connections belonging to unrelated
-// code in the process. So this version checks identity against
-// http.DefaultTransport - not merely nilness, since a rt this deep in the
-// chain is never nil by construction, only ever possibly equal to it - and
-// refuses outright the moment it is reached, before ever calling anything on
-// it. A nil rt (the top-level rc.Client.Transport left unset) refuses the
-// same way nil resolves to http.DefaultTransport for any *http.Client.
+// unwrapped all the way down, a config with no TLS material at all - no CA,
+// no client cert, not insecure, no ServerName or NextProtos, no custom
+// dialer or proxy, in practice a plain-http host - bottoms out at exactly
+// that shared transport (see closeIdleConnections's doc comment for why this
+// is NOT the ordinary in-cluster or kubeconfig shape: both set a CA, which
+// is enough on its own to avoid the shortcut). Calling CloseIdleConnections
+// there would evict connections belonging to unrelated code in the process.
+// So this version checks identity against http.DefaultTransport - not
+// merely nilness, since a rt this deep in the chain is never nil by
+// construction, only ever possibly equal to it - and refuses outright the
+// moment it is reached, before ever calling anything on it. A nil rt (the
+// top-level rc.Client.Transport left unset) refuses the same way nil
+// resolves to http.DefaultTransport for any *http.Client.
+//
+// Being a local copy is also a drift hazard, not only a workaround: if a
+// future client-go release changes the wrapper chain's shape (a new
+// RoundTripperWrapper layer, or a transport cache that stops handing back
+// http.DefaultTransport verbatim), this function will not pick that up
+// automatically the way a call to the upstream helper would. It has to be
+// re-checked against client-go's transport package whenever that dependency
+// is bumped.
 func closeIdleConnectionsSafely(rt http.RoundTripper) {
 	if rt == nil || rt == http.DefaultTransport {
 		return

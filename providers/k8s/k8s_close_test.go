@@ -140,16 +140,21 @@ func TestCloseDoesNotEvictTheSharedDefaultTransportViaFactory(t *testing.T) {
 }
 
 // TestCloseDoesNotEvictTheSharedDefaultTransportViaDefaultConfig reproduces
-// the subtle case named in this fix: an ORDINARY clientset built from a
-// plain rest.Config with no TLS material (no CA, no client cert, no
-// insecure flag) - exactly the shape client-go's own transport cache hands
-// http.DefaultTransport back for, wrapped in a *transport.userAgentRoundTripper
-// because NewForConfig always sets a UserAgent. A naive fix that unwrapped
-// the chain and called CloseIdleConnections on whatever it found at the
-// bottom, with no identity check, would evict the shared pool here even
-// though nothing about this test looks unusual: no caller ever touched
-// WithHTTPClient, and this is the shape the DEFAULT (in-cluster/kubeconfig)
-// resolution itself produces.
+// the subtle case named in this fix: a clientset built from a plain
+// rest.Config with NO TLS material at all - no CA, no client cert, not
+// insecure, no ServerName or NextProtos, no custom dialer or proxy - exactly
+// the shape client-go's own transport cache hands http.DefaultTransport back
+// for, wrapped in a *transport.userAgentRoundTripper because NewForConfig
+// always sets a UserAgent. This is NOT the ordinary in-cluster or kubeconfig
+// shape: rest.InClusterConfig sets a CAFile and a typical kubeconfig sets
+// CAData, either of which is enough on its own to make client-go build a
+// real *http.Transport instead. What this config DOES match is a plain-http
+// host - kubectl proxy, or (as here) an in-process test server - which is
+// narrower than "the default path" but still a config nothing about this
+// test's construction looks unusual: no caller ever touched WithHTTPClient,
+// only rest.Config.Host. A naive fix that unwrapped the chain and called
+// CloseIdleConnections on whatever it found at the bottom, with no identity
+// check, would evict the shared pool here.
 func TestCloseDoesNotEvictTheSharedDefaultTransportViaDefaultConfig(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -178,10 +183,16 @@ func TestCloseDoesNotEvictTheSharedDefaultTransportViaDefaultConfig(t *testing.T
 	}
 }
 
-// TestCloseIdleConnectionsSafelyNilIsNoop pins the entry condition: a nil
-// top-level Transport (rc.Client.Transport left unset) must refuse exactly
-// like an explicit http.DefaultTransport does, since http.Client itself
-// treats the two identically for round-tripping.
+// TestCloseIdleConnectionsSafelyNilIsNoop is a smoke test, not a proof: it
+// only asserts that passing a nil Transport does not panic. It does not pin
+// the `rt == nil` check's behavior, because that check is not load-bearing
+// here - removing it leaves this test passing regardless (confirmed in this
+// change's mutation table), since a genuinely nil http.RoundTripper matches
+// neither the closeIdler nor the RoundTripperWrapper case in the type switch
+// below on its own. The check is kept for parity with
+// k8s.io/apimachinery/pkg/util/net.CloseIdleConnectionsFor, which has the
+// identical explicit nil check, and as documentation of the precondition,
+// not because this test would catch its removal.
 func TestCloseIdleConnectionsSafelyNilIsNoop(t *testing.T) {
 	closeIdleConnectionsSafely(nil) // must not panic
 }

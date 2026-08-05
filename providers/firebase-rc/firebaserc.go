@@ -252,8 +252,12 @@ func (p *Provider) buildFetcher(ctx context.Context) (templateFetcher, error) {
 // that is not a gap this guard introduces: buildFetcher's default client
 // wraps *oauth2.Transport, which implements no CloseIdleConnections method,
 // so http.Client.CloseIdleConnections has always silently no-op'd on it.
-// There is no idle-connection release to perform for the common case; only an
-// injected client can ever be released here.
+// Idle connections DO exist on that path - oauth2.Transport.Base is left nil,
+// so it falls through to http.DefaultTransport for the actual round trip,
+// same as every unguarded default client in this tier - they are simply not
+// this provider's alone to release, and there is no method to call that
+// would release only them. Only an injected client can ever be released
+// here.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
