@@ -59,6 +59,13 @@ const (
 // same channel keeps being written to, and it is closed exactly once, when
 // ctx is done (see watchLoop).
 func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Update, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("%w: mamori: provider is closed", mamori.ErrUnavailable)
+	}
+
 	name := ref.Path
 	if name == "" {
 		return nil, fmt.Errorf("%w: mamori:// ref %q has no binding name", mamori.ErrInvalid, ref.Raw)

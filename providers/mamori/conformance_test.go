@@ -84,9 +84,9 @@ const (
 // fixedConformanceNames is the complete, static binding table the server is
 // constructed with: one entry per fixed key providertest.go generates
 // (scheme, resolve, ctxcancel, concurrent, version, watch, watchclose, leak,
-// decodeopt) plus "classify", the single reused slot every classify-* case
-// normalizes onto. "absent" is deliberately NOT in this list - see Config.Key
-// below.
+// decodeopt, afterclose, closerace) plus "classify", the single reused slot
+// every classify-* case normalizes onto. "absent" is deliberately NOT in this
+// list - see Config.Key below.
 //
 // decodeopt backs providertest's DecodeOption case. That case is unconditional
 // (unlike JSONPointerSelection, which skips here because this provider
@@ -98,9 +98,19 @@ const (
 // an unrecognized query option already passes through untouched by
 // construction; this entry only gives that passthrough a slot to prove itself
 // against.
+//
+// afterclose and closerace exist for the same reason and were added
+// alongside this package's Close: providertest's CloserContract and
+// CloseDuringResolve cases (see providertest.go's testCloser and
+// testCloseDuringResolve) each call c.key("afterclose") /
+// c.key("closerace") and then Seed that key before exercising Close, and
+// without a binding for either, Seed's pollUntil would time out the exact
+// same way decodeopt's did before it was added - both cases now actually run
+// against the real server instead of skipping, since *Provider satisfies
+// io.Closer.
 var fixedConformanceNames = []string{
 	"scheme", "resolve", "ctxcancel", "concurrent", "version",
-	"watch", "watchclose", "leak", "decodeopt", "classify",
+	"watch", "watchclose", "leak", "decodeopt", "afterclose", "closerace", "classify",
 }
 
 // conformanceKey builds the normalized binding name for a fixed conformance

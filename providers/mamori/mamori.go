@@ -62,6 +62,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xavidop/mamori"
@@ -162,6 +163,9 @@ type Provider struct {
 	// something, rather than panicking during New or silently registering a
 	// provider that can never work.
 	endpointErr error
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // Option configures a Provider, applied after Config in New.
@@ -302,6 +306,33 @@ func init() { mamori.Register(New(Config{})) }
 // Scheme returns "mamori".
 func (p *Provider) Scheme() string { return scheme }
 
+// Close marks the provider closed and returns every endpoint's idle HTTP
+// connections to its pool. It is idempotent, and afterwards Resolve,
+// ResolveBatch and Watch all report errors.Is(err, mamori.ErrUnavailable)
+// locally, through the same closed check do already applies, without
+// contacting any replica.
+//
+// Config.HTTPClient, when supplied, is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the
+// caller's own use of that client is unaffected by closing this provider.
+// When it was set every endpoint shares that identical client, so this loop
+// releases its idle connections once per endpoint reference rather than
+// once overall, which is harmless: CloseIdleConnections only ever drops
+// connections currently sitting idle in the pool. An endpoint built from its
+// own parsed transport (no Config.HTTPClient) is released the same way,
+// since that client belongs to this provider alone.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	for _, ep := range p.endpoints {
+		if ep.client != nil {
+			ep.client.CloseIdleConnections()
+		}
+	}
+	return nil
+}
+
 // parseEndpoint parses a Config.Endpoint into a base URL and an
 // *http.Transport suitable for reaching it, per the three forms documented
 // on Config.Endpoint:
@@ -382,6 +413,12 @@ func parseEndpoint(endpoint string, insecure bool) (baseURL string, transport *h
 // registered credential editor always has the final say if the two ever
 // conflict.
 func (p *Provider) do(ctx context.Context, ep endpoint, method, path string, body io.Reader, edits ...func(*http.Request)) (*http.Response, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("%w: mamori: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.endpointErr != nil {
 		return nil, p.endpointErr
 	}
