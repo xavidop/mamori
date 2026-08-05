@@ -220,9 +220,11 @@ it, and never echoes a credential that is set.
 | `WithBaseURL(u)` | Override the API origin, for an `httptest.Server` or a proxy; a trailing slash is trimmed so joining it with a path never produces a double slash |
 | `WithHTTPClient(c)` | Inject a custom `*http.Client`; a nil client is a no-op |
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` and
-`ResolveBatch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
-contacting Workers KV. It also returns the HTTP client's idle connections to
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, and
+every `ResolveBatch` called with at least one ref, report
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Workers KV
+(a zero-ref `ResolveBatch` call short-circuits to an empty map and a nil error
+before any closed check runs, closed or not). It also returns the HTTP client's idle connections to
 the pool, but only when that client's `Transport` is non-nil. `New`'s own
 default client (unless overridden with `WithHTTPClient`) leaves `Transport`
 unset, and Go resolves a nil `Transport` to the shared `http.DefaultTransport`;

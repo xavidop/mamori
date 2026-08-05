@@ -107,6 +107,7 @@ p := nacos.New(
 	nacos.WithNamespace("2f9d1b0c-..."),
 	nacos.WithCredentials(os.Getenv("NACOS_USERNAME"), os.Getenv("NACOS_PASSWORD")),
 )
+defer p.Close() // you own p; mamori never closes it
 cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 ```
 

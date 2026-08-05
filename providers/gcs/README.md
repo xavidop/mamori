@@ -107,9 +107,11 @@ mamori.WithProvider(gcs.New(gcs.WithSensitive()))
 `Close()` is idempotent and terminal: after it returns, every `Resolve` reports
 `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Cloud
 Storage. It releases the backing reader client, but only one this provider built
-itself. A reader injected with `WithClient` (or produced by `WithClientFactory`)
-belongs to the caller and is left open; closing it would reach outside this
-provider and break whatever else the caller is using it for.
+itself: the default client, or one produced by `WithClientFactory`, which is
+built on the provider's behalf and released by `Close` the same as the
+default. A reader injected directly with `WithClient` belongs to the caller
+and is left open; closing it would reach outside this provider and break
+whatever else the caller is using it for.
 
 ## Watching / change detection
 

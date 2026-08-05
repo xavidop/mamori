@@ -152,6 +152,7 @@ p := supabase.New(
 	supabase.WithProjectURL(os.Getenv("SUPABASE_URL")),
 	supabase.WithServiceKey(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
 )
+defer p.Close() // you own p; mamori never closes it
 cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 ```
 

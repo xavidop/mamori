@@ -66,7 +66,7 @@ import gcpprov "github.com/xavidop/mamori/providers/gcp"
 mamori.WithProvider(gcpprov.New(gcpprov.WithClient(myClient)))
 ```
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Secret Manager. It releases the backing client, but only one this provider built itself. A client injected with `WithClient` (or produced by `WithClientFactory`) belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Secret Manager. It releases the backing client, but only one this provider built itself: the default client, or one produced by `WithClientFactory`, which is built on the provider's behalf and released by `Close` the same as the default. A client injected directly with `WithClient` belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
 
 ## Watch
 
