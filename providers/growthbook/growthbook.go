@@ -67,6 +67,10 @@ type evaluator interface {
 type Provider struct {
 	mu   sync.Mutex
 	eval evaluator
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it a closed provider keeps evaluating through the SDK client it just
+	// released, as though nothing had happened.
+	closed bool
 
 	// Configuration used to build the default (SDK) evaluator lazily on first use.
 	clientKey     string
@@ -138,10 +142,15 @@ func init() { mamori.Register(New()) }
 func (p *Provider) Scheme() string { return scheme }
 
 // getEvaluator returns the backing evaluator, building the default SDK-backed
-// evaluator lazily (and caching it) on first use.
+// evaluator lazily (and caching it) on first use. A closed provider is refused
+// here, before the cached-evaluator check, so nothing is evaluated or built
+// after Close.
 func (p *Provider) getEvaluator(ctx context.Context) (evaluator, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("growthbook: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.eval != nil {
 		return p.eval, nil
 	}
@@ -199,11 +208,17 @@ func (p *Provider) buildEvaluator(ctx context.Context) (evaluator, error) {
 	return &sdkEvaluator{client: client, refresh: true}, nil
 }
 
-// Close releases resources held by a lazily-built SDK client, if any. It is safe
-// to call multiple times.
+// Close releases resources held by a lazily-built SDK client, if any. It is
+// terminal: every later Resolve reports unavailable without contacting the
+// GrowthBook API. It is safe to call multiple times, and on a provider that
+// never resolved.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if se, ok := p.eval.(*sdkEvaluator); ok && se.client != nil {
 		return se.client.Close()
 	}

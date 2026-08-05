@@ -398,3 +398,34 @@ func TestMissingClientKey(t *testing.T) {
 		t.Fatalf("err = %v, want a message mentioning the missing client key", err)
 	}
 }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract: a closed provider refuses locally rather than continuing to
+// evaluate through the SDK client it just released.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	fake := newFakeEvaluator()
+	fake.set("show_banner", "on")
+	p := New(withEvaluator(fake))
+
+	if _, err := p.Resolve(context.Background(), parse(t, "growthbook://show_banner")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), parse(t, "growthbook://show_banner")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseWithoutResolve covers the other lifecycle: a provider that never
+// built its SDK client is closed without contacting the GrowthBook API.
+func TestCloseWithoutResolve(t *testing.T) {
+	if err := New().Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
