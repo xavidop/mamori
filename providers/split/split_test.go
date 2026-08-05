@@ -224,3 +224,53 @@ func TestConformance(t *testing.T) {
 		NoResolveErrors: true,
 	})
 }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract. The factory records every call, so the assertion is not that the
+// post-close Resolve was merely slow or merely failed, but that no client was
+// built at all: without the closed guard, Close's nil client reads as "not yet
+// created" and the next Resolve stands up a fresh Split factory.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	f := newFake()
+	f.set(defaultKey, "new-checkout", "on")
+	p := New(withClient(f))
+	var calls int
+	p.newClient = func(context.Context) (treatmentClient, error) {
+		calls++
+		return f, nil
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "split://new-checkout")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "split://new-checkout")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory called %d times, want 0: a closed provider rebuilt its client", calls)
+	}
+}
+
+// TestCloseWithoutResolveDoesNotBuildAClient covers the other lifecycle: a
+// configured-but-unused provider is closed without ever standing up a factory.
+func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
+	p := New(WithAPIKey("sdk-key"))
+	var calls int
+	p.newClient = func(context.Context) (treatmentClient, error) {
+		calls++
+		return newFake(), nil
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory called %d times, want 0", calls)
+	}
+}
