@@ -42,6 +42,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -85,6 +86,12 @@ type Provider struct {
 
 	mu  sync.Mutex
 	cli settingClient // built lazily (or injected in tests)
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it the nil client Close leaves behind is indistinguishable from one that
+	// was never built, and the next Resolve would stand up a fresh SDK client,
+	// with the background poll it implies, to rebuild what it was just told to
+	// release.
+	closed bool
 }
 
 // Option configures a Provider.
@@ -179,21 +186,38 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 }
 
 // Close releases the underlying SDK client and its background polling goroutine.
-// It is safe to call more than once and on a provider that never resolved.
-func (p *Provider) Close() {
+// It is safe to call more than once and on a provider that never resolved, and
+// it is terminal: every later Resolve reports unavailable without contacting
+// ConfigCat.
+//
+// The error return is always nil. It exists so *Provider satisfies io.Closer,
+// which is how mamori and its conformance kit discover that a provider holds a
+// releasable resource at all; a Close with no return value is invisible to
+// both.
+func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if p.cli != nil {
 		p.cli.close()
 		p.cli = nil
 	}
+	return nil
 }
 
 // ensureClient returns the underlying client, building the real SDK client on
-// first use. Construction is guarded so concurrent Resolves share one client.
+// first use. Construction is guarded so concurrent Resolves share one client. A
+// closed provider is refused here, before the nil check, so no client is ever
+// rebuilt after Close.
 func (p *Provider) ensureClient(ctx context.Context) (settingClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("configcat: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.cli != nil {
 		return p.cli, nil
 	}
@@ -292,5 +316,10 @@ func (s *sdkClient) value(key string) any {
 func (s *sdkClient) close() { s.c.Close() }
 
 // Ensure Provider satisfies the core interface but NOT WatchableProvider: the
-// ConfigCat SDK offers no push notification, so mamori polls this provider.
-var _ mamori.Provider = (*Provider)(nil)
+// ConfigCat SDK offers no push notification, so mamori polls this provider. The
+// io.Closer assertion pins Close's error return, which is what makes the
+// provider's lifecycle visible to mamori and to the conformance kit.
+var (
+	_ mamori.Provider = (*Provider)(nil)
+	_ io.Closer       = (*Provider)(nil)
+)

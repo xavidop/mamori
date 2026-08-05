@@ -3,6 +3,7 @@ package configcat
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 
@@ -234,4 +235,45 @@ func TestConformance(t *testing.T) {
 		// so there is nothing to inject and ErrorClassification is exempt.
 		NoResolveErrors: true,
 	})
+}
+
+// TestCloseSatisfiesIOCloser pins the error return: mamori and the conformance
+// kit discover a provider's lifecycle by type-asserting to io.Closer, and a
+// Close with no return value is invisible to both.
+func TestCloseSatisfiesIOCloser(t *testing.T) {
+	var c io.Closer = newWithClient(newFake())
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract: a closed provider refuses locally rather than standing up a fresh
+// SDK client, and the background poll it implies, to serve the next Resolve.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	f := newFake()
+	f.set("isPOCFeatureEnabled", true)
+	p := newWithClient(f)
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "configcat://isPOCFeatureEnabled")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "configcat://isPOCFeatureEnabled")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseWithoutResolve covers the other lifecycle: a provider that never
+// built its SDK client is closed without reading a key or contacting ConfigCat.
+func TestCloseWithoutResolve(t *testing.T) {
+	if err := New().Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 }
