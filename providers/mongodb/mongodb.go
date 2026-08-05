@@ -100,8 +100,10 @@ type Provider struct {
 	database string
 	client   *mongo.Client
 
-	mu sync.Mutex
-	be backend // resolved backend (injected or lazily built)
+	mu        sync.Mutex
+	be        backend // resolved backend (injected or lazily built)
+	ownClient bool    // true only when this provider dialed client itself via mongo.Connect
+	closed    bool    // Close has run; every later resolve reports unavailable
 }
 
 // Option configures a Provider.
@@ -155,9 +157,17 @@ func (p *Provider) Scheme() string { return scheme }
 
 // resolveBackend returns the backend, building it lazily on first use from the
 // injected client or MONGODB_URI. Concurrent callers share one backend.
+//
+// The closed check runs first, ahead of the p.be != nil cache check, so a
+// closed provider refuses locally even when a backend (injected or previously
+// built) is still sitting in p.be: Close clears p.be, but the ordering here is
+// what makes that refusal unconditional rather than incidental.
 func (p *Provider) resolveBackend(ctx context.Context) (backend, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: mongodb: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.be != nil {
 		return p.be, nil
 	}
@@ -179,8 +189,36 @@ func (p *Provider) resolveBackend(ctx context.Context) (backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mongodb: connect: %w", err)
 	}
+	p.client = client
+	p.ownClient = true
 	p.be = &mongoBackend{client: client, db: p.database}
 	return p.be, nil
+}
+
+// Close releases the *mongo.Client this provider dialed lazily. It is a no-op
+// when the client was injected by the caller with WithClient (the caller owns
+// it) and when nothing was ever dialed, so New followed by Close never
+// connects. closed is set unconditionally before either of those checks, so
+// the not-owned and never-dialed paths still make Close terminal: afterwards
+// Resolve and Watch report mamori.ErrUnavailable, refused locally by
+// resolveBackend, rather than reaching for a client this provider was just
+// told to stop using. Close is idempotent and safe for concurrent use.
+//
+// Disconnect needs a context; a short bounded one is used here (rather than an
+// unbounded context.Background()) so a wedged server cannot make Close hang.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	p.be = nil
+	if !p.ownClient || p.client == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := p.client.Disconnect(ctx)
+	p.client = nil
+	return err
 }
 
 // Resolve fetches the current value for ref from MongoDB. A missing document

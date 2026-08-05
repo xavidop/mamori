@@ -11,6 +11,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/xavidop/mamori"
 	"github.com/xavidop/mamori/providertest"
@@ -544,6 +545,86 @@ func TestWatchClosesOnCancel(t *testing.T) {
 		case <-deadline:
 			t.Fatal("channel not closed after cancel")
 		}
+	}
+}
+
+// --- Close ---
+
+// TestCloseWithoutUseIsSafe pins the "safe with no prior use" half of the
+// Close contract: Close on a provider that never resolved must not dial and
+// must not panic, and a second Close must stay clean.
+func TestCloseWithoutUseIsSafe(t *testing.T) {
+	p := New()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if p.ownClient || p.client != nil {
+		t.Error("Close dialed a client on a provider that never resolved")
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.closed check in
+// resolveBackend) rather than reaching into the fake backend it was told to
+// stop using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	fake := newFakeBackend()
+	fake.put("cfg", "a", bson.M{"_id": "a", "value": "x"})
+	p := New(withBackend(fake))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "mongodb://cfg/a#value")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "mongodb://cfg/a#value")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDoesNotDisconnectInjectedClient is the ownership half of rule 5: a
+// *mongo.Client handed in with WithClient belongs to the caller, so Close must
+// stop using it without disconnecting it. mongo.Client exposes no "is
+// disconnected" getter, so this is verified by attempting the real Disconnect
+// ourselves afterward: the driver returns mongo.ErrClientDisconnected if a
+// Disconnect already happened, and nil if this is the first one - which is
+// what proves Provider.Close left the injected client alone.
+//
+// It also proves the other half of rule 5's ordering requirement - that Close
+// still marks the provider closed on the not-owned path - since a Close that
+// returned early here (skipping p.closed = true to avoid touching the
+// injected client) would pass the "still usable" assertion below while
+// silently breaking Resolve's terminality for every WithClient caller.
+func TestCloseDoesNotDisconnectInjectedClient(t *testing.T) {
+	// mongo.Connect never dials synchronously (it only starts background
+	// monitoring goroutines), so this construction is instant and needs no
+	// reachable server.
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://203.0.113.1:27017"))
+	if err != nil {
+		t.Fatalf("mongo.Connect: %v", err)
+	}
+	p := New(WithClient(client), WithDatabase("app"))
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Disconnect(dctx); err != nil {
+		t.Fatalf("injected client Disconnect after provider Close: %v; want nil "+
+			"(a non-nil error here means Provider.Close already disconnected it)", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "mongodb://cfg/a#value")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
 	}
 }
 
