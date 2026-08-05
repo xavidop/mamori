@@ -350,3 +350,51 @@ func TestLazyClientFactory(t *testing.T) {
 		t.Error("Close did not close the underlying client")
 	}
 }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract. The factory records every call, so the assertion is not that the
+// post-close Resolve was merely slow or merely failed, but that no client was
+// built at all: without the closed guard, Close's nil reader reads as "not yet
+// created" and the next Resolve dials Cloud Storage on ambient credentials.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	fake := newFakeGCS()
+	fake.put("bkt", "app/config.json", "hello-world")
+	var calls int
+	p := New(WithClientFactory(func(context.Context) (objectReader, error) {
+		calls++
+		return fake, nil
+	}))
+
+	if _, err := p.Resolve(context.Background(), parse(t, "gcs://bkt/app/config.json")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), parse(t, "gcs://bkt/app/config.json")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+	if calls != 1 {
+		t.Fatalf("factory called %d times, want 1: a closed provider rebuilt its client", calls)
+	}
+}
+
+// TestCloseWithoutResolveDoesNotBuildAClient covers the other lifecycle: a
+// configured-but-unused provider is closed without ever having dialed.
+func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
+	var calls int
+	p := New(WithClientFactory(func(context.Context) (objectReader, error) {
+		calls++
+		return newFakeGCS(), nil
+	}))
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory called %d times, want 0", calls)
+	}
+}

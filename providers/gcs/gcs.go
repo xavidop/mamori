@@ -61,6 +61,11 @@ type objectReader interface {
 type Provider struct {
 	mu     sync.Mutex
 	reader objectReader
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it the nil reader Close leaves behind is indistinguishable from one that
+	// was never built, and the next Resolve would silently dial Cloud Storage
+	// on ambient credentials to rebuild what it was just told to release.
+	closed bool
 	// newReader builds the backing client on first use. Overridable in tests via
 	// WithClient (which sets reader directly) or WithClientFactory.
 	newReader func(ctx context.Context) (objectReader, error)
@@ -119,9 +124,14 @@ func init() { mamori.Register(New()) }
 func (p *Provider) Scheme() string { return scheme }
 
 // getReader returns the backing object reader, creating it lazily on first use.
+// A closed provider is refused here, before the nil check, so no client is ever
+// rebuilt after Close.
 func (p *Provider) getReader(ctx context.Context) (objectReader, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("gcs: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.reader != nil {
 		return p.reader, nil
 	}
@@ -136,10 +146,16 @@ func (p *Provider) getReader(ctx context.Context) (objectReader, error) {
 	return r, nil
 }
 
-// Close releases the backing client, if one has been created.
+// Close releases the backing client, if one has been created. It is terminal:
+// every later Resolve reports unavailable without touching the backend. Calling
+// it more than once, or on a provider that never resolved, is a no-op.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if p.reader == nil {
 		return nil
 	}
