@@ -125,7 +125,17 @@ func (p *Provider) access(ctx context.Context, s settings, path, name, revision 
 // settingsFor): caching would pin whichever set happened to be resolved first.
 // Construction performs no network call and reuses the provider's
 // *http.Client, so the connection pool is shared across every read.
+//
+// The closed check runs first, so a closed provider refuses locally rather
+// than building a client and reaching for the network.
 func (p *Provider) clientFor(s settings) (*httpcore.Client, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("mamori/scaleway-sm: provider is closed: %w", mamori.ErrUnavailable)
+	}
+
 	c, err := httpcore.New(httpcore.Config{
 		BaseURL:     p.baseURL,
 		HTTPClient:  p.httpClient,
