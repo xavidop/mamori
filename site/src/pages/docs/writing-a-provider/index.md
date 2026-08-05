@@ -14,6 +14,44 @@ type Provider interface {
 }
 ```
 
+## Who closes a provider
+
+mamori never closes a provider. `Watcher.Close()` releases only what mamori itself created: the watch goroutines, the callback queue, and the admin server. A provider instance belongs to whoever constructed it.
+
+That rule exists because `Register` stores a provider in a process-global map, normally from a package `init`, and every `Watcher` in the process shares that one instance. A `Watcher.Close()` that released it would hand the next `Watch` call a dead client.
+
+So a provider that holds a connection is yours to close:
+
+```go
+p := postgres.New(postgres.WithDSN(dsn))
+defer p.Close()      // you own p
+
+w, err := mamori.Watch[Config](ctx, mamori.WithProvider(p))
+defer w.Close()      // closes only what mamori created
+```
+
+Providers that hold no releasable handle (`env:`, `file://`, `aws-sm://`, and others) have no `Close` at all, so there is nothing to forget.
+
+### Which providers get a Close
+
+A provider earns a `Close` method when it holds a releasable resource: a dialed connection, a pool, a streaming client, a background refresh goroutine. `providers/sqlite` is the one deliberate exception. It opens and closes a fresh `*sql.DB` inside every `Resolve`, so it holds nothing between calls, yet it still ships a terminal-only `Close`: it sits beside `providers/postgres` and `providers/mysql`, and a caller sweeping `Close` across the database providers at shutdown would be surprised to find sqlite alone still serving. So the rule is: a provider gets `Close` when it holds a releasable resource, or when its siblings do.
+
+### The contract
+
+A provider `Close` is:
+
+- **Idempotent.** Two calls, no error, no panic.
+- **Safe with no prior use.** `New` followed by `Close`, with no `Resolve` in between, must not dial. Lazily built clients and pools make this a real path, not a hypothetical.
+- **Concurrency-safe.** Callable while a `Resolve` is in flight.
+- **Terminal.** After `Close`, `Resolve` returns an error satisfying `errors.Is(err, mamori.ErrUnavailable)`, locally and fast, without touching the backend.
+- **Never the owner of an injected client.** A pool or client passed in through an option such as `WithPool`, `WithDB`, `WithClient` or `WithHTTPClient` belongs to the caller. Track what you built yourself and release only that.
+
+`io.Closer` is how the [conformance kit](/docs/writing-a-provider/conformance/) discovers that a provider holds a releasable resource; that type assertion is `providertest`'s job, not core's. mamori itself never asserts a `Provider` for `io.Closer` and never calls `Close` - only the caller who constructed the provider does.
+
+### Close does not stop a Watch
+
+`Close` and a running `Watch` are two independent shutdown paths, on purpose. Cancelling a watch's `context.Context` is the only thing that ever stops it; giving `Close` a second, competing way to end a watch would create an ordering question with no good answer. So `Close` does not reach into an in-flight `Watch` and end it. Instead, once a provider is closed, the accessor its `Resolve` (and a native `Watch`'s reconnect path) goes through reports `mamori.ErrUnavailable` locally. A polling watch keeps polling and keeps emitting that error on every tick; a native watch that needs to reconnect hits the same closed provider and reports the same error. Either way the watch degrades to an error stream rather than stopping outright, and it only ends when its own context is cancelled.
+
 ## Quick start
 
 A provider is a `Scheme()`, a `Resolve()`, and an `init` that calls `mamori.Register`:

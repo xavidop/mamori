@@ -49,4 +49,23 @@ func (p *Provider) ResolveBatch(ctx context.Context, refs []mamori.Ref) (map[str
 }
 ```
 
+## Release a held resource
+
+Implement stdlib `io.Closer`, not a mamori-specific interface, when your provider holds something worth releasing: a dialed connection, a pool, a streaming client, a background refresh goroutine. mamori never calls it - see [Who closes a provider](/docs/writing-a-provider/#who-closes-a-provider) for why ownership stays with whoever constructed the provider - but the [conformance kit](/docs/writing-a-provider/conformance/) type-asserts for it and, when present, exercises the full `Close` contract automatically.
+
+```go
+// Optional. Only implement this if there is something to release.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true // makes every later Resolve/Watch report mamori.ErrUnavailable
+	if !p.ownClient || p.client == nil {
+		return nil // never built, or injected by the caller: nothing to release
+	}
+	err := p.client.Close()
+	p.client = nil
+	return err
+}
+```
+
 Next: prove it all with the [Conformance](/docs/writing-a-provider/conformance/) kit.

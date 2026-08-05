@@ -5,7 +5,7 @@ title: Conformance
 
 # Conformance
 
-`github.com/xavidop/mamori/providertest` runs one function that exercises resolution, not-found typing, nested JSON Pointer selection (opt-in), `?decode=` option passthrough, error classification, `Version` monotonicity, concurrency, context cancellation, native watch, goroutine hygiene (goleak), and a no-payload-logging assertion. Every provider must pass it.
+`github.com/xavidop/mamori/providertest` runs one function that exercises resolution, not-found typing, nested JSON Pointer selection (opt-in), `?decode=` option passthrough, error classification, `Version` monotonicity, concurrency, context cancellation, native watch, goroutine hygiene (goleak), the `Close` contract (for a provider that implements `io.Closer`), and a no-payload-logging assertion. Every provider must pass it.
 
 ## Run the conformance case
 
@@ -56,6 +56,12 @@ What it catches is narrower and easy to miss otherwise: a provider that strips, 
 
 **A provider must pass an unrecognized query option through untouched.** `DecodeOption` seeds a value that is itself a base64 string, resolves it through a ref carrying `?decode=base64`, and asserts the provider hands back exactly the stored (still-encoded) bytes - proving the provider read `ref.Path`/`ref.Key` and ignored the option rather than rejecting it or trying to interpret it itself.
 
+## `Close`
+
+If your provider type-asserts to `io.Closer`, the kit runs the Close contract automatically; a provider with no `Close` method skips this case rather than failing it. Two things are checked: `testCloser` builds a fresh provider and closes it without resolving first (must not dial or panic), then resolves once, closes, closes again (idempotent), and asserts the next `Resolve` refuses locally and fast with `errors.Is(err, mamori.ErrUnavailable)` rather than rebuilding the client it was just told to release. `testCloseDuringResolve` races `Close` against a batch of in-flight resolves under `-race`; any individual resolve may succeed or fail, but none may panic or race.
+
+What the kit cannot check generically is rule five of the [contract](/docs/writing-a-provider/#the-contract): that `Close` never closes a client the caller injected. `Config` has no generic notion of "the client I handed you," so that guarantee needs its own unit test per provider, alongside the SDK-mapping table test `ErrorClassification` already asks for.
+
 ## Build and test the module
 
 Build and test each module independently with the workspace disabled, exactly as CI does:
@@ -79,6 +85,7 @@ Or from the repo root, `make test` / `make lint` run every module.
 - [ ] If your fragment is a JSON selector, supply `providertest.Config.PointerRef` so `JSONPointerSelection` runs; otherwise leave it `nil` with a comment naming why (backend-native key, facet selector, or unused).
 - [ ] `Resolve` passes an unrecognized query option (e.g. `?decode=`) through untouched rather than stripping, rewriting, or erroring on it; `DecodeOption` proves this and runs unconditionally.
 - [ ] `Watch` is implemented only for native-push backends, closes on `ctx` cancel, and leaks no goroutines.
+- [ ] If the provider holds a releasable handle, it implements `io.Closer`; `Close` is idempotent, safe with no prior `Resolve`, concurrency-safe, terminal (`Resolve` afterwards reports `errors.Is(err, mamori.ErrUnavailable)`), and never closes a caller-injected client. `providertest.Run` exercises the first four automatically; the fifth needs a provider-specific unit test.
 - [ ] A client interface is injected so `providertest.Run` passes against a fake; live tests are behind `//go:build integration`.
 - [ ] `go build`, `go vet`, and `go test` are clean with `GOWORK=off`; the README documents scheme, ref grammar, and auth.
 - [ ] The module's `README.md` has an `## Error classification` section, mirrored onto its docs-site page.
