@@ -275,3 +275,53 @@ func TestEnabledFormatting(t *testing.T) {
 		t.Fatal("unexpected bool formatting")
 	}
 }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract. The factory records every call, so the assertion is not that the
+// post-close Resolve was merely slow or merely failed, but that no client was
+// built at all: without the closed guard, Close's nil client reads as "not yet
+// created" and the next Resolve stands up a fresh Unleash client.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	f := newFake()
+	f.set("new-checkout", toggle{enabled: true, variantName: "v1", payloadValue: "p"})
+	p := fakeProvider(f)
+	var calls int
+	p.newClient = func(context.Context) (featureClient, error) {
+		calls++
+		return f, nil
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "unleash://new-checkout")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "unleash://new-checkout")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory called %d times, want 0: a closed provider rebuilt its client", calls)
+	}
+}
+
+// TestCloseWithoutResolveDoesNotBuildAClient covers the other lifecycle: a
+// configured-but-unused provider is closed without ever contacting the server.
+func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
+	p := New(WithURL("https://unleash.example.com/api"))
+	var calls int
+	p.newClient = func(context.Context) (featureClient, error) {
+		calls++
+		return newFake(), nil
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory called %d times, want 0", calls)
+	}
+}

@@ -111,6 +111,12 @@ type Provider struct {
 
 	mu     sync.Mutex
 	client featureClient
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it the nil client Close leaves behind is indistinguishable from one that
+	// was never built, and the next Resolve would stand up a fresh Unleash
+	// client and block on its first fetch to rebuild what it was just told to
+	// release.
+	closed bool
 	// newClient builds the backing client on first use. Overridable in tests.
 	newClient func(ctx context.Context) (featureClient, error)
 }
@@ -232,10 +238,14 @@ func (p *Provider) buildClient() (featureClient, error) {
 }
 
 // getClient returns the backing client, creating it lazily on first use.
-// Concurrent callers share one client.
+// Concurrent callers share one client. A closed provider is refused here,
+// before the nil check, so no client is ever rebuilt after Close.
 func (p *Provider) getClient(ctx context.Context) (featureClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("mamori/unleash: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.client != nil {
 		return p.client, nil
 	}
@@ -250,10 +260,17 @@ func (p *Provider) getClient(ctx context.Context) (featureClient, error) {
 	return c, nil
 }
 
-// Close releases the backing client, if one has been created.
+// Close releases the backing client, if one has been created. It is terminal:
+// every later Resolve reports unavailable without contacting the Unleash
+// server. Calling it more than once, or on a provider that never resolved, is a
+// no-op.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if p.client == nil {
 		return nil
 	}
