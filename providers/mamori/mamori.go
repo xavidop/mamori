@@ -321,12 +321,20 @@ func (p *Provider) Scheme() string { return scheme }
 // connections currently sitting idle in the pool. An endpoint built from its
 // own parsed transport (no Config.HTTPClient) is released the same way,
 // since that client belongs to this provider alone.
+//
+// CloseIdleConnections is skipped for any endpoint whose client has a nil
+// Transport, which can only happen through a caller-supplied Config.HTTPClient
+// (newEndpoints always gives its own default client a real *http.Transport):
+// net/http resolves a nil Transport to the process-global
+// http.DefaultTransport, and releasing idle connections there would evict
+// connections belonging to unrelated code elsewhere in the process rather
+// than anything this endpoint used.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
 	for _, ep := range p.endpoints {
-		if ep.client != nil {
+		if ep.client != nil && ep.client.Transport != nil {
 			ep.client.CloseIdleConnections()
 		}
 	}
