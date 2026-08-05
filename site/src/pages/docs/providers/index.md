@@ -21,59 +21,61 @@ The **Errors** column shows which providers classify a failure beyond `not_found
 
 Don't read either non-✅ state as broken: `not_found` is detected everywhere regardless of this column, and neither state claims to see permission or availability errors that provider genuinely cannot observe.
 
-| Scheme | Page | Sensitive | Watch | Errors |
-| --- | --- | --- | --- | --- |
-| `env:` | env | no | poll | ✅ |
-| `dotenv://` | dotenv | no | fsnotify | ✅ |
-| `file://` | file | no | fsnotify | ✅ |
-| `exec:` | exec | yes | poll | ✅ |
-| `mamori://` | mamori (client) | passthrough | **native** (SSE) | ✅ |
-| `aws-sm://` `aws-ps://` | AWS | yes / secure | poll | ✅ |
-| `aws-appconfig://` | AWS AppConfig | no | poll | ✅ |
-| `vault://` | Vault | yes | lease-aware poll | ✅ |
-| `gcp-sm://` | GCP | yes | poll | ✅ |
-| `azure-kv://` | Azure | yes | poll | ✅ |
-| `azure-appconfig://` | Azure AppConfig | no | poll | ✅ |
-| `doppler://` | Doppler | yes | poll | ✅ |
-| `infisical://` | Infisical | yes | poll | ✅ |
-| `hcp-vs://` | HCP Vault Secrets | yes | poll | ✅ |
-| `scaleway-sm://` | Scaleway Secret Manager | yes | poll | ✅ |
-| `bitwarden-sm://` | Bitwarden Secrets Manager | yes | poll | ✅ |
-| `op://` | 1Password | yes | poll | ✅ |
-| `sops://` | SOPS | yes | fsnotify | ✅ |
-| `supabase://` | Supabase Vault | yes | poll | ✅ |
-| `postgres://` | PostgreSQL | no | **native** (LISTEN/NOTIFY) | ✅ |
-| `mysql://` | MySQL | no | poll | ✅ |
-| `sqlite://` | SQLite | no | fsnotify | ✅ |
-| `mongodb://` | MongoDB | no | **native** (change streams) | ✅ |
-| `dynamodb://` | DynamoDB | no | poll | ✅ |
-| `cosmos://` | Cosmos DB | no | poll (ETag) | ✅ |
-| `redis://` | Redis | no | **native** (keyspace) | ✅ |
-| `consul://` | Consul | no | **native** | ✅ |
-| `etcd://` | etcd | no | **native** | ✅ |
-| `nacos://` | Nacos | no | **native** | ✅ |
-| `vercel-gc://` | Vercel Global Config | no | poll (digest) | ✅ |
-| `cloudflare-kv://` | Cloudflare Workers KV | no | poll | ✅ |
-| `heroku://` | Heroku Config Vars | yes | poll | ✅ |
-| `https://` | Generic HTTPS | per-endpoint | poll (conditional GET) | ✅ |
-| `k8s-secret://` `k8s-cm://` | Kubernetes | yes / no | **native** | ✅ |
-| `firestore://` | Firestore | no | **native** (snapshots) | ✅ |
-| `firebase-rc://` | Remote Config | no | poll | ✅ |
-| `firebase-rtdb://` | Realtime DB | no | **native** (streaming) | no (chain preserved) |
-| `s3://` | Amazon S3 | no | poll (ETag) | ✅ |
-| `gcs://` | Google GCS | no | poll (generation) | ✅ |
-| `azblob://` | Azure Blob | no | poll (ETag) | ✅ |
-| `launchdarkly://` | LaunchDarkly | no | **native** (streaming) | ✅ |
-| `unleash://` | Unleash | no | poll | n/a (no error surface) |
-| `flagsmith://` | Flagsmith | no | poll | no (chain preserved) |
-| `configcat://` | ConfigCat | no | poll | n/a (no error surface) |
-| `split://` | Split | no | poll | n/a (no error surface) |
-| `growthbook://` | GrowthBook | no | poll | no (chain preserved) |
-| `flipt://` | Flipt | no | poll | ✅ |
-| `goff://` | GO Feature Flag | no | poll | ✅ |
-| `openfeature://` | OpenFeature | no | poll | ✅ |
-| `posthog://` | PostHog | no | poll | ✅ |
-| `viper://` | Viper | no | poll | n/a (no error surface) |
+The **Close** column says what each provider's `Close()` actually releases. mamori never closes a provider for you: a provider instance belongs to whoever constructed it, and `Watcher.Close()` releases only what mamori itself created (see [Who closes a provider](/docs/writing-a-provider/#who-closes-a-provider)). Thirty-one modules ship a `Close`; the rows reading **none needed** hold no releasable handle and have no `Close` method at all, so there is nothing to forget. Two rows read **terminal only, releases nothing**: `sqlite` opens and closes a fresh `*sql.DB` inside every `Resolve`, and `firebase-rtdb` holds no client of its own, but both keep a `Close` so that a caller sweeping `Close` across their siblings is not surprised to find them alone still serving. Where a cell says **injected**, the provider builds no default client it holds a reference to (or its default leaves `Transport` nil, which resolves to the shared `http.DefaultTransport` and is deliberately left alone), so `Close` releases idle connections only for a client you supplied; it never closes or invalidates that client. Whatever the cell says, `Close` is terminal: afterwards `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally. It does **not** stop a `Watch` that is already running, which is its own subject: see [Close does not stop a Watch](/docs/writing-a-provider/#close-does-not-stop-a-watch). Each provider's own page has the full ownership rules.
+
+| Scheme | Page | Sensitive | Watch | Errors | Close |
+| --- | --- | --- | --- | --- | --- |
+| `env:` | env | no | poll | ✅ | none needed |
+| `dotenv://` | dotenv | no | fsnotify | ✅ | none needed |
+| `file://` | file | no | fsnotify | ✅ | none needed |
+| `exec:` | exec | yes | poll | ✅ | none needed |
+| `mamori://` | mamori (client) | passthrough | **native** (SSE) | ✅ | each endpoint's idle HTTP conns |
+| `aws-sm://` `aws-ps://` | AWS | yes / secure | poll | ✅ | none needed |
+| `aws-appconfig://` | AWS AppConfig | no | poll | ✅ | none needed |
+| `vault://` | Vault | yes | lease-aware poll | ✅ | none needed |
+| `gcp-sm://` | GCP | yes | poll | ✅ | closes a self-built client |
+| `azure-kv://` | Azure | yes | poll | ✅ | none needed |
+| `azure-appconfig://` | Azure AppConfig | no | poll | ✅ | none needed |
+| `doppler://` | Doppler | yes | poll | ✅ | injected HTTP client's idle conns |
+| `infisical://` | Infisical | yes | poll | ✅ | injected HTTP client's idle conns |
+| `hcp-vs://` | HCP Vault Secrets | yes | poll | ✅ | injected HTTP client's idle conns |
+| `scaleway-sm://` | Scaleway Secret Manager | yes | poll | ✅ | injected HTTP client's idle conns |
+| `bitwarden-sm://` | Bitwarden Secrets Manager | yes | poll | ✅ | injected HTTP client's idle conns |
+| `op://` | 1Password | yes | poll | ✅ | injected HTTP client's idle conns |
+| `sops://` | SOPS | yes | fsnotify | ✅ | none needed |
+| `supabase://` | Supabase Vault | yes | poll | ✅ | injected HTTP client's idle conns |
+| `postgres://` | PostgreSQL | no | **native** (LISTEN/NOTIFY) | ✅ | closes a self-opened pool |
+| `mysql://` | MySQL | no | poll | ✅ | closes a self-opened `*sql.DB` |
+| `sqlite://` | SQLite | no | fsnotify | ✅ | terminal only, releases nothing |
+| `mongodb://` | MongoDB | no | **native** (change streams) | ✅ | disconnects a self-dialed client |
+| `dynamodb://` | DynamoDB | no | poll | ✅ | none needed |
+| `cosmos://` | Cosmos DB | no | poll (ETag) | ✅ | none needed |
+| `redis://` | Redis | no | **native** (keyspace) | ✅ | closes a self-built client |
+| `consul://` | Consul | no | **native** | ✅ | none needed |
+| `etcd://` | etcd | no | **native** | ✅ | closes a self-dialed client |
+| `nacos://` | Nacos | no | **native** | ✅ | injected HTTP client's idle conns |
+| `vercel-gc://` | Vercel Global Config | no | poll (digest) | ✅ | injected HTTP client's idle conns |
+| `cloudflare-kv://` | Cloudflare Workers KV | no | poll | ✅ | injected HTTP client's idle conns |
+| `heroku://` | Heroku Config Vars | yes | poll | ✅ | injected HTTP client's idle conns |
+| `https://` | Generic HTTPS | per-endpoint | poll (conditional GET) | ✅ | injected endpoint clients' idle conns |
+| `k8s-secret://` `k8s-cm://` | Kubernetes | yes / no | **native** | ✅ | self-built clientset's idle conns |
+| `firestore://` | Firestore | no | **native** (snapshots) | ✅ | closes a self-built client |
+| `firebase-rc://` | Remote Config | no | poll | ✅ | injected HTTP client's idle conns |
+| `firebase-rtdb://` | Realtime DB | no | **native** (streaming) | no (chain preserved) | terminal only, releases nothing |
+| `s3://` | Amazon S3 | no | poll (ETag) | ✅ | none needed |
+| `gcs://` | Google GCS | no | poll (generation) | ✅ | closes a self-built reader client |
+| `azblob://` | Azure Blob | no | poll (ETag) | ✅ | none needed |
+| `launchdarkly://` | LaunchDarkly | no | **native** (streaming) | ✅ | closes a self-built client |
+| `unleash://` | Unleash | no | poll | n/a (no error surface) | closes a self-built client |
+| `flagsmith://` | Flagsmith | no | poll | no (chain preserved) | none needed |
+| `configcat://` | ConfigCat | no | poll | n/a (no error surface) | closes the SDK client (stops polling) |
+| `split://` | Split | no | poll | n/a (no error surface) | destroys a self-built client |
+| `growthbook://` | GrowthBook | no | poll | no (chain preserved) | closes the SDK client |
+| `flipt://` | Flipt | no | poll | ✅ | none needed |
+| `goff://` | GO Feature Flag | no | poll | ✅ | none needed |
+| `openfeature://` | OpenFeature | no | poll | ✅ | none needed |
+| `posthog://` | PostHog | no | poll | ✅ | injected HTTP client's idle conns |
+| `viper://` | Viper | no | poll | n/a (no error surface) | none needed |
 
 ## Choosing and configuring a provider
 
