@@ -137,12 +137,13 @@ type Provider struct {
 	allowInsecure bool
 	httpClient    *http.Client
 
-	// mu guards client, which is built on the first Resolve rather than in New
-	// so that reading the environment (and validating the project URL) happens
-	// after process start. Registering from init must not require credentials
-	// to already exist.
+	// mu guards client and closed. client is built on the first Resolve rather
+	// than in New so that reading the environment (and validating the project
+	// URL) happens after process start. Registering from init must not require
+	// credentials to already exist.
 	mu     sync.Mutex
 	client *httpcore.Client
+	closed bool
 }
 
 // settings is the resolved, per-ref location of one secret: which exposed
@@ -308,9 +309,16 @@ func (p *Provider) settingsFor(ref mamori.Ref) (settings, error) {
 // credentials arrive after start (a mounted secret, a sidecar-populated
 // environment) then succeeds on a later poll instead of being poisoned by the
 // first attempt.
+//
+// The closed check runs first, ahead of the p.client != nil cache check, so a
+// closed provider refuses locally even when a client built before Close is
+// still sitting in p.client.
 func (p *Provider) clientFor() (*httpcore.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: supabase: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.client != nil {
 		return p.client, nil
 	}
@@ -348,6 +356,24 @@ func (p *Provider) clientFor() (*httpcore.Client, error) {
 	}
 	p.client = c
 	return c, nil
+}
+
+// Close marks the provider closed and returns its idle HTTP connections to the
+// pool. It is idempotent, and afterwards Resolve reports
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
+// clientFor already applies, without contacting Supabase.
+//
+// A client supplied through WithHTTPClient is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the caller's
+// own use of that client is unaffected by closing this provider.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.httpClient != nil {
+		p.httpClient.CloseIdleConnections()
+	}
+	return nil
 }
 
 // apiKeyAuth sets the two headers a Supabase request needs, both carrying the
