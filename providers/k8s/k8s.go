@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -192,8 +194,21 @@ func (p *Provider) getClient() (kubernetes.Interface, error) {
 //
 // client-go's generated Clientset has no Close method of its own - each typed
 // REST client just wraps an *http.Client - so releasing means asking that
-// *http.Client to drop its idle keep-alive connections via
-// CloseIdleConnections, reached through the CoreV1 REST client's transport.
+// *http.Client to drop its idle keep-alive connections, reached through the
+// CoreV1 REST client's transport. See closeIdleConnections for why "owned"
+// alone is not enough to make that safe, and closeIdleConnectionsSafely for
+// what actually decides whether a given transport may be released.
+//
+// ownClient covers WithClientFactory as well as the default resolution, even
+// though a factory can hand back a clientset built over a caller-supplied
+// *http.Client (kubernetes.NewForConfigAndClient(cfg, callerClient) is a
+// public, ordinary way to do that): the *Clientset value itself does not
+// exist until the factory runs inside getClient, so the caller cannot already
+// hold a reference to it the way a WithClient injection hands over an
+// existing one. What "owned" cannot promise is that the *http.Client (or its
+// Transport) underneath is this provider's alone to release, which is
+// exactly what closeIdleConnections and closeIdleConnectionsSafely check for
+// before calling anything.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -212,12 +227,61 @@ func (p *Provider) Close() error {
 // case (and the fake clientset used throughout this package's tests, whose
 // FakeCoreV1.RESTClient() deliberately returns a typed-nil *rest.RESTClient)
 // is a silent no-op rather than a panic or a type-assertion failure.
+//
+// It does not call rc.Client.CloseIdleConnections() directly. http.Client's
+// own method resolves a nil Transport to the process-global
+// http.DefaultTransport before checking whether that implements
+// CloseIdleConnections, and on the REAL default (in-cluster / kubeconfig,
+// no client certificate) path rc.Client.Transport is not nil but unwraps,
+// through several client-go RoundTripperWrapper layers (at minimum
+// *transport.userAgentRoundTripper, since NewForConfig always sets a
+// UserAgent), to exactly that same shared http.DefaultTransport -
+// client-go's own transport cache hands it back verbatim for a config with
+// no custom TLS material (transport.New, via tlsCache.get). Releasing there
+// would evict connections belonging to whatever other code in the process
+// also leaves its Transport unset, not just this provider's own traffic -
+// the identical hazard WithHTTPClient guards against in every HTTP-backed
+// mamori provider, reached here through a chain of wrappers instead of a
+// single nil check. See closeIdleConnectionsSafely for the unwrap-and-refuse
+// logic that replaces the single check those providers use.
 func closeIdleConnections(client kubernetes.Interface) {
 	rc, ok := client.CoreV1().RESTClient().(*rest.RESTClient)
 	if !ok || rc == nil || rc.Client == nil {
 		return
 	}
-	rc.Client.CloseIdleConnections()
+	closeIdleConnectionsSafely(rc.Client.Transport)
+}
+
+// closeIdleConnectionsSafely mirrors
+// k8s.io/apimachinery/pkg/util/net.CloseIdleConnectionsFor: it unwraps a
+// chain of utilnet.RoundTripperWrapper values (client-go's own transport
+// wrappers - user agent, bearer token, impersonation, and so on; none of
+// which implement CloseIdleConnections themselves) until it finds a
+// RoundTripper that does, then calls it.
+//
+// It is a local copy rather than a call to that shared helper because the
+// shared helper does not stop at the process-global http.DefaultTransport:
+// unwrapped all the way down, an ordinary in-cluster or default-kubeconfig
+// connection with no client certificate bottoms out at exactly that shared
+// transport (see closeIdleConnections's doc comment), and calling
+// CloseIdleConnections on it would evict connections belonging to unrelated
+// code in the process. So this version checks identity against
+// http.DefaultTransport - not merely nilness, since a rt this deep in the
+// chain is never nil by construction, only ever possibly equal to it - and
+// refuses outright the moment it is reached, before ever calling anything on
+// it. A nil rt (the top-level rc.Client.Transport left unset) refuses the
+// same way nil resolves to http.DefaultTransport for any *http.Client.
+func closeIdleConnectionsSafely(rt http.RoundTripper) {
+	if rt == nil || rt == http.DefaultTransport {
+		return
+	}
+	type closeIdler interface{ CloseIdleConnections() }
+	switch t := rt.(type) {
+	case closeIdler:
+		t.CloseIdleConnections()
+	case utilnet.RoundTripperWrapper:
+		closeIdleConnectionsSafely(t.WrappedRoundTripper())
+	}
 }
 
 // defaultClient builds a clientset from in-cluster config, falling back to the
