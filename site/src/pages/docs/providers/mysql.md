@@ -69,6 +69,10 @@ import mysqlprov "github.com/xavidop/mamori/providers/mysql"
 mamori.WithProvider(mysqlprov.New(mysqlprov.WithDSN("user:pass@tcp(mysql:3306)/appdb")))
 ```
 
+`Close()` releases a pool this provider opened itself; a pool injected with `WithDB` is owned by the caller and stays open. Either way `Close` is terminal, not a no-op: after it returns, every `Resolve` on that provider fails with `errors.Is(err, mamori.ErrUnavailable)`. A subsequent `Load` fails for the fields it feeds, and under `Watch` the default `onfail` policy (`keeplast`) freezes them at their last known-good value and reports the error to your error handler.
+
+A `default:` tag does not cover this since it only applies to genuine absence (`ErrNotFound`), never to an error; falling back on error requires the explicit per-field opt-in `onfail:"default"`.
+
 ## Error classification
 
 Beyond the not-found case, query failures are classified by the driver's numeric server error code so `mamori.ErrorKind` can distinguish them:

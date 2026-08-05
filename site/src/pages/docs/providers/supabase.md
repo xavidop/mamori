@@ -175,6 +175,8 @@ The environment is read lazily at the first resolve, so a blank import is safe e
 | `WithAllowInsecure()` | Permit an `http://` project URL, and nothing else |
 | `WithHTTPClient(c)` | Inject a custom `*http.Client`; a nil client is a no-op |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Supabase. Without `WithHTTPClient` it releases nothing: this provider builds no default client of its own to hold onto. A client injected with `WithHTTPClient` is never closed or invalidated, only its idle connections are returned to the pool, and only when that client's `Transport` is non-nil (a nil `Transport` resolves to the shared `http.DefaultTransport`, which `Close` leaves alone).
+
 `supabase start` serves the Data API from `http://127.0.0.1:54321` for local development, which requires `WithAllowInsecure()`. It takes no argument and permits cleartext `http`, nothing else.
 
 The request and response shapes above are taken from Supabase's documentation rather than from a live call, since nobody on this project has a Supabase project; everything else is verified against an in-process fake. A `//go:build integration` test closes that gap against a real project when `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_TEST_SECRET_NAME` are set.

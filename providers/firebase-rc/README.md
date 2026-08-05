@@ -124,6 +124,16 @@ Advanced options: `WithHTTPClient` injects a pre-authenticated `*http.Client`
 (custom transport, proxy, or an emulator), and `WithBaseURL` overrides the REST
 endpoint base. `WithFetcher` replaces the template fetcher entirely.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the Remote
+Config API. On the default path (Application Default Credentials, no
+`WithHTTPClient`) it releases nothing: the default client wraps an OAuth2
+transport that implements no idle-connection-release method of its own, so
+there is no method `Close` could call that would release only its connections.
+A client injected with `WithHTTPClient` is never closed or invalidated, only
+its idle connections are returned to the pool, and only when that client's
+`Transport` is non-nil.
+
 ## Error classification
 
 A non-200 response from the Remote Config REST API is classified by HTTP

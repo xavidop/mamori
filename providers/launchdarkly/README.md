@@ -158,6 +158,15 @@ p := launchdarkly.New(launchdarkly.WithClient(client))
 | `WithContextKey(key)` | Set the evaluation context key (defaults to `mamori`) |
 | `WithClient(*ldclient.LDClient)` | Inject a pre-configured LaunchDarkly client |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting LaunchDarkly. It releases the LaunchDarkly client this provider
+built lazily: its streaming connection and the goroutines that maintain it,
+including the flag tracker's event listeners. A client injected with
+`WithClient` belongs to the caller and is left connected; `New` followed by
+`Close` with no prior `Resolve` never connects, so there is nothing to
+release.
+
 ## Native watch (streaming flag tracker)
 
 The provider implements `mamori.WatchableProvider` using **LaunchDarkly's native

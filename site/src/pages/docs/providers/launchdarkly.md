@@ -79,3 +79,5 @@ mamori.WithProvider(ldprov.New(ldprov.WithSDKKey(os.Getenv("LAUNCHDARKLY_SDK_KEY
 ```
 
 Verified with an injected fake evaluator (including value-change subscriptions, not-found, and injected per-flag failures for error classification), so the watch and `providertest` `ErrorClassification` conformance checks run without a live LaunchDarkly. A real-SDK test is provided behind `//go:build integration`.
+
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting LaunchDarkly. It releases the LaunchDarkly client this provider built lazily: its streaming connection and the goroutines that maintain it, including the flag tracker's event listeners. A client injected with `WithClient` belongs to the caller and is left connected; `New` followed by `Close` with no prior `Resolve` never connects, so there is nothing to release.

@@ -246,6 +246,15 @@ otherwise construct cleanly and then fail on every resolve with `net/http`'s
 "unsupported protocol scheme" - a resolve-time failure `New` exists precisely
 to turn into a startup-time one.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting any
+endpoint. For each endpoint it returns idle HTTP connections to the pool, but
+only for an `Endpoint.Client` the caller supplied, and only when that client's
+`Transport` is non-nil. An endpoint left with no `Client` uses an internal
+default this package holds no reference to, so there is nothing for `Close` to
+release there. A supplied `Endpoint.Client` is never closed or invalidated
+either way, only its idle connections may be released.
+
 ## Error classification
 
 `Resolve` classifies every non-2xx, non-304 response through

@@ -66,6 +66,8 @@ import gcpprov "github.com/xavidop/mamori/providers/gcp"
 mamori.WithProvider(gcpprov.New(gcpprov.WithClient(myClient)))
 ```
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Secret Manager. It releases the backing client, but only one this provider built itself. A client injected with `WithClient` (or produced by `WithClientFactory`) belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
+
 ## Watch
 
 Secret Manager has no native change notification, so mamori polls (`WithPollInterval` + jitter). Pub/Sub rotation notifications can drive an on-demand `Load` in your app if you need push.

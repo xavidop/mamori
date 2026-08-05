@@ -132,6 +132,14 @@ p := etcd.New(etcd.WithClient(client))
 | `WithEndpoints(eps...)` | Set the etcd endpoints (overrides `ETCD_ENDPOINTS`) |
 | `WithClient(*clientv3.Client)` | Inject a pre-configured etcd client (custom TLS/auth/dial) |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting etcd. It releases the etcd client this provider dialed lazily,
+including its gRPC connection and any watcher/lease goroutines built on top
+of it. A client injected with `WithClient` belongs to the caller and is left
+open; `New` followed by `Close` with no prior `Resolve` never dials, so there
+is nothing to release.
+
 ## Native watch (watch stream)
 
 The provider implements `mamori.WatchableProvider` using **etcd's native watch

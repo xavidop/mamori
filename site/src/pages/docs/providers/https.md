@@ -97,6 +97,8 @@ p, err := httpsprov.New(httpsprov.Endpoint{
 
 Endpoints are validated when you construct the provider, so a typo in a name or a `BaseURL` fails at startup rather than on every resolve.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting any endpoint. For each endpoint it returns idle HTTP connections to the pool, but only for an `Endpoint.Client` the caller supplied, and only when that client's `Transport` is non-nil. An endpoint left with no `Client` uses an internal default this package holds no reference to, so there is nothing for `Close` to release there. A supplied `Endpoint.Client` is never closed or invalidated either way, only its idle connections may be released.
+
 ## Path rules
 
 Two rules apply to the `<path>` part of a ref.

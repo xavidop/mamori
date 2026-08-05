@@ -84,3 +84,5 @@ mamori.WithProvider(mongoprov.New(
 ```
 
 Verified with an in-memory fake; live behavior against a replica set is covered by `//go:build integration` tests.
+
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting MongoDB. It disconnects the `*mongo.Client` this provider dialed lazily, bounded by a short internal timeout so a wedged server cannot make `Close` hang. A client injected with `WithClient` belongs to the caller and is left connected; `New` followed by `Close` with no prior `Resolve` never dials, so there is nothing to release.

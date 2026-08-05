@@ -110,6 +110,13 @@ mamori.WithProvider(gcp.New(gcp.WithClient(client)))
 `WithClientFactory` is also available if you want mamori to build the client
 lazily on first use with your own constructor.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Secret
+Manager. It releases the backing client, but only one this provider built
+itself. A client injected with `WithClient` (or produced by `WithClientFactory`)
+belongs to the caller and is left open; closing it would reach outside this
+provider and break whatever else the caller is using it for.
+
 ## Error classification
 
 | gRPC code | mamori kind |

@@ -58,6 +58,12 @@ mamori.WithProvider(configcat.New(
 ))
 ```
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting ConfigCat.
+It releases the underlying ConfigCat SDK client and its background auto-polling
+goroutine. This provider has no option to inject a pre-built client, so the
+client `Close` releases is always the one it built itself.
+
 ## Polling / Watch
 
 ConfigCat has no push-style change notification, so this provider is **not** watchable and mamori polls it. There are two independent cadences:

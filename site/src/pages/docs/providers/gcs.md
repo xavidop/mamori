@@ -53,6 +53,8 @@ type Config struct {
 
 The object name may contain slashes, so `env/prod/settings.yaml` is a single name. `Value.Version` is the object generation number (or ETag), which changes on every overwrite, so change detection is cheap. Objects are not marked sensitive by default; pass `WithSensitive()` for buckets that hold secret material.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Cloud Storage. It releases the backing reader client, but only one this provider built itself. A reader injected with `WithClient` (or produced by `WithClientFactory`) belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
+
 ## Watch
 
 mamori polls (`WithPollInterval` + jitter) using the generation. For push, GCS Pub/Sub object-change notifications can trigger an on-demand reload.

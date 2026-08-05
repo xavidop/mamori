@@ -70,6 +70,8 @@ Beyond the not-found case, a query failure that carries a SQLite result code is 
 
 Codes not listed above report `unknown` rather than being guessed at, and the original `*sqlite.Error` stays reachable with `errors.As`.
 
+`Close()` releases nothing: this provider opens a fresh `*sql.DB` on every `Resolve` and closes it again before returning, so there is never a persistent connection for `Close` to hold. Its only job is to make the provider terminal, and it does that: after `Close`, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without opening a connection to the database file. sqlite keeps this terminal-only `Close` mainly because it sits beside `providers/postgres` and `providers/mysql`; a caller sweeping `Close` across the database providers at shutdown would otherwise be surprised to find sqlite alone still serving.
+
 ## Watch
 
 `Watch` uses fsnotify on the database file: when the file changes, mamori re-queries and emits an update. Ideal for a config DB written by another process.

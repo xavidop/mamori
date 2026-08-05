@@ -40,6 +40,17 @@ mamori.WithProvider(k8s.New(k8s.WithKubeconfig("/path/to/kubeconfig")))
 mamori.WithProvider(k8s.NewConfigMap(k8s.WithClient(myClientset)))
 ```
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting the cluster. It releases the idle HTTP connections behind a
+clientset this provider built itself, whether through the default
+kubeconfig/in-cluster resolution or through `WithClientFactory`, but only when
+releasing them is safe: a clientset configured with no TLS material at all
+resolves, several layers down, to the shared `http.DefaultTransport`, and
+`Close` detects and skips that narrow case rather than evict connections
+belonging to unrelated code. A clientset injected directly with `WithClient` is
+never touched.
+
 ## Watch
 
 `Watch` opens a name-scoped watch and emits an `Update` on every Added/Modified event; it re-establishes (re-list + re-watch) if the server-side watch ends while the context is alive, and closes cleanly on cancellation.

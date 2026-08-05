@@ -71,6 +71,8 @@ import redisprov "github.com/xavidop/mamori/providers/redis"
 mamori.WithProvider(redisprov.New(redisprov.WithAddr("redis:6379"), redisprov.WithDB(0)))
 ```
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Redis. It releases the go-redis client, including its connection pool, that this provider built lazily. A client injected with `WithClient` belongs to the caller and is left open; `New` followed by `Close` with no prior `Resolve` never dials, so there is nothing to release.
+
 ## Error classification
 
 Beyond the not-found case, other `GET` failures are classified using go-redis's typed predicates so `mamori.ErrorKind` can distinguish them:

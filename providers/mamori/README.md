@@ -67,6 +67,16 @@ Setting a single-element `Endpoints` behaves exactly like the equivalent `Endpoi
 - 🖧 **The config server this client talks to:** https://mamorigo.dev/docs/server
 - 🔁 **Running that server as several replicas** (readiness gating, draining, and the `resolved_at`/`stale` freshness fields this client can compare): https://mamorigo.dev/docs/server/ha
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve`,
+`ResolveBatch`, and `Watch` report `errors.Is(err, mamori.ErrUnavailable)`
+locally, without contacting any replica. It returns every endpoint's idle HTTP
+connections to the pool. Unlike most HTTP-backed providers here, this happens
+in the default configuration too: an endpoint built without `Config.HTTPClient`
+gets its own real `*http.Transport`, which belongs to this provider alone. A
+client supplied through `Config.HTTPClient` is never closed or invalidated,
+only its idle connections are released, and only when that client's
+`Transport` is non-nil.
+
 ## Development
 
 This provider is its own Go module. Run all commands with the workspace disabled:

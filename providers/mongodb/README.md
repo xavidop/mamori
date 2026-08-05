@@ -126,6 +126,14 @@ p := mongodb.New(mongodb.WithClient(client), mongodb.WithDatabase("app"))
 | `WithDatabase(name)` | Set the database name (**required**) |
 | `WithClient(*mongo.Client)` | Inject a pre-configured MongoDB client |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting MongoDB. It disconnects the `*mongo.Client` this provider dialed
+lazily, bounded by a short internal timeout so a wedged server cannot make
+`Close` hang. A client injected with `WithClient` belongs to the caller and
+is left connected; `New` followed by `Close` with no prior `Resolve` never
+dials, so there is nothing to release.
+
 ## Native watch (change streams)
 
 The provider implements `mamori.WatchableProvider` using **MongoDB change

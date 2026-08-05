@@ -63,6 +63,8 @@ mamori.WithProvider(dopplerprov.New(
 ))
 ```
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Doppler. It also returns the HTTP client's idle connections to the pool, but only when that client's `Transport` is non-nil. `New`'s own default client (unless overridden with `WithHTTPClient`) leaves `Transport` unset, and Go resolves a nil `Transport` to the shared `http.DefaultTransport`; releasing idle connections there would evict connections belonging to unrelated code in the same process, so `Close` skips it. A client injected with `WithHTTPClient` is never closed or invalidated either way, only its idle connections may be released.
+
 ## Watch
 
 Doppler has no push channel, so mamori polls (`WithPollInterval` + jitter).

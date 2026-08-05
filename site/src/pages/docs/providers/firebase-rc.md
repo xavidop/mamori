@@ -67,6 +67,8 @@ mamori.WithProvider(rcprov.New(rcprov.WithProjectID("my-project")))
 
 Authentication uses Application Default Credentials (a service account via `GOOGLE_APPLICATION_CREDENTIALS`, or workload identity). Verified with an in-memory fake; live behavior is covered by `//go:build integration` tests.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the Remote Config API. On the default path (Application Default Credentials, no `WithHTTPClient`) it releases nothing: the default client wraps an OAuth2 transport that implements no idle-connection-release method of its own, so there is no method `Close` could call that would release only its connections. A client injected with `WithHTTPClient` is never closed or invalidated, only its idle connections are returned to the pool, and only when that client's `Transport` is non-nil.
+
 ## Error classification
 
 A non-200 response from the Remote Config REST API is classified by HTTP status:

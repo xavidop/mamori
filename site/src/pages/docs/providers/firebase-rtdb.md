@@ -57,6 +57,8 @@ A JSON string leaf is returned unquoted; other JSON (objects, arrays, numbers, b
 
 Beyond the not-found case above, this provider has no SDK-specific error taxonomy to classify against, so any other backend failure reports `unknown` via `mamori.ErrorKind`. `Resolve` still wraps the backend error with `%w`, so the classification chain (`errors.Is`, `errors.As`) is preserved rather than flattened, even though nothing here maps it to a more specific kind.
 
+`Close()` marks the provider closed; afterwards every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the Realtime Database. It releases no connection: this provider holds no `*http.Client` of its own, and a running `Watch`'s SSE stream is owned end to end by that watch's own goroutine, which already closes the stream on context cancellation. `Close` deliberately adds no second teardown path for a running watch.
+
 ## Watch
 
 `Watch` uses the Realtime Database streaming endpoint (server-sent events): the server pushes `put` and `patch` events as the data changes, and mamori emits an update on each. This is a genuine realtime subscription.

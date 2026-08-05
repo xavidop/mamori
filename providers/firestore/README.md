@@ -96,6 +96,13 @@ p := firestore.New(firestore.WithClient(client))
 | `WithProjectID(id)` | Set the Google Cloud project ID (default: detected) |
 | `WithClient(*firestore.Client)` | Inject a pre-built Firestore client |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting Firestore. It releases the backing client, but only one this provider
+built itself. A client injected with `WithClient` belongs to the caller and is
+left open; closing it would reach outside this provider and break whatever else
+the caller is using it for.
+
 ## Native watch (snapshot listeners)
 
 The provider implements `mamori.WatchableProvider` using **Firestore snapshot

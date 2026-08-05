@@ -141,6 +141,15 @@ mamori.WithProvider(growthbook.New(growthbook.WithFeatures(features)))
 
 Combine `WithFeatures` with `WithDecryptionKey` to supply an encrypted payload.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve`
+reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting
+GrowthBook. It closes the underlying GrowthBook SDK client, which stops its
+plugins and, for API-backed operation, the background feature-refresh
+polling. This provider has no option to inject a pre-built SDK client, so
+the client `Close` releases is always its own; an `*http.Client` supplied
+with `WithHTTPClient` only customizes the transport the SDK uses internally
+and is not itself closed.
+
 ## Error classification
 
 This provider has no error vocabulary beyond not-found: the GrowthBook SDK

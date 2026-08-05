@@ -133,6 +133,15 @@ Supplying only one of username and password is a configuration error rather
 than a silent fallback to unauthenticated requests, which would work against a
 server with auth disabled and fail with an opaque 403 against every other one.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting the Nacos server. Without `WithHTTPClient` it releases nothing: the
+client built for that unconfigured case belongs to an internal helper, not to a
+field `Close` holds a reference to. A client injected with `WithHTTPClient` is
+never closed or invalidated, only its idle connections are returned to the
+pool, and only when that client's `Transport` is non-nil (a nil `Transport`
+resolves to the shared `http.DefaultTransport`, which `Close` leaves alone).
+
 ### The access token travels in the query string
 
 Nacos's documented way to carry a token is a query parameter:

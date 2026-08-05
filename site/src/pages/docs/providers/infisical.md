@@ -131,4 +131,6 @@ A ref option wins over a provider option, which wins over the environment variab
 | `WithAllowInsecure()` | Permit an `http://` base URL, and nothing else |
 | `WithHTTPClient(c)` | Inject a custom `*http.Client` for both the login and the read |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Infisical. Without `WithHTTPClient` it releases nothing: this provider builds no default client of its own to hold onto. A client injected with `WithHTTPClient` is never closed or invalidated, only its idle connections are returned to the pool, and only when that client's `Transport` is non-nil (a nil `Transport` resolves to the shared `http.DefaultTransport`, which `Close` leaves alone).
+
 The wire shapes above come from Infisical's [API reference](https://infisical.com/docs/api-reference/endpoints/secrets/read) rather than from a live call, since nobody on this project has Infisical credentials; everything else is verified against an in-process fake. A `//go:build integration` test closes that gap against a real instance when `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID` and `INFISICAL_TEST_SECRET_NAME` are set.

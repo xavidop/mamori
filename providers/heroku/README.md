@@ -163,6 +163,14 @@ that is neither `http` nor `https` is refused either way, because
 otherwise construct cleanly and fail on every single resolve with net/http's
 "unsupported protocol scheme".
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Heroku.
+Without `WithHTTPClient` it releases nothing: this provider builds no default
+client of its own to hold onto. A client injected with `WithHTTPClient` is
+never closed or invalidated, only its idle connections are returned to the
+pool, and only when that client's `Transport` is non-nil (a nil `Transport`
+resolves to the shared `http.DefaultTransport`, which `Close` leaves alone).
+
 ## Batching
 
 `ResolveBatch` groups refs by app and issues **one request per app**. mamori

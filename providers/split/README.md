@@ -54,6 +54,13 @@ mamori.WithProvider(split.New(split.WithAPIKey("your-server-side-sdk-key")))
 
 The Split client is built lazily on first `Resolve`, so registering the provider never contacts the network and never fails for lack of configuration.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve`
+reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting
+Split. It destroys the backing client, but only one this provider built
+itself. A client injected with `WithClient` belongs to the caller and is
+left running; destroying it would flush and tear down a factory the caller
+is still evaluating flags through.
+
 ## Polling and readiness
 
 - **Readiness:** the Split SDK downloads flag definitions from Split's servers in a background goroutine after the factory is created; until that first sync completes every evaluation returns "control". The provider therefore blocks on the SDK's `BlockUntilReady` during its lazy construction (bounded by `WithReadyTimeout`, 10s by default). If the client cannot become ready in time - bad SDK key, unreachable backend - the first `Resolve` returns that initialization error rather than masking it as not-found.

@@ -107,6 +107,14 @@ until the feature repository is populated rather than reporting spurious
 not-found results. If you inject your own client via `WithClient`, call
 `WaitForReady()` on it yourself before handing it over.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve`
+reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting
+the Unleash server. It releases the backing client, but only one this
+provider built itself, which stops its refresh and metrics goroutines. A
+client injected with `WithClient` belongs to the caller and is left
+running; closing it would stop those same goroutines out from under
+whatever else the caller is using it for.
+
 ## Watch
 
 No native per-toggle change notification - mamori polls (interval + jitter).

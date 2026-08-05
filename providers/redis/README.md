@@ -120,6 +120,13 @@ p := redis.New(redis.WithClient(client))
 | `WithDB(db)` | Logical database number; also selects the `__keyspace@<db>__` channel `Watch` subscribes to |
 | `WithClient(goredis.UniversalClient)` | Inject a pre-configured client (`*redis.Client`, `*redis.ClusterClient`, or `*redis.Ring`) |
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and
+`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
+contacting Redis. It releases the go-redis client, including its connection
+pool, that this provider built lazily. A client injected with `WithClient`
+belongs to the caller and is left open; `New` followed by `Close` with no
+prior `Resolve` never dials, so there is nothing to release.
+
 ## Native watch (keyspace notifications)
 
 The provider implements `mamori.WatchableProvider` using **Redis keyspace

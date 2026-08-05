@@ -44,6 +44,8 @@ The value maps to bytes by type: a boolean setting resolves to `true` / `false`,
 - `configcat://isAwesomeFeatureEnabled` resolves to `true` / `false` - pair it with a `bool` field.
 - `configcat://maxUploadSizeMB` resolves to e.g. `50` - pair it with an `int` field.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting ConfigCat. It releases the underlying ConfigCat SDK client and its background auto-polling goroutine. This provider has no option to inject a pre-built client, so the client `Close` releases is always the one it built itself.
+
 ## Watch
 
 The ConfigCat SDK auto-polls its config; mamori polls (`WithPollInterval` + jitter) on top.

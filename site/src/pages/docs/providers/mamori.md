@@ -121,6 +121,8 @@ mamoriprov.New(mamoriprov.Config{Endpoint: "https://config.internal:8443"},
 - **mTLS** is configured entirely through `Config.TLSConfig.Certificates`, matching the server's `mamori.MTLS` authenticator.
 - **`PeerCred`** needs no client-side configuration at all: over a Unix socket, the kernel supplies the connecting process's uid/gid to the server directly (`SO_PEERCRED`/`LOCAL_PEERCRED`), so there is nothing for this provider to attach.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, `ResolveBatch`, and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting any replica. It returns every endpoint's idle HTTP connections to the pool. Unlike most HTTP-backed providers here, this happens in the default configuration too: an endpoint built without `Config.HTTPClient` gets its own real `*http.Transport`, which belongs to this provider alone. A client supplied through `Config.HTTPClient` is never closed or invalidated, only its idle connections are released, and only when that client's `Transport` is non-nil.
+
 ## Watch
 
 `mamori://` implements `mamori.WatchableProvider` as a **native** watch: mamori must never wrap it in its own polling adapter. `Watch` opens a persistent `GET /v1/watch?name=<binding>` Server-Sent Events connection and forwards every `update`/`error` frame the server sends as a `mamori.Update`.

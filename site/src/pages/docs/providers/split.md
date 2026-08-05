@@ -65,3 +65,5 @@ mamori.WithProvider(splitprov.New(
 ```
 
 Verified with an injected fake (un-seeded flags return `control` -> not-found); live behavior is covered by `//go:build integration` tests.
+
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Split. It destroys the backing client, but only one this provider built itself. A client injected with `WithClient` belongs to the caller and is left running; destroying it would flush and tear down a factory the caller is still evaluating flags through.

@@ -348,6 +348,14 @@ mamori.WithProvider(posthog.New(
 `New` never contacts PostHog and never fails, so the blank import registers a
 provider that configures itself from the environment at first resolve.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting PostHog.
+Without `WithHTTPClient` it releases nothing: this provider builds no default
+client of its own to hold onto. A client injected with `WithHTTPClient` is never
+closed or invalidated, only its idle connections are returned to the pool, and
+only when that client's `Transport` is non-nil (a nil `Transport` resolves to
+the shared `http.DefaultTransport`, which `Close` leaves alone).
+
 ## Development
 
 This package is its own Go module. Run all commands with the workspace disabled:

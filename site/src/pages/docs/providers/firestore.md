@@ -54,6 +54,8 @@ type Config struct {
 
 A scalar field is returned unquoted; maps and arrays as their JSON encoding. `Value.Version` is the document's `UpdateTime`, computed over the whole document, so a change to any field is detected even for a `#field` ref. Firestore holds application configuration rather than managed secrets, so values are not marked sensitive; wrap a field in `secret.String` for redaction.
 
+`Close()` is idempotent and terminal: after it returns, every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Firestore. It releases the backing client, but only one this provider built itself. A client injected with `WithClient` belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
+
 ## Watch
 
 `Watch` uses `Doc.Snapshots`, Firestore's real-time listener, emitting an update on every change to the document. No polling.

@@ -68,3 +68,5 @@ mamori.WithProvider(unleashprov.New(
 ```
 
 Verified with an injected fake (un-seeded toggles resolve to not-found); live behavior is covered by `//go:build integration` tests.
+
+`Close()` is idempotent and terminal: after it returns, every `Resolve` reports `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the Unleash server. It releases the backing client, but only one this provider built itself, which stops its refresh and metrics goroutines. A client injected with `WithClient` belongs to the caller and is left running; closing it would stop those same goroutines out from under whatever else the caller is using it for.

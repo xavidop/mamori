@@ -130,6 +130,16 @@ cfg, err := mamori.Load[Config](ctx, mamori.WithProvider(p))
 The default DSN opens the file with `PRAGMA busy_timeout(5000)` so a read that
 races an external writer waits briefly rather than failing immediately.
 
+`Close()` releases nothing: this provider opens a fresh `*sql.DB` on every
+`Resolve` and closes it again before returning, so there is never a persistent
+connection for `Close` to hold. Its only job is to make the provider terminal,
+and it does that: after `Close`, every `Resolve` reports `errors.Is(err,
+mamori.ErrUnavailable)` locally, without opening a connection to the database
+file. sqlite keeps this terminal-only `Close` mainly because it sits beside
+`providers/postgres` and `providers/mysql`; a caller sweeping `Close` across the
+database providers at shutdown would otherwise be surprised to find sqlite alone
+still serving.
+
 ## Native watch (fsnotify)
 
 The provider implements `mamori.WatchableProvider` by watching the database file
