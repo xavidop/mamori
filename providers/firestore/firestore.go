@@ -93,6 +93,12 @@ type Provider struct {
 
 	mu      sync.Mutex
 	backend backend
+	// ownBackend is true only when this provider built backend itself, through
+	// newBackend. A client handed over with WithClient belongs to the caller,
+	// who may still be using it elsewhere, so Close leaves it open. The
+	// fsBackend wrapper WithClient builds is not ownership: its Close closes
+	// the caller's *firestore.Client underneath.
+	ownBackend bool
 	// closed records that Close ran. It is what makes Close terminal: without
 	// it the nil backend Close leaves behind is indistinguishable from one that
 	// was never built, and the next Resolve or Watch would silently dial
@@ -117,6 +123,11 @@ func WithProjectID(projectID string) Option {
 // WithClient injects a pre-built *firestore.Client, bypassing lazy construction.
 // Use it when you build the client yourself (custom database ID, credentials, or
 // emulator endpoint).
+//
+// The client stays yours: Close leaves it open, since this provider has no way
+// to know what else you built it for. Close it yourself when you are done with
+// it. A client the provider builds for itself (the default, from Application
+// Default Credentials) is the provider's to release, and Close does release it.
 func WithClient(c *fs.Client) Option {
 	return func(p *Provider) {
 		if c != nil {
@@ -181,13 +192,19 @@ func (p *Provider) getBackend(ctx context.Context) (backend, error) {
 		return nil, fmt.Errorf("firestore: creating client: %w", err)
 	}
 	p.backend = b
+	p.ownBackend = true
 	return b, nil
 }
 
-// Close releases the backing client, if one has been created. It is terminal:
-// every later Resolve or Watch reports unavailable without touching the
-// backend. Calling it more than once, or on a provider that never resolved, is
-// a no-op.
+// Close releases the backing client, but only one this provider built itself. A
+// client supplied with WithClient belongs to the caller and is left open;
+// closing it would reach outside this provider and break whatever else the
+// caller is using it for.
+//
+// Marking the provider closed is unconditional, so Close is terminal either
+// way: every later Resolve or Watch reports unavailable without touching the
+// backend, whether or not there was anything here to release. Calling it more
+// than once, or on a provider that never resolved, is a no-op.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -195,7 +212,7 @@ func (p *Provider) Close() error {
 		return nil
 	}
 	p.closed = true
-	if p.backend == nil {
+	if p.backend == nil || !p.ownBackend {
 		return nil
 	}
 	err := p.backend.Close()

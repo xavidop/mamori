@@ -26,6 +26,12 @@ type fakeStore struct {
 	version  uint64
 	baseTime time.Time
 	waiters  chan struct{} // closed (and replaced) on every write to wake blocked streams
+	// closed records a Close, so a test can assert whether the provider closed
+	// this backend. It deliberately does not affect Get or Snapshots: the
+	// conformance kit builds two providers over one shared fake, and a fake
+	// that started refusing reads after the first Close would report the
+	// resulting failure as "Resolve before Close", pointing at the wrong thing.
+	closed bool
 }
 
 type fakeDoc struct {
@@ -98,7 +104,20 @@ func (f *fakeStore) Snapshots(ctx context.Context, collection, doc string) (snap
 }
 
 // Close implements backend.
-func (f *fakeStore) Close() error { return nil }
+func (f *fakeStore) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return nil
+}
+
+// isClosed reports whether Close has been called, under the same lock every
+// other field of the fake is read through.
+func (f *fakeStore) isClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
+}
 
 // fakeSnapshot implements the snapshot interface.
 type fakeSnapshot struct {
@@ -448,5 +467,51 @@ func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("factory called %d times, want 0", calls)
+	}
+}
+
+// TestCloseLeavesInjectedClientOpen is the ownership half of the Close
+// contract: a backend handed over by the caller belongs to the caller, so Close
+// must stop using it without closing it. withBackend stands in for the public
+// WithClient here, which wraps a caller-built *firestore.Client in an fsBackend
+// whose Close would close that very client. The second assertion is what keeps
+// this from being half a fix: the provider must still go terminal, so declining
+// to close the caller's client cannot be implemented by declining to close at
+// all.
+func TestCloseLeavesInjectedClientOpen(t *testing.T) {
+	store := newFakeStore()
+	store.set("config", "app", map[string]interface{}{"host": "db.internal"})
+	p := New(withBackend(store))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "firestore://config/app")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if store.isClosed() {
+		t.Error("Close closed an injected backend; it belongs to the caller")
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "firestore://config/app")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseReleasesSelfBuiltClient is the other side of the same rule: a
+// backend the provider constructed for itself is the provider's to release.
+func TestCloseReleasesSelfBuiltClient(t *testing.T) {
+	store := newFakeStore()
+	store.set("config", "app", map[string]interface{}{"host": "db.internal"})
+	p := New()
+	p.newBackend = func(context.Context) (backend, error) { return store, nil }
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "firestore://config/app")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !store.isClosed() {
+		t.Error("Close did not release a backend the provider built itself")
 	}
 }
