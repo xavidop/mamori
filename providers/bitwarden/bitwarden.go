@@ -336,11 +336,21 @@ func (p *Provider) Scheme() string { return scheme }
 // even on a Provider built from a failed New (p.err set, httpClient still
 // recorded): Close never dials, so there is nothing for the earlier failure to
 // have left half-done.
+//
+// CloseIdleConnections is skipped when the tracked client's Transport is nil.
+// New's own default (unless overridden by WithHTTPClient) is exactly that
+// shape - &http.Client{Timeout: defaultTimeout} with no Transport set - and
+// net/http resolves a nil Transport to the process-global
+// http.DefaultTransport. Calling CloseIdleConnections on that client would
+// evict idle connections belonging to whatever OTHER code in this process
+// also leaves its Transport unset (anything built on http.DefaultClient), not
+// just this provider's own traffic, so the guard fires on an ordinary,
+// never-injected Provider too.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
-	if p.httpClient != nil {
+	if p.httpClient != nil && p.httpClient.Transport != nil {
 		p.httpClient.CloseIdleConnections()
 	}
 	return nil
