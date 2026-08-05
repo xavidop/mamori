@@ -219,6 +219,13 @@ func (p *Provider) get(ctx context.Context, c connection, store, endpoint string
 // where a bare origin belongs, which puts the token in c.host - cannot put
 // the token into an error's text.
 func (p *Provider) clientFor(c connection) (*httpcore.Client, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("mamori/vercel-gc: provider is closed: %w", mamori.ErrUnavailable)
+	}
+
 	client, err := httpcore.New(httpcore.Config{
 		BaseURL:     c.host,
 		HTTPClient:  p.httpClient,
