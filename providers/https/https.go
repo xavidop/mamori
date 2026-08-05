@@ -227,12 +227,18 @@ func (p *Provider) Scheme() string { return scheme }
 // endpoint left with no Client uses an internal default httpcore.New built
 // for it, which this package holds no reference to and therefore cannot
 // (and need not) release here.
+//
+// CloseIdleConnections is also skipped for any endpoint whose Client has a
+// nil Transport, since net/http resolves that to the process-global
+// http.DefaultTransport, and releasing idle connections there would evict
+// connections belonging to unrelated code elsewhere in the process rather
+// than anything this endpoint used.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
 	for _, ep := range p.endpoints {
-		if ep.client != nil {
+		if ep.client != nil && ep.client.Transport != nil {
 			ep.client.CloseIdleConnections()
 		}
 	}
