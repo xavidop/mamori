@@ -107,8 +107,10 @@ type Provider struct {
 	addr string
 	db   int
 
-	mu     sync.Mutex
-	client redisAPI // resolved client (injected or lazily built)
+	mu        sync.Mutex
+	client    redisAPI // resolved client (injected or lazily built)
+	ownClient bool     // true only when this provider built client itself
+	closed    bool     // Close has run; every later resolve/watch reports unavailable
 }
 
 // Option configures a Provider.
@@ -177,9 +179,18 @@ func (p *Provider) Scheme() string { return scheme }
 // configured address) on first use. Concurrent callers share one client. It also
 // records the effective database number so Watch subscribes to the matching
 // __keyspace@<db>__ channel.
+//
+// The closed check runs first, ahead of the p.client != nil cache check, so a
+// closed provider refuses locally even when a client (injected or previously
+// built) is still sitting in p.client: Close clears p.client, but the
+// ordering here is what makes that refusal unconditional rather than
+// incidental.
 func (p *Provider) getClient() (redisAPI, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: redis: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.client != nil {
 		return p.client, nil
 	}
@@ -211,6 +222,7 @@ func (p *Provider) getClient() (redisAPI, error) {
 	p.db = opts.DB
 
 	p.client = universalAdapter{c: goredis.NewClient(opts)}
+	p.ownClient = true
 	return p.client, nil
 }
 
@@ -219,6 +231,27 @@ func (p *Provider) database() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.db
+}
+
+// Close releases the go-redis client (including its connection pool) this
+// provider built lazily. It is a no-op when the client was injected by the
+// caller with WithClient (the caller owns it) and when nothing was ever
+// built, so New followed by Close never dials. closed is set unconditionally
+// before either of those checks, so the not-owned and never-built paths still
+// make Close terminal: afterwards Resolve and Watch report
+// mamori.ErrUnavailable, refused locally by getClient, rather than reaching
+// for a client this provider was just told to stop using. Close is
+// idempotent and safe for concurrent use.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if !p.ownClient || p.client == nil {
+		return nil
+	}
+	err := p.client.Close()
+	p.client = nil
+	return err
 }
 
 // Resolve fetches the current value for ref from Redis. A missing key yields an

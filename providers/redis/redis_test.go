@@ -202,6 +202,82 @@ func TestWatchEmitsOnSet(t *testing.T) {
 	}
 }
 
+// --- Close ---
+
+// TestCloseWithoutUseIsSafe pins the "safe with no prior use" half of the
+// Close contract: Close on a provider that never resolved must not dial and
+// must not panic, and a second Close must stay clean.
+func TestCloseWithoutUseIsSafe(t *testing.T) {
+	p := New()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if p.ownClient || p.client != nil {
+		t.Error("Close built a client on a provider that never resolved")
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.closed check in
+// getClient) rather than reaching into the fake client it was told to stop
+// using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	f := newFakeRedis()
+	f.set("app/level", "debug")
+	p := New(withRedisAPI(f))
+
+	ref, _ := mamori.ParseRef("redis://app/level")
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDoesNotCloseInjectedClient is the ownership half of rule 5: a
+// go-redis client handed in with WithClient belongs to the caller, so Close
+// must stop using it without closing it. go-redis returns "redis: client is
+// closed" from a second Close, so calling the real Close ourselves after
+// provider.Close and getting nil back proves this was the first real close -
+// i.e. Provider.Close left the injected client alone.
+//
+// It also proves the other half of rule 5's ordering requirement - that Close
+// still marks the provider closed on the not-owned path - since a Close that
+// returned early here (skipping p.closed = true to avoid touching the
+// injected client) would pass the "still usable" assertion below while
+// silently breaking Resolve's terminality for every WithClient caller.
+func TestCloseDoesNotCloseInjectedClient(t *testing.T) {
+	// goredis.NewClient never dials synchronously (the connection pool
+	// connects lazily on first command), so this construction is instant and
+	// needs no reachable server.
+	real := goredis.NewClient(&goredis.Options{Addr: "203.0.113.1:6379"})
+	p := New(WithClient(real))
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := real.Close(); err != nil {
+		t.Fatalf("injected client Close after provider Close: %v; want nil "+
+			"(a non-nil error here means Provider.Close already closed it)", err)
+	}
+
+	ref, _ := mamori.ParseRef("redis://app/level")
+	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
+	}
+}
+
 func TestConformance(t *testing.T) {
 	f := newFakeRedis()
 	providertest.Run(t, providertest.Config{
