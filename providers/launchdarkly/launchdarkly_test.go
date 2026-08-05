@@ -28,6 +28,7 @@ type fakeClient struct {
 	flags     map[string]ldvalue.Value
 	fails     map[string]fakeFailure
 	listeners map[*fakeListener]struct{}
+	closed    bool
 }
 
 // fakeFailure is an injected per-flag evaluation failure: the error
@@ -154,10 +155,13 @@ func (f *fakeClient) RemoveFlagValueChangeListener(listener <-chan interfaces.Fl
 	}
 }
 
-// Close implements ldEvaluator, closing any remaining listener channels.
+// Close implements ldEvaluator, closing any remaining listener channels and
+// recording that Close was called, so tests can assert whether a
+// caller-injected fake was (or was not) released.
 func (f *fakeClient) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.closed = true
 	for l := range f.listeners {
 		delete(f.listeners, l)
 		close(l.ch)
@@ -477,6 +481,85 @@ func TestFlagValueToBytes(t *testing.T) {
 				t.Fatalf("flagValueToBytes(%s) = %q, want %q", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+// --- Close ---
+
+// TestCloseWithoutUseIsSafe pins the "safe with no prior use" half of the
+// Close contract: Close on a provider that never resolved must not connect to
+// LaunchDarkly and must not panic, and a second Close must stay clean.
+func TestCloseWithoutUseIsSafe(t *testing.T) {
+	p := New()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if p.ownClient || p.cli != nil {
+		t.Error("Close built a client on a provider that never resolved")
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.closed check in
+// conn) rather than reaching into the fake client it was told to stop using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("flag", ldvalue.String("v"))
+	p := New(withClient(fake))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://flag")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://flag")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDoesNotCloseInjectedClient is the ownership half of rule 5: an
+// *ldclient.LDClient handed in with WithClient belongs to the caller, so
+// Close must stop using it without closing it.
+//
+// This uses the internal ldEvaluator seam (p.cli = fake) rather than building
+// a real *ldclient.LDClient through WithClient, unlike the equivalent tests in
+// mongodb/etcd/redis. Those providers' real clients expose an observable
+// signal for "was this already closed" (a distinguishable error from a second
+// Disconnect/Close). *ldclient.LDClient does not: its Close is unconditionally
+// idempotent and returns nil every time (verified directly against the SDK,
+// even in offline mode), so a real client would give this test nothing to
+// assert against. The fake's explicit closed flag is what gives this test its
+// teeth instead.
+//
+// It also proves the other half of rule 5's ordering requirement - that Close
+// still marks the provider closed on the not-owned path - since a Close that
+// returned early here (skipping p.closed = true to avoid touching the
+// injected client) would pass the "not closed" assertion below while silently
+// breaking Resolve's terminality for every WithClient caller.
+func TestCloseDoesNotCloseInjectedClient(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("flag", ldvalue.String("v"))
+	p := New()
+	p.cli = fake // stands in for WithClient's *ldclient.LDClient: the caller owns this
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://flag")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if fake.closed {
+		t.Error("Close closed a caller-injected client; the caller owns it")
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "launchdarkly://flag")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
 	}
 }
 

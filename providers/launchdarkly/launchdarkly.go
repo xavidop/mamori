@@ -126,8 +126,10 @@ type Provider struct {
 	sdkKey     string
 	contextKey string
 
-	mu  sync.Mutex
-	cli ldEvaluator // resolved client (injected or lazily built)
+	mu        sync.Mutex
+	cli       ldEvaluator // resolved client (injected or lazily built)
+	ownClient bool        // true only when this provider built cli itself via ldclient.MakeClient
+	closed    bool        // Close has run; every later resolve/watch reports unavailable
 }
 
 // Option configures a Provider.
@@ -195,9 +197,17 @@ func (p *Provider) evalContext() ldcontext.Context {
 
 // conn returns the SDK client, building it lazily from the configured SDK key on
 // first use. Concurrent callers share one client.
+//
+// The closed check runs first, ahead of the p.cli != nil cache check, so a
+// closed provider refuses locally even when a client (injected or previously
+// built) is still sitting in p.cli: Close clears p.cli, but the ordering here
+// is what makes that refusal unconditional rather than incidental.
 func (p *Provider) conn() (ldEvaluator, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: launchdarkly: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.cli != nil {
 		return p.cli, nil
 	}
@@ -217,7 +227,30 @@ func (p *Provider) conn() (ldEvaluator, error) {
 	// back to defaults until it connects. We keep the usable client and let the
 	// not-found / evaluation semantics surface the state per resolve.
 	p.cli = realClient{c: c}
+	p.ownClient = true
 	return p.cli, nil
+}
+
+// Close releases the LaunchDarkly client this provider built lazily: its
+// streaming connection to LaunchDarkly and the goroutines that maintain it
+// (the flag tracker's event listeners included). It is a no-op when the
+// client was injected by the caller with WithClient (the caller owns it) and
+// when nothing was ever built, so New followed by Close never connects.
+// closed is set unconditionally before either of those checks, so the
+// not-owned and never-built paths still make Close terminal: afterwards
+// Resolve and Watch report mamori.ErrUnavailable, refused locally by conn,
+// rather than reaching for a client this provider was just told to stop
+// using. Close is idempotent and safe for concurrent use.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if !p.ownClient || p.cli == nil {
+		return nil
+	}
+	err := p.cli.Close()
+	p.cli = nil
+	return err
 }
 
 // Resolve evaluates the flag named by ref for the provider's evaluation context.
