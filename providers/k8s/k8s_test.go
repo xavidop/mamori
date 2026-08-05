@@ -256,6 +256,96 @@ func TestResolveClassifiesForbidden(t *testing.T) {
 	}
 }
 
+// --- Close ---
+
+// TestCloseWithoutUseIsSafe pins the "safe with no prior use" half of the
+// Close contract: Close on a provider that never resolved must not contact a
+// cluster and must not panic, and a second Close must stay clean.
+//
+// Close operates only on p.client directly, never through getClient, so this
+// holds by construction regardless of whether a cluster is reachable; unlike
+// the internal-package providers in this task, k8s_test.go is package
+// k8s_test and cannot inspect Provider's unexported fields to pin that
+// construction directly, so this test proves Close returns cleanly (no dial,
+// no hang, no panic) rather than inspecting internal state.
+func TestCloseWithoutUseIsSafe(t *testing.T) {
+	p := k8sprov.New()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.closed check in
+// getClient) rather than reaching into the fake clientset it was told to stop
+// using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: testNamespace, ResourceVersion: "1"},
+		Data:       map[string][]byte{"password": []byte("s3cr3t")},
+	})
+	p := k8sprov.New(k8sprov.WithClient(client))
+
+	ref, _ := mamori.ParseRef("k8s-secret://default/db#password")
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDoesNotTouchInjectedClientset is the ownership half of rule 5: a
+// clientset handed in with WithClient belongs to the caller, so Close must
+// stop using it without releasing it. The fake clientset has no HTTP
+// transport to observably "close", so this is verified functionally: the
+// clientset itself must still serve requests fine after the provider's Close,
+// proving Provider.Close never reached for it (closeIdleConnections is only
+// ever invoked on the owned path).
+//
+// It also proves the other half of rule 5's ordering requirement - that Close
+// still marks the provider closed on the not-owned path - since a Close that
+// returned early here (skipping p.closed = true to avoid touching the
+// injected clientset) would pass the "still usable" assertion below while
+// silently breaking Resolve's terminality for every WithClient caller.
+func TestCloseDoesNotTouchInjectedClientset(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: testNamespace, ResourceVersion: "1"},
+		Data:       map[string][]byte{"password": []byte("s3cr3t")},
+	})
+	p := k8sprov.New(k8sprov.WithClient(client))
+
+	ref, _ := mamori.ParseRef("k8s-secret://default/db#password")
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The injected clientset itself must still work: it belongs to the
+	// caller, not this provider.
+	if _, err := client.CoreV1().Secrets(testNamespace).Get(context.Background(), "db", metav1.GetOptions{}); err != nil {
+		t.Fatalf("injected clientset after provider Close: %v; want it still usable", err)
+	}
+
+	// But the provider itself is terminal: Resolve after Close reports
+	// unavailable even though the clientset is (as of a moment ago) perfectly
+	// healthy, proving the closed flag is set on the injected path too.
+	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
+	}
+}
+
 // sanitize maps arbitrary conformance keys to RFC-1123 object names.
 func sanitize(key string) string {
 	key = strings.ToLower(key)

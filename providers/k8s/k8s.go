@@ -63,10 +63,12 @@ type Provider struct {
 	kind   resourceKind
 	scheme string
 
-	once      sync.Once
+	mu        sync.Mutex
 	client    kubernetes.Interface
 	clientErr error
 	newClient func() (kubernetes.Interface, error)
+	ownClient bool // true only when this provider built client itself (default resolution or WithClientFactory)
+	closed    bool // Close has run; every later resolve/watch reports unavailable
 }
 
 // options holds constructor configuration mutated by Option values.
@@ -135,19 +137,87 @@ func init() {
 // Scheme reports the URL scheme this provider handles.
 func (p *Provider) Scheme() string { return p.scheme }
 
-// getClient lazily resolves the clientset, memoizing the result (and any error).
+// getClient lazily resolves the clientset, memoizing the result (and any
+// error).
+//
+// The closed check runs first, ahead of the p.client != nil cache check, so a
+// closed provider refuses locally even when a clientset (injected or
+// previously built) is still sitting in p.client: Close clears p.client on
+// the owned path, but the ordering here is what makes the refusal
+// unconditional rather than incidental.
 func (p *Provider) getClient() (kubernetes.Interface, error) {
-	p.once.Do(func() {
-		if p.client != nil {
-			return
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: %s: provider is closed", mamori.ErrUnavailable, p.scheme)
+	}
+	if p.client != nil {
+		return p.client, nil
+	}
+	if p.clientErr != nil {
+		return nil, p.clientErr
+	}
+	if p.newClient != nil {
+		client, err := p.newClient()
+		if err != nil {
+			p.clientErr = err
+			return nil, err
 		}
-		if p.newClient != nil {
-			p.client, p.clientErr = p.newClient()
-			return
-		}
-		p.client, p.clientErr = defaultClient()
-	})
-	return p.client, p.clientErr
+		p.client = client
+		p.ownClient = true
+		return p.client, nil
+	}
+	client, err := defaultClient()
+	if err != nil {
+		p.clientErr = err
+		return nil, err
+	}
+	p.client = client
+	p.ownClient = true
+	return p.client, nil
+}
+
+// Close releases the idle HTTP connections held by the clientset this
+// provider built itself, whether via WithClientFactory or the default
+// in-cluster/kubeconfig resolution (WithClientFactory counts as owned, not
+// injected: the factory returns a client that does not exist until New()'s
+// options run, so the caller cannot already hold a reference to it). It is a
+// no-op when the clientset was injected directly with WithClient (the caller
+// owns it) and when nothing was ever built, so New followed by Close never
+// contacts a cluster. closed is set unconditionally before either of those
+// checks, so the not-owned and never-built paths still make Close terminal:
+// afterwards Resolve and Watch report mamori.ErrUnavailable, refused locally
+// by getClient, rather than reaching for a clientset this provider was just
+// told to stop using. Close is idempotent and safe for concurrent use.
+//
+// client-go's generated Clientset has no Close method of its own - each typed
+// REST client just wraps an *http.Client - so releasing means asking that
+// *http.Client to drop its idle keep-alive connections via
+// CloseIdleConnections, reached through the CoreV1 REST client's transport.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if !p.ownClient || p.client == nil {
+		return nil
+	}
+	closeIdleConnections(p.client)
+	p.client = nil
+	return nil
+}
+
+// closeIdleConnections best-effort releases the idle HTTP connections behind
+// client's CoreV1 REST client. A client whose RESTClient is not the concrete
+// *rest.RESTClient type has nothing to release through this path, so that
+// case (and the fake clientset used throughout this package's tests, whose
+// FakeCoreV1.RESTClient() deliberately returns a typed-nil *rest.RESTClient)
+// is a silent no-op rather than a panic or a type-assertion failure.
+func closeIdleConnections(client kubernetes.Interface) {
+	rc, ok := client.CoreV1().RESTClient().(*rest.RESTClient)
+	if !ok || rc == nil || rc.Client == nil {
+		return
+	}
+	rc.Client.CloseIdleConnections()
 }
 
 // defaultClient builds a clientset from in-cluster config, falling back to the
