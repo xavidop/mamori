@@ -41,6 +41,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xavidop/mamori"
@@ -60,6 +61,9 @@ type Provider struct {
 	baseURL     string
 
 	httpClient *http.Client
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // settings is the resolved, per-ref configuration needed to address one
@@ -122,6 +126,24 @@ func init() { mamori.Register(New()) }
 
 // Scheme returns "cloudflare-kv".
 func (p *Provider) Scheme() string { return scheme }
+
+// Close marks the provider closed and returns its idle HTTP connections to the
+// pool. It is idempotent, and afterwards Resolve and ResolveBatch report
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
+// clientFor already applies, without contacting Workers KV.
+//
+// A client supplied through WithHTTPClient is never invalidated: only its idle
+// connections are released (Go's transport redials on demand), so the caller's
+// own use of that client is unaffected by closing this provider.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.httpClient != nil {
+		p.httpClient.CloseIdleConnections()
+	}
+	return nil
+}
 
 // keyOf returns the ref's key. The ENTIRE ref path is the key, deliberately.
 //

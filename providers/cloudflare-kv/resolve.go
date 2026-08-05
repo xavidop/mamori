@@ -320,6 +320,13 @@ func namespacePath(s settings) string {
 // next. Construction performs no network call and reuses the provider's
 // *http.Client, so the connection pool is shared across every read.
 func (p *Provider) clientFor(s settings) (*httpcore.Client, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("mamori/cloudflare-kv: provider is closed: %w", mamori.ErrUnavailable)
+	}
+
 	c, err := httpcore.New(httpcore.Config{
 		BaseURL:     p.baseURL,
 		HTTPClient:  p.httpClient,
