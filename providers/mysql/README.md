@@ -184,7 +184,19 @@ resolving, drop the provider from your configuration rather than closing it.
 Note that a `default:` tag does **not** cover this. `default:` applies only on
 genuine absence (`ErrNotFound`), never on an error, so a closed provider does
 not quietly fall back to defaults; that would mask an outage. Falling back on
-error is an explicit per-field opt-in with `onfail:"default"`.
+error is an explicit per-field opt-in with `onfail:"default"`, which is only
+accepted alongside a `default:` value on the same field:
+
+```go
+type Config struct {
+	// keeplast (the default policy) would freeze this at its last known-good
+	// value once the provider is closed; this keeps it resolving instead.
+	Timeout string `source:"mysql://settings/timeout" onfail:"default" default:"30s"`
+}
+```
+
+`onfail:"default"` without a `default:` tag is a configuration error, reported
+when the config struct is walked rather than at resolve time.
 
 ## Watch
 
