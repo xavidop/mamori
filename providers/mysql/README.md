@@ -165,8 +165,26 @@ p := mysql.New(mysql.WithDB(db))
 | `WithVersionColumn(col)` | Read `Value.Version` from a native revision column |
 | `WithSensitive(bool)` | Mark resolved values as secret (redaction) |
 
-`Provider.Close()` releases a pool the provider opened itself; it is a no-op for
-a pool injected with `WithDB` (that pool is owned by the caller).
+`Provider.Close()` releases a pool the provider opened itself. A pool injected
+with `WithDB` is owned by the caller and is left open, so closing the provider
+never disturbs a `*sql.DB` you share with the rest of your application.
+
+Close is not a no-op in that case, though: it is terminal for the provider
+either way. After `Close`, every `Resolve` on that provider returns an error
+satisfying `errors.Is(err, mamori.ErrUnavailable)`, refused locally without
+touching the database.
+
+That distinction matters if you share one pool across subsystems and reach for
+`Close` meaning "detach this provider". The pool stays up, but the provider is
+finished: on a subsequent `Load` the fields it fed fail, and under `Watch` the
+default `onfail` policy (`keeplast`) freezes them at their last known-good value
+and delivers the error to your error handler. If you want those fields to keep
+resolving, drop the provider from your configuration rather than closing it.
+
+Note that a `default:` tag does **not** cover this. `default:` applies only on
+genuine absence (`ErrNotFound`), never on an error, so a closed provider does
+not quietly fall back to defaults; that would mask an outage. Falling back on
+error is an explicit per-field opt-in with `onfail:"default"`.
 
 ## Watch
 
