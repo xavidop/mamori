@@ -61,21 +61,36 @@ Setting a single-element `Endpoints` behaves exactly like the equivalent `Endpoi
 - `Value.Sensitive` also survives the hop unchanged, so redaction downstream of `Load`/`Watch` keeps working exactly as if the field had resolved against the upstream provider directly.
 - Client credentials are attached with `mamoriprov.WithHeader`/`mamoriprov.WithRequestEditor` (Bearer/API key/basic auth), or `Config.TLSConfig.Certificates` for mTLS. This package deliberately does not reuse `mamori.Authenticator`, since that authenticates an inbound request on the server side, a different shape from attaching a credential to an outbound one. `PeerCred` needs no client-side configuration; the kernel supplies the credential over the Unix socket.
 
+## Closing the provider
+
+This provider is yours to close; mamori never closes a provider it was handed.
+
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, every
+`ResolveBatch`, and any `Watch` started after `Close`, report
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting any
+replica. It returns every endpoint's idle HTTP connections to the pool. Unlike
+most HTTP-backed providers here, this happens in the default configuration too:
+an endpoint built without `Config.HTTPClient` gets its own real
+`*http.Transport`, which belongs to this provider alone. A client supplied
+through `Config.HTTPClient` is never closed or invalidated, only its idle
+connections are released, and only when that client's `Transport` is non-nil.
+
+A `Watch` that was **already running** when `Close` was called is a different
+case and is **not** covered by that guarantee: `Close` does not end it, and the
+SSE connection it is currently streaming on is not one of the idle connections
+`Close` returns to the pool, so it keeps delivering live updates. The closed
+check is reached only on the next reconnect, and from there the watch degrades
+to an error stream carrying `errors.Is(err, mamori.ErrUnavailable)`, retried
+with backoff, until that watch's own context is cancelled. Cancelling that
+context is the only reliable way to stop it. See
+[Close does not stop a Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
+for what every other provider does here.
+
 ## Documentation
 
 - 📖 **Full docs for this provider:** https://mamorigo.dev/docs/providers/mamori
 - 🖧 **The config server this client talks to:** https://mamorigo.dev/docs/server
 - 🔁 **Running that server as several replicas** (readiness gating, draining, and the `resolved_at`/`stale` freshness fields this client can compare): https://mamorigo.dev/docs/server/ha
-
-`Close()` is idempotent and terminal: after it returns, every `Resolve`,
-`ResolveBatch`, and `Watch` report `errors.Is(err, mamori.ErrUnavailable)`
-locally, without contacting any replica. It returns every endpoint's idle HTTP
-connections to the pool. Unlike most HTTP-backed providers here, this happens
-in the default configuration too: an endpoint built without `Config.HTTPClient`
-gets its own real `*http.Transport`, which belongs to this provider alone. A
-client supplied through `Config.HTTPClient` is never closed or invalidated,
-only its idle connections are released, and only when that client's
-`Transport` is non-nil.
 
 ## Development
 
