@@ -197,7 +197,9 @@ Expected: PASS. If any test asserts the exact text of the `add flatten:` error f
 
 Run: `make tidy && make work-sync && git diff --stat go.mod go.sum`
 
-Expected: `go.mod` gains exactly one direct require, `github.com/pelletier/go-toml/v2`, with no new indirect entries. No provider `go.mod` changes.
+Expected: the root `go.mod` gains exactly one **direct** require, `github.com/pelletier/go-toml/v2`, and no other direct dependency anywhere.
+
+Every other module in `go.work` will also change, gaining that same module as a single `// indirect` line. That is correct and unavoidable: each module `replace`-imports core, so once core requires `go-toml/v2` it enters every dependent module's build graph and `go mod tidy` records it. A module missing the entry fails to build with `missing go.sum entry`. Commit that propagation separately from the feature (see Task 9 Step 3, which states the same invariant).
 
 - [ ] **Step 9: Commit**
 
@@ -1089,6 +1091,10 @@ Expected: equal to the number of tier-3 stateless modules, not more.
 ## Notes for the implementer
 
 - **Tier 3 modules get nothing.** `env`, `file`, `exec`, `dotenv`, `sops`, `viper`, `aws`, `azure`, `azblob`, `s3`, `cosmos`, `dynamodb`, `vault`, `consul`, `flagsmith`, `flipt`, `goff`, `openfeature`. If you find yourself adding a no-op `Close` to one of these, stop: it asserts a lifetime that does not exist.
+
+- **The sqlite exception, ruled 2026-08-05.** This plan originally listed `sqlite` as holding a persistent `*sql.DB` behind a `WithDB` option. Both were wrong: `sqlite` opens and closes a fresh `*sql.DB` inside every `Resolve` and holds nothing between calls. It nonetheless **keeps** a `Close` that releases nothing and only makes the provider terminal.
+
+  The rule is therefore: **a provider gets `Close` when it holds a releasable resource, or when its siblings do.** `sqlite` sits beside `postgres` and `mysql`, which both have one, so a caller sweeping shutdown across the database providers would be surprised to find `sqlite` alone still serving values. That sibling argument does not extend to the genuinely stateless providers above, where nobody reaches for `Close` at all, so tier 3 is unchanged. `sqlite`'s doc comment and its README line must both say plainly that its `Close` releases nothing.
 - **`aws-appconfig` and `azure-appconfig` are schemes**, not modules. They live in `providers/aws` and `providers/azure`.
 - **The globally registered instance is never closed.** Every provider's `init()` calls `mamori.Register(New())`. That instance is a process-global singleton and closing it is not this plan's business.
 - **Task ordering matters only within Part 2.** Task 3 must precede Tasks 4 through 7. Part 1 is fully independent and can land first, last, or in parallel.
