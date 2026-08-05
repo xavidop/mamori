@@ -11,6 +11,32 @@ import (
 	"github.com/xavidop/mamori"
 )
 
+// countingTransport wraps a real RoundTripper and counts calls to
+// CloseIdleConnections, so a test can prove Close actually reaches the
+// client's pool rather than merely compiling a call that never fires - a
+// typo'd field name, or a field that stays nil, would leave this counter at
+// zero while every other assertion in this file still passed.
+type countingTransport struct {
+	http.RoundTripper
+	closes int
+}
+
+func (c *countingTransport) CloseIdleConnections() {
+	c.closes++
+	if cc, ok := c.RoundTripper.(interface{ CloseIdleConnections() }); ok {
+		cc.CloseIdleConnections()
+	}
+}
+
+func hcpvsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if strings.Contains(r.URL.Path, "oauth2") || strings.Contains(r.URL.Path, "token") {
+		_, _ = w.Write([]byte(`{"access_token":"test-access-token","token_type":"Bearer","expires_in":3600}`))
+		return
+	}
+	_, _ = w.Write([]byte(`{"secret":{"name":"K","type":"kv","static_version":{"version":1,"value":"v"}}}`))
+}
+
 // TestCloseWithoutResolve exercises the cold half of the Close contract
 // directly: New followed by Close must not dial or panic, and Close must be
 // idempotent. providertest's CloserContract case already covers this against
@@ -34,15 +60,16 @@ func TestCloseWithoutResolve(t *testing.T) {
 // the second (Resolve reporting ErrUnavailable) still passed - the ordering
 // bug providertest's generic CloserContract case cannot see, since it never
 // injects a client of its own to check afterward.
+//
+// The server is TLS, not plaintext, and that is load-bearing for the first
+// assertion, not incidental: srv.Client()'s transport carries the cert pool
+// that trusts this server's self-signed certificate. Clearing that transport
+// (the exact mutation this comment warns against) makes the request fall
+// through to http.DefaultTransport, which does not trust that certificate,
+// so the request would genuinely fail instead of quietly succeeding against
+// plaintext 127.0.0.1 the way it would against an httptest.NewServer.
 func TestCloseLeavesInjectedClientUsable(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "oauth2") || strings.Contains(r.URL.Path, "token") {
-			_, _ = w.Write([]byte(`{"access_token":"test-access-token","token_type":"Bearer","expires_in":3600}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"secret":{"name":"K","type":"kv","static_version":{"version":1,"value":"v"}}}`))
-	}))
+	srv := httptest.NewTLSServer(http.HandlerFunc(hcpvsHandler))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -55,7 +82,6 @@ func TestCloseLeavesInjectedClientUsable(t *testing.T) {
 		WithProjectID("project"),
 		WithAppName("app"),
 		WithHTTPClient(client),
-		WithAllowInsecure(),
 	)
 	ref := mustRef(t, "hcp-vs://K")
 
@@ -77,5 +103,42 @@ func TestCloseLeavesInjectedClientUsable(t *testing.T) {
 	// Half 2: the provider itself is terminal.
 	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrUnavailable) {
 		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseReleasesIdleConnections pins the other half of the Close contract
+// this tier exists for: that Close actually reaches the tracked client's
+// pool. Without this, deleting the CloseIdleConnections call from Close (or
+// aiming it at a field that is always nil) leaves every other test in this
+// file green, since none of them observes anything beyond "the request still
+// works" and "Resolve now errors". The injected client here carries a real
+// Transport, so it composes with (rather than being skipped by) Close's
+// nil-Transport guard.
+func TestCloseReleasesIdleConnections(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(hcpvsHandler))
+	t.Cleanup(srv.Close)
+	ct := &countingTransport{RoundTripper: srv.Client().Transport}
+	client := &http.Client{Transport: ct}
+
+	p := New(
+		WithBaseURL(srv.URL),
+		WithTokenURL(srv.URL+"/oauth2/token"),
+		WithClientID("client-id"),
+		WithClientSecret("client-secret"),
+		WithOrganizationID("org"),
+		WithProjectID("project"),
+		WithAppName("app"),
+		WithHTTPClient(client),
+	)
+	ref := mustRef(t, "hcp-vs://K")
+
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if ct.closes != 1 {
+		t.Fatalf("CloseIdleConnections called %d times, want 1", ct.closes)
 	}
 }
