@@ -56,6 +56,13 @@ type fakeBackend struct {
 	// observed after the fact instead of only while blocked in Wait.
 	notifySeq uint64
 	notifyCh  chan struct{} // closed+replaced on each write to wake blocked Waits
+	// closed records whether the provider ever reached for a Close-like method
+	// on this backend. The backend interface has no Close method (only
+	// *pgxpool.Pool does, via ownPool), so this field can never be set true by
+	// the provider today; it exists so TestCloseDoesNotCloseAnInjectedPool has
+	// something concrete to assert false, proving Close left an injected
+	// backend alone rather than merely not having a way to touch it.
+	closed bool
 }
 
 type fakeRowData struct {
@@ -673,5 +680,65 @@ func TestWatchRejectsMaliciousChannel(t *testing.T) {
 	}
 	if !errors.Is(err, errUnsafeIdentifier) {
 		t.Fatalf("err = %v, want errUnsafeIdentifier", err)
+	}
+}
+
+// --- Close ---
+
+// TestCloseWithoutResolveNeverDials pins the "safe with no prior use" half of
+// the Close contract: a provider configured for a DSN but never resolved has
+// no pool at all, so Close must not build one just to tear it down. The DSN
+// points at 203.0.113.1, a TEST-NET-3 address reserved for documentation (RFC
+// 5737) that nothing routes to; if backendFor were reached here, a dial
+// attempt would hang or error rather than succeed, and this test would fail
+// or time out instead of passing quickly.
+func TestCloseWithoutResolveNeverDials(t *testing.T) {
+	p := New(WithDSN("postgres://user:pw@203.0.113.1:5432/db"))
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.closed check in
+// backendFor) rather than lazily building a pool from the DSN and dialing the
+// black-hole address.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	p := New(WithDSN("postgres://user:pw@203.0.113.1:5432/db"))
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	ref, err := mamori.ParseRef("postgres://settings/some-key")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	_, err = p.Resolve(context.Background(), ref)
+	if !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDoesNotCloseAnInjectedPool is the ownership half of rule 5: a
+// backend handed in directly (standing in for WithPool's *pgxpool.Pool)
+// belongs to the caller, so Close must never reach for it. It also proves the
+// other half - that Close still marks the provider closed on the not-owned
+// path - since a Close that returned early here (skipping p.closed = true to
+// avoid touching fake) would pass the first assertion below while silently
+// breaking Resolve's terminality for every WithPool caller.
+func TestCloseDoesNotCloseAnInjectedPool(t *testing.T) {
+	fake := newFakeBackend()
+	p := New()
+	p.be = fake
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if fake.closed {
+		t.Error("Close released a caller-injected backend; the caller owns it")
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "postgres://app_config/k")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
 	}
 }

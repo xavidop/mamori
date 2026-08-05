@@ -140,8 +140,11 @@ type Provider struct {
 	channel    string
 	sensitive  bool
 
-	mu sync.Mutex
-	be backend // resolved backend (injected or lazily built)
+	mu      sync.Mutex
+	be      backend       // resolved backend (injected or lazily built)
+	ownPool *pgxpool.Pool // non-nil only when backendFor built it, so Close
+	// never releases a pool injected via WithPool
+	closed bool
 }
 
 // Option configures a Provider.
@@ -234,9 +237,17 @@ func (p *Provider) Scheme() string { return scheme }
 
 // backendFor returns the backend, building a pool lazily from the DSN
 // (WithDSN or DATABASE_URL) on first use. Concurrent callers share one pool.
+//
+// The closed check runs first, ahead of the p.be != nil cache check, so a
+// closed provider refuses locally even when a pool (injected or previously
+// built) is still sitting in p.be: Close clears p.be, but the ordering here
+// is what makes that refusal unconditional rather than incidental.
 func (p *Provider) backendFor(ctx context.Context) (backend, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: postgres: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.be != nil {
 		return p.be, nil
 	}
@@ -251,8 +262,29 @@ func (p *Provider) backendFor(ctx context.Context) (backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("postgres: connect: %w", err)
 	}
+	p.ownPool = pool
 	p.be = &poolBackend{pool: pool}
 	return p.be, nil
+}
+
+// Close releases the connection pool this provider built lazily. It is a
+// no-op on the pool itself when the backend was injected with WithPool (the
+// caller owns that pool) and when nothing was ever built, so New followed by
+// Close never dials. closed is set unconditionally before either of those
+// checks, so the not-owned and never-built paths still make Close terminal:
+// afterwards Resolve and Watch report mamori.ErrUnavailable, refused locally
+// by backendFor, rather than reaching for a pool this provider was just told
+// to stop using. Close is idempotent and safe for concurrent use.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	p.be = nil
+	if p.ownPool != nil {
+		p.ownPool.Close() // pgxpool.Pool.Close returns nothing
+		p.ownPool = nil
+	}
+	return nil
 }
 
 // plan validates a ref and builds the parameterized SELECT plus the key value
