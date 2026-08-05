@@ -51,6 +51,9 @@ const scheme = "etcd"
 type etcdClient interface {
 	Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error)
 	Watch(ctx context.Context, key string, opts ...clientv3.OpOption) clientv3.WatchChan
+	// Close releases the underlying client's resources (its gRPC connection,
+	// watcher, and lease goroutines).
+	Close() error
 }
 
 // compile-time check that the real *clientv3.Client satisfies etcdClient.
@@ -63,8 +66,10 @@ var _ etcdClient = (*clientv3.Client)(nil)
 type Provider struct {
 	endpoints []string
 
-	mu  sync.Mutex
-	cli etcdClient // resolved client (injected or lazily built)
+	mu        sync.Mutex
+	cli       etcdClient // resolved client (injected or lazily built)
+	ownClient bool       // true only when this provider built cli itself via clientv3.New
+	closed    bool       // Close has run; every later resolve/watch reports unavailable
 }
 
 // Option configures a Provider.
@@ -113,9 +118,17 @@ func (p *Provider) Scheme() string { return scheme }
 
 // conn returns the etcd client, building it lazily from the configured
 // endpoints on first use. Concurrent callers share one client.
+//
+// The closed check runs first, ahead of the p.cli != nil cache check, so a
+// closed provider refuses locally even when a client (injected or previously
+// built) is still sitting in p.cli: Close clears p.cli, but the ordering here
+// is what makes that refusal unconditional rather than incidental.
 func (p *Provider) conn() (etcdClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("%w: etcd: provider is closed", mamori.ErrUnavailable)
+	}
 	if p.cli != nil {
 		return p.cli, nil
 	}
@@ -131,7 +144,29 @@ func (p *Provider) conn() (etcdClient, error) {
 		return nil, fmt.Errorf("etcd: build client: %w", err)
 	}
 	p.cli = c
+	p.ownClient = true
 	return p.cli, nil
+}
+
+// Close releases the etcd client this provider built lazily (its gRPC
+// connection and the watcher/lease goroutines built on top of it). It is a
+// no-op when the client was injected by the caller with WithClient (the
+// caller owns it) and when nothing was ever built, so New followed by Close
+// never dials. closed is set unconditionally before either of those checks,
+// so the not-owned and never-built paths still make Close terminal:
+// afterwards Resolve and Watch report mamori.ErrUnavailable, refused locally
+// by conn, rather than reaching for a client this provider was just told to
+// stop using. Close is idempotent and safe for concurrent use.
+func (p *Provider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if !p.ownClient || p.cli == nil {
+		return nil
+	}
+	err := p.cli.Close()
+	p.cli = nil
+	return err
 }
 
 // endpointsFromEnv parses the comma-separated ETCD_ENDPOINTS environment

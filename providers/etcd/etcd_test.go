@@ -27,6 +27,7 @@ type fakeClient struct {
 	rev      int64
 	watchers map[*fakeWatcher]struct{}
 	fails    map[string]error
+	closed   bool
 }
 
 type fakeWatcher struct {
@@ -135,6 +136,15 @@ func (f *fakeClient) Get(ctx context.Context, key string, _ ...clientv3.OpOption
 		resp.Count = 1
 	}
 	return resp, nil
+}
+
+// Close implements etcdClient. It only records that Close was called, so
+// tests can assert whether a caller-injected fake was (or was not) released.
+func (f *fakeClient) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return nil
 }
 
 // Watch implements etcdClient. It registers a watcher for key and returns a
@@ -467,6 +477,83 @@ func TestWatchClosesOnCancel(t *testing.T) {
 		case <-deadline:
 			t.Fatal("channel not closed after cancel")
 		}
+	}
+}
+
+// --- Close ---
+
+// TestCloseWithoutUseIsSafe pins the "safe with no prior use" half of the
+// Close contract: Close on a provider that never resolved must not dial and
+// must not panic, and a second Close must stay clean.
+func TestCloseWithoutUseIsSafe(t *testing.T) {
+	p := New()
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close on an unused provider: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if p.ownClient || p.cli != nil {
+		t.Error("Close built a client on a provider that never resolved")
+	}
+}
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the contract:
+// once Close has run, Resolve must refuse locally (via the p.closed check in
+// conn) rather than reaching into the fake client it was told to stop using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	fake := newFakeClient()
+	fake.set("k", "v")
+	p := New(withClient(fake))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "etcd://k")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "etcd://k")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseDoesNotCloseInjectedClient is the ownership half of rule 5: a
+// *clientv3.Client handed in with WithClient belongs to the caller, so Close
+// must stop using it without closing it. clientv3.Client exposes no "is
+// closed" getter, so this is verified by calling the real Close ourselves
+// afterward: a *clientv3.Client that has already been closed returns a
+// non-nil error ("context canceled", from the client's internal context
+// being cancelled by the first Close) on a second Close, so a nil result here
+// proves this is the first real close - i.e. Provider.Close left it alone.
+//
+// It also proves the other half of rule 5's ordering requirement - that Close
+// still marks the provider closed on the not-owned path - since a Close that
+// returned early here (skipping p.closed = true to avoid touching the
+// injected client) would pass the "still usable" assertion below while
+// silently breaking Resolve's terminality for every WithClient caller.
+func TestCloseDoesNotCloseInjectedClient(t *testing.T) {
+	// clientv3.New never dials synchronously, so this construction is instant
+	// and needs no reachable server.
+	real, err := clientv3.New(clientv3.Config{Endpoints: []string{"203.0.113.1:2379"}})
+	if err != nil {
+		t.Fatalf("clientv3.New: %v", err)
+	}
+	p := New(WithClient(real))
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := real.Close(); err != nil {
+		t.Fatalf("injected client Close after provider Close: %v; want nil "+
+			"(a non-nil error here means Provider.Close already closed it)", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "etcd://k")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable (closed flag not set on the injected path)", err)
 	}
 }
 
