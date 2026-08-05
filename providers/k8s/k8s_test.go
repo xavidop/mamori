@@ -304,19 +304,24 @@ func TestResolveAfterCloseIsUnavailable(t *testing.T) {
 	}
 }
 
-// TestCloseDoesNotTouchInjectedClientset is the ownership half of rule 5: a
-// clientset handed in with WithClient belongs to the caller, so Close must
-// stop using it without releasing it. The fake clientset has no HTTP
-// transport to observably "close", so this is verified functionally: the
-// clientset itself must still serve requests fine after the provider's Close,
-// proving Provider.Close never reached for it (closeIdleConnections is only
-// ever invoked on the owned path).
+// TestCloseDoesNotTouchInjectedClientset covers only the SECOND half of rule
+// 5's ordering requirement - that Close still marks the provider closed on
+// the not-owned path - since a Close that returned early here (skipping
+// p.closed = true to avoid touching the injected clientset) would pass the
+// "still usable" assertion below while silently breaking Resolve's
+// terminality for every WithClient caller.
 //
-// It also proves the other half of rule 5's ordering requirement - that Close
-// still marks the provider closed on the not-owned path - since a Close that
-// returned early here (skipping p.closed = true to avoid touching the
-// injected clientset) would pass the "still usable" assertion below while
-// silently breaking Resolve's terminality for every WithClient caller.
+// It does NOT prove the FIRST half (that Close leaves an injected clientset
+// alone): the fake clientset's Get keeps succeeding after Close() no matter
+// what, because closeIdleConnections (k8s.go) is a documented no-op against
+// the fake's typed-nil *rest.RESTClient regardless of p.ownClient's value.
+// That is real teeth against a real regression only for a genuine
+// *kubernetes.Clientset with a live transport - this in-memory fake gives it
+// none. The actual ownership assertion - that WithClient never sets
+// p.ownClient in the first place, which is what makes closeIdleConnections
+// unreachable here at all - is TestWithClientDoesNotClaimOwnership in
+// errors_test.go (package k8s, so it can read the unexported field
+// directly); this test is package k8s_test and cannot.
 func TestCloseDoesNotTouchInjectedClientset(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: testNamespace, ResourceVersion: "1"},

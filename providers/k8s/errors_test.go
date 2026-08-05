@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 var testGR = schema.GroupResource{Group: "", Resource: "secrets"}
@@ -74,6 +75,27 @@ func TestMapGetErrorNotFoundPreservesStatusError(t *testing.T) {
 	}
 	if !apierrors.IsNotFound(got) {
 		t.Fatalf("apierrors.IsNotFound no longer recognizes the wrapped error: %v", got)
+	}
+}
+
+// TestWithClientDoesNotClaimOwnership is the ownership half of rule 5,
+// asserted directly against the unexported field: a clientset handed in with
+// WithClient must never be recorded as owned, or Close (k8s.go) will call
+// closeIdleConnections on it and pull a shared clientset's keep-alive pool out
+// from under every other consumer sharing it.
+//
+// This lives in this file (package k8s), not k8s_test.go (package
+// k8s_test), specifically so it can read p.ownClient directly. The
+// functional check in k8s_test.go's TestCloseDoesNotTouchInjectedClientset -
+// that the fake clientset keeps serving requests after Close - has no power
+// against this particular regression: closeIdleConnections is a documented
+// no-op on the fake clientset's typed-nil *rest.RESTClient regardless of
+// p.ownClient's value, so that test alone cannot fail if ownership tracking
+// breaks. This test is what actually pins the flag.
+func TestWithClientDoesNotClaimOwnership(t *testing.T) {
+	p := New(WithClient(fake.NewSimpleClientset()))
+	if p.ownClient {
+		t.Fatal("WithClient claimed ownership of the injected clientset")
 	}
 }
 
