@@ -48,6 +48,11 @@ type smClient interface {
 type Provider struct {
 	mu     sync.Mutex
 	client smClient
+	// closed records that Close ran. It is what makes Close terminal: without
+	// it the nil client Close leaves behind is indistinguishable from one that
+	// was never built, and the next Resolve would silently dial Secret Manager
+	// on ambient credentials to rebuild what it was just told to release.
+	closed bool
 	// newClient builds the backing client on first use. Overridable in tests via
 	// WithClient (which sets client directly) or WithClientFactory.
 	newClient func(ctx context.Context) (smClient, error)
@@ -90,10 +95,15 @@ func init() { mamori.Register(New()) }
 // Scheme returns "gcp-sm".
 func (p *Provider) Scheme() string { return scheme }
 
-// getClient returns the backing client, creating it lazily on first use.
+// getClient returns the backing client, creating it lazily on first use. A
+// closed provider is refused here, before the nil check, so no client is ever
+// rebuilt after Close.
 func (p *Provider) getClient(ctx context.Context) (smClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("gcp-sm: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.client != nil {
 		return p.client, nil
 	}
@@ -140,10 +150,16 @@ func classifyGCP(err error) error {
 	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
-// Close releases the backing client, if one has been created.
+// Close releases the backing client, if one has been created. It is terminal:
+// every later Resolve reports unavailable without touching the backend. Calling
+// it more than once, or on a provider that never resolved, is a no-op.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if p.client == nil {
 		return nil
 	}
