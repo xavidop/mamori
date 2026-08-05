@@ -420,12 +420,20 @@ func (p *Provider) clientFor() (*httpcore.Client, error) {
 //
 // A client supplied through WithHTTPClient is never invalidated: only its idle
 // connections are released (Go's transport redials on demand), so the caller's
-// own use of that client is unaffected by closing this provider.
+// own use of that client is unaffected by closing this provider. Without
+// WithHTTPClient, httpClient is nil and Close releases nothing: this provider
+// builds no default client of its own to own.
+//
+// CloseIdleConnections is also skipped when an injected client's Transport is
+// nil, since net/http resolves that to the process-global
+// http.DefaultTransport, and releasing idle connections there would evict
+// connections belonging to unrelated code elsewhere in the process rather
+// than anything this provider used.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
-	if p.httpClient != nil {
+	if p.httpClient != nil && p.httpClient.Transport != nil {
 		p.httpClient.CloseIdleConnections()
 	}
 	return nil
