@@ -278,6 +278,40 @@ func TestCloseDoesNotCloseInjectedClient(t *testing.T) {
 	}
 }
 
+// TestCloseReleasesSelfBuiltClient is the positive half of rule 5's ownership
+// tracking, the mirror image of TestCloseDoesNotCloseInjectedClient above: a
+// client this provider built itself must actually be released, not merely
+// left alone. Without this, deleting "p.ownClient = true" from getClient's
+// build branch (redis.go) leaves every other test in this file green, since
+// none of them ever force that branch and then check the client came back
+// closed.
+func TestCloseReleasesSelfBuiltClient(t *testing.T) {
+	p := New(WithAddr("203.0.113.1:6379"))
+
+	// getClient's build branch calls goredis.NewClient, which never dials
+	// synchronously, so this reaches the p.ownClient = true build site
+	// without a reachable server.
+	client, err := p.getClient()
+	if err != nil {
+		t.Fatalf("getClient: %v", err)
+	}
+	if !p.ownClient {
+		t.Fatal("getClient did not claim ownership of the client it built")
+	}
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The provider-built client must actually have been closed: go-redis
+	// returns "redis: client is closed" from a second Close, so calling it
+	// ourselves now must return a non-nil error, not nil.
+	if err := client.Close(); err == nil {
+		t.Fatal("self-built client Close after provider Close returned nil; " +
+			"want an already-closed error (Provider.Close did not actually close it)")
+	}
+}
+
 func TestConformance(t *testing.T) {
 	f := newFakeRedis()
 	providertest.Run(t, providertest.Config{
