@@ -235,10 +235,25 @@ func (p *Provider) buildFetcher(ctx context.Context) (templateFetcher, error) {
 	}, nil
 }
 
-// Close releases idle connections held by a lazily-built HTTP client, if any.
-// It is terminal: every later Resolve reports unavailable without contacting
-// the Remote Config API. It is safe to call multiple times, and on a provider
-// that never resolved.
+// Close is terminal: every later Resolve reports unavailable without
+// contacting the Remote Config API. It is safe to call multiple times, and on
+// a provider that never resolved.
+//
+// It also calls CloseIdleConnections on an httpClient supplied through
+// WithHTTPClient, but only when that client's Transport is non-nil: a nil
+// Transport is resolved by net/http to the process-global
+// http.DefaultTransport, and releasing idle connections there would evict
+// connections belonging to unrelated code elsewhere in the process rather
+// than anything this provider used. The client itself is never invalidated
+// either way - only its idle connections are ever released, so the caller's
+// own use of it is unaffected by closing this provider.
+//
+// On the default (no WithHTTPClient) path this releases nothing at all, and
+// that is not a gap this guard introduces: buildFetcher's default client
+// wraps *oauth2.Transport, which implements no CloseIdleConnections method,
+// so http.Client.CloseIdleConnections has always silently no-op'd on it.
+// There is no idle-connection release to perform for the common case; only an
+// injected client can ever be released here.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -246,7 +261,7 @@ func (p *Provider) Close() error {
 		return nil
 	}
 	p.closed = true
-	if hf, ok := p.fetcher.(*httpFetcher); ok && hf.httpClient != nil {
+	if hf, ok := p.fetcher.(*httpFetcher); ok && hf.httpClient != nil && hf.httpClient.Transport != nil {
 		hf.httpClient.CloseIdleConnections()
 	}
 	return nil
