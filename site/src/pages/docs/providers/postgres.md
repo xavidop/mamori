@@ -79,7 +79,9 @@ import pgprov "github.com/xavidop/mamori/providers/postgres"
 mamori.WithProvider(pgprov.New(pgprov.WithDSN(os.Getenv("DATABASE_URL"))))
 ```
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the database. It closes the `pgxpool.Pool` this provider opened lazily. A pool injected with `WithPool` belongs to the caller and is left open; `New` followed by `Close` with no prior `Resolve` never dials, so there is nothing to close.
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, and any `Watch` started after `Close`, report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the database. It closes the `pgxpool.Pool` this provider opened lazily. A pool injected with `WithPool` belongs to the caller and is left open; `New` followed by `Close` with no prior `Resolve` never dials, so there is nothing to close.
+
+A `Watch` that was **already running** when `Close` was called is a different case and is **not** covered by that guarantee. `Watch` captures its backend once, before its loop starts, and never passes the closed gate again, so `Close` neither ends it nor makes it report `ErrUnavailable`. With a self-opened pool it degrades to an error stream, but the error is the pool's own unclassified "closed pool" failure rather than `mamori.ErrUnavailable`, so `errors.Is(err, mamori.ErrUnavailable)` is **false** for it. With a pool injected through `WithPool`, `Close` never touches the pool at all and the watch keeps serving live values. Cancelling that watch's own context is the only reliable way to shut it down. See [Close does not stop a Watch](/docs/writing-a-provider/#close-does-not-stop-a-watch) for what every other provider does here.
 
 ## Error classification
 

@@ -202,9 +202,20 @@ func (p *Provider) getBackend(ctx context.Context) (backend, error) {
 // caller is using it for.
 //
 // Marking the provider closed is unconditional, so Close is terminal either
-// way: every later Resolve or Watch reports unavailable without touching the
-// backend, whether or not there was anything here to release. Calling it more
-// than once, or on a provider that never resolved, is a no-op.
+// way: every later Resolve, and any Watch STARTED after Close, reports
+// unavailable without touching the backend, whether or not there was anything
+// here to release. Calling it more than once, or on a provider that never
+// resolved, is a no-op.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee. Close never reaches into a running
+// watch to end it (cancelling the watch's own context is the only shutdown
+// path), and that watch opened its snapshot listener before its loop started,
+// so it never passes getBackend's closed check again: what the listener does
+// once the client is closed is decided by the Firestore client, not here, and
+// is not guaranteed to report mamori.ErrUnavailable. A watch running on a
+// client injected with WithClient is unaffected, since Close never touches
+// that client.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

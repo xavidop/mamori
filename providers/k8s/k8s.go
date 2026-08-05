@@ -188,9 +188,20 @@ func (p *Provider) getClient() (kubernetes.Interface, error) {
 // owns it) and when nothing was ever built, so New followed by Close never
 // contacts a cluster. closed is set unconditionally before either of those
 // checks, so the not-owned and never-built paths still make Close terminal:
-// afterwards Resolve and Watch report mamori.ErrUnavailable, refused locally
-// by getClient, rather than reaching for a clientset this provider was just
-// told to stop using. Close is idempotent and safe for concurrent use.
+// afterwards Resolve, and any Watch STARTED after Close, report
+// mamori.ErrUnavailable, refused locally by getClient, rather than reaching
+// for a clientset this provider was just told to stop using. Close is
+// idempotent and safe for concurrent use.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee. Watch captures its clientset
+// reference once, before its loop starts, and delivers events straight from
+// the watch stream without revisiting the closed gate; Close only evicts idle
+// HTTP connections, which redial on demand, and never invalidates that
+// clientset. So such a watch keeps reporting real cluster changes after
+// Close, indefinitely - only the snapshot re-resolved on each reconnect
+// reports mamori.ErrUnavailable, and that does not end the watch. Cancel the
+// watch's own context to stop a watch.
 //
 // client-go's generated Clientset has no Close method of its own - each typed
 // REST client just wraps an *http.Client - so releasing means asking that

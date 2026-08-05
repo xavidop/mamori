@@ -154,9 +154,23 @@ func (p *Provider) conn() (etcdClient, error) {
 // caller owns it) and when nothing was ever built, so New followed by Close
 // never dials. closed is set unconditionally before either of those checks,
 // so the not-owned and never-built paths still make Close terminal:
-// afterwards Resolve and Watch report mamori.ErrUnavailable, refused locally
-// by conn, rather than reaching for a client this provider was just told to
-// stop using. Close is idempotent and safe for concurrent use.
+// afterwards Resolve, and any Watch STARTED after Close, report
+// mamori.ErrUnavailable, refused locally by conn, rather than reaching for a
+// client this provider was just told to stop using. Close is idempotent and
+// safe for concurrent use.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee. Close never reaches into a running
+// watch to end it (cancelling the watch's own context is the only shutdown
+// path), but closing a self-dialed client does close the watch channel
+// underneath it, and Watch's loop treats a closed channel as a plain return
+// with no Update{Err} emitted - as does mamori's reconciler with the
+// resulting closed Update channel. So that watch usually goes silently dead:
+// no error reaches OnError and Watcher.Get keeps serving the last value
+// indefinitely. (etcd may, less commonly, deliver one final error update
+// first, if its internal watch loop exits through its error path instead.) A
+// client injected with WithClient is never closed, so a watch running on one
+// keeps delivering live events. Cancel the watch's context to stop a watch.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

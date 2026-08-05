@@ -272,9 +272,20 @@ func (p *Provider) backendFor(ctx context.Context) (backend, error) {
 // caller owns that pool) and when nothing was ever built, so New followed by
 // Close never dials. closed is set unconditionally before either of those
 // checks, so the not-owned and never-built paths still make Close terminal:
-// afterwards Resolve and Watch report mamori.ErrUnavailable, refused locally
-// by backendFor, rather than reaching for a pool this provider was just told
-// to stop using. Close is idempotent and safe for concurrent use.
+// afterwards Resolve, and any Watch STARTED after Close, report
+// mamori.ErrUnavailable, refused locally by backendFor, rather than reaching
+// for a pool this provider was just told to stop using. Close is idempotent
+// and safe for concurrent use.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee. Watch captures its backend once via
+// backendFor, before its loop starts, and never passes the closed gate again,
+// so Close neither ends it nor makes it report mamori.ErrUnavailable. On a
+// self-opened pool it degrades to an error stream carrying the pool's own
+// unclassified closed-pool failure, which errors.Is(err,
+// mamori.ErrUnavailable) does NOT match; on a pool injected with WithPool,
+// which Close never touches, it keeps serving live values. Cancel the watch's
+// own context to stop a watch.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -308,9 +308,18 @@ func (p *Provider) Scheme() string { return scheme }
 
 // Close marks the provider closed and returns every endpoint's idle HTTP
 // connections to its pool. It is idempotent, and afterwards Resolve,
-// ResolveBatch and Watch all report errors.Is(err, mamori.ErrUnavailable)
-// locally, through the same closed check do already applies, without
-// contacting any replica.
+// ResolveBatch, and any Watch STARTED after Close, all report
+// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
+// do already applies, without contacting any replica.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee: Close does not end it, and the SSE
+// connection it is currently streaming on is not idle, so it is not one of the
+// connections released here and the watch keeps delivering live updates. Only
+// the next reconnect goes through do's closed check, after which the watch
+// degrades to an error stream carrying mamori.ErrUnavailable, retried with
+// backoff, until its own context is cancelled. Cancel that context to stop a
+// watch.
 //
 // Config.HTTPClient, when supplied, is never invalidated: only its idle
 // connections are released (Go's transport redials on demand), so the

@@ -238,9 +238,20 @@ func (p *Provider) conn() (ldEvaluator, error) {
 // when nothing was ever built, so New followed by Close never connects.
 // closed is set unconditionally before either of those checks, so the
 // not-owned and never-built paths still make Close terminal: afterwards
-// Resolve and Watch report mamori.ErrUnavailable, refused locally by conn,
-// rather than reaching for a client this provider was just told to stop
-// using. Close is idempotent and safe for concurrent use.
+// Resolve, and any Watch STARTED after Close, report mamori.ErrUnavailable,
+// refused locally by conn, rather than reaching for a client this provider
+// was just told to stop using. Close is idempotent and safe for concurrent
+// use.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee. Close never reaches into a running
+// watch to end it (cancelling the watch's own context is the only shutdown
+// path), and that watch captured its client and registered its listener
+// before its loop started, so it never passes conn's closed check again: what
+// the listener channel does once the SDK client is closed is decided by the
+// SDK, not here, and is not guaranteed to report mamori.ErrUnavailable. A
+// watch running on a client injected with WithClient is unaffected, since
+// Close never touches that client.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

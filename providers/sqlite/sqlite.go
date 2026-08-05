@@ -268,8 +268,15 @@ func (p *Provider) isClosed() bool {
 	return p.closed
 }
 
-// Close marks the provider closed so every later Resolve/Watch refuses
-// locally instead of opening another connection to the database file.
+// Close marks the provider closed so every later Resolve, and any Watch
+// STARTED after Close, refuses locally instead of opening another connection
+// to the database file.
+//
+// A Watch that was ALREADY RUNNING when Close is called is not ended by Close
+// (cancelling the watch's own context is the only shutdown path). Its fsnotify
+// watcher stays up, and because each debounced file event re-emits through
+// Resolve, every change from then on arrives as an Update{Err} carrying
+// mamori.ErrUnavailable instead of a value.
 //
 // There is no client-injection option for this provider (grep "^func With"
 // in this package: WithPath, WithDSN, WithVersionColumn, WithSensitive,
@@ -279,8 +286,9 @@ func (p *Provider) isClosed() bool {
 // Close could ever reach it - Resolve opens a fresh *sql.DB per call and
 // closes it again before returning (see the `defer db.Close()` in Resolve),
 // so there is no persistent handle for Close to release. Close's only job is
-// therefore the closed flag itself, which is what makes every later
-// Resolve/Watch terminal. Close is idempotent and safe for concurrent use.
+// therefore the closed flag itself, which is what makes a later Resolve, or a
+// Watch started after Close, terminal. Close is idempotent and safe for
+// concurrent use.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -448,7 +456,8 @@ func classifySqlite(err error) error {
 // released when ctx is cancelled; the goroutine never leaks.
 //
 // A closed provider refuses here too, before an fsnotify watcher is ever
-// created, so Close is terminal for Watch as well as Resolve.
+// created, so Close is terminal for a Watch STARTED after it, as well as for
+// Resolve. It does not end a Watch that was already running; see Close.
 func (p *Provider) Watch(ctx context.Context, ref mamori.Ref) (<-chan mamori.Update, error) {
 	if p.isClosed() {
 		return nil, fmt.Errorf("%w: sqlite: provider is closed", mamori.ErrUnavailable)

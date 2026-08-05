@@ -216,10 +216,18 @@ func init() { mamori.Register(New()) }
 // Scheme returns "firebase-rtdb".
 func (p *Provider) Scheme() string { return scheme }
 
-// Close marks the provider closed. Afterwards Resolve and Watch report
-// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed
-// check getBackend already applies, without contacting the database. It is
-// idempotent and safe to call on a provider that never resolved.
+// Close marks the provider closed. Afterwards Resolve, and any Watch STARTED
+// after Close, report errors.Is(err, mamori.ErrUnavailable) locally, through
+// the same closed check getBackend already applies, without contacting the
+// database. It is idempotent and safe to call on a provider that never
+// resolved.
+//
+// A Watch that was ALREADY RUNNING when Close is called keeps its stream open
+// (see below), so Close does not end it. It does not go quiet either: consume
+// re-resolves through p.Resolve on every put/patch, so from then on each
+// server-pushed change arrives as an Update{Err} carrying
+// mamori.ErrUnavailable instead of a value, for as long as the stream lives.
+// Cancel the watch's own context to stop a watch.
 //
 // It sets the flag only, and deliberately adds no second teardown path. A
 // stream Watch opens is owned end to end by that watch's own goroutine (see

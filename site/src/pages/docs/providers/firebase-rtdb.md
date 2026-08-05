@@ -57,7 +57,9 @@ A JSON string leaf is returned unquoted; other JSON (objects, arrays, numbers, b
 
 Beyond the not-found case above, this provider has no SDK-specific error taxonomy to classify against, so any other backend failure reports `unknown` via `mamori.ErrorKind`. `Resolve` still wraps the backend error with `%w`, so the classification chain (`errors.Is`, `errors.As`) is preserved rather than flattened, even though nothing here maps it to a more specific kind.
 
-`Close()` marks the provider closed; afterwards every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the Realtime Database. It releases no connection: this provider holds no `*http.Client` of its own, and a running `Watch`'s SSE stream is owned end to end by that watch's own goroutine, which already closes the stream on context cancellation. `Close` deliberately adds no second teardown path for a running watch.
+`Close()` marks the provider closed; afterwards every `Resolve`, and any `Watch` started after `Close`, report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting the Realtime Database. It releases no connection: this provider holds no `*http.Client` of its own, and a running `Watch`'s SSE stream is owned end to end by that watch's own goroutine, which already closes the stream on context cancellation. `Close` deliberately adds no second teardown path for a running watch.
+
+A `Watch` that was **already running** when `Close` was called therefore keeps its stream open, and `Close` does not end it. It does not go quiet either: every `put`/`patch` the server pushes is re-resolved through the same closed check, so from then on each change arrives as an error update carrying `errors.Is(err, mamori.ErrUnavailable)` instead of a value, for as long as the stream lives. Cancelling that watch's own context is the only way to stop it. See [Close does not stop a Watch](/docs/writing-a-provider/#close-does-not-stop-a-watch) for what every other provider does here.
 
 ## Watch
 

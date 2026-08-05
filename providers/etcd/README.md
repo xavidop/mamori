@@ -132,13 +132,31 @@ p := etcd.New(etcd.WithClient(client))
 | `WithEndpoints(eps...)` | Set the etcd endpoints (overrides `ETCD_ENDPOINTS`) |
 | `WithClient(*clientv3.Client)` | Inject a pre-configured etcd client (custom TLS/auth/dial) |
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` and
-`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
-contacting etcd. It releases the etcd client this provider dialed lazily,
-including its gRPC connection and any watcher/lease goroutines built on top
-of it. A client injected with `WithClient` belongs to the caller and is left
-open; `New` followed by `Close` with no prior `Resolve` never dials, so there
-is nothing to release.
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, and
+any `Watch` started after `Close`, report
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting etcd. It
+releases the etcd client this provider dialed lazily, including its gRPC
+connection and any watcher/lease goroutines built on top of it. A client
+injected with `WithClient` belongs to the caller and is left open; `New`
+followed by `Close` with no prior `Resolve` never dials, so there is nothing
+to release.
+
+A `Watch` that was **already running** when `Close` was called is a different
+case and is **not** covered by that guarantee - and etcd's version of it is the
+dangerous one. Closing a self-dialed client closes the watch channel underneath
+that running watch; this provider's watch loop treats a closed channel as a
+plain return
+with no error emitted, and mamori's reconciler does the same with the resulting
+closed `Update` channel, so your `OnError` handler never fires and
+`Watcher.Get()` goes on serving the last value it saw, indefinitely. (etcd may,
+less commonly, deliver one final error update first, when its internal watch
+loop happens to exit through its error path instead - the silent case dominates
+but neither is a guarantee.) A client injected with `WithClient` is never
+closed, so a watch running on one keeps delivering live events. Either way,
+cancelling that watch's own context is the only reliable way to shut it down;
+never reach for `Close` to stop a `Watch`. See
+[Close does not stop a Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
+for what every other provider does here.
 
 ## Native watch (watch stream)
 

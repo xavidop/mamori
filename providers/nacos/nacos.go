@@ -236,9 +236,16 @@ func init() { mamori.Register(New()) }
 func (p *Provider) Scheme() string { return scheme }
 
 // Close marks the provider closed and returns its idle HTTP connections to the
-// pool. It is idempotent, and afterwards Resolve and Watch report
-// errors.Is(err, mamori.ErrUnavailable) locally, through the same closed check
-// core already applies, without contacting the Nacos server.
+// pool. It is idempotent, and afterwards Resolve, and any Watch STARTED after
+// Close, report errors.Is(err, mamori.ErrUnavailable) locally, through the
+// same closed check core already applies, without contacting the Nacos server.
+//
+// A Watch that was ALREADY RUNNING when Close is called is not ended by Close
+// (cancelling the watch's own context is the only shutdown path), but it does
+// degrade to an error stream rather than going quiet: every long-poll round
+// re-enters core's closed check before it sends anything, so each round
+// reports mamori.ErrUnavailable as an Update{Err} and the loop keeps going
+// until its context is cancelled.
 //
 // A client supplied through WithHTTPClient is never invalidated: only its idle
 // connections are released (Go's transport redials on demand), so the caller's

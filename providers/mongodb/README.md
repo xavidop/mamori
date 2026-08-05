@@ -126,13 +126,26 @@ p := mongodb.New(mongodb.WithClient(client), mongodb.WithDatabase("app"))
 | `WithDatabase(name)` | Set the database name (**required**) |
 | `WithClient(*mongo.Client)` | Inject a pre-configured MongoDB client |
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` and
-`Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without
-contacting MongoDB. It disconnects the `*mongo.Client` this provider dialed
-lazily, bounded by a short internal timeout so a wedged server cannot make
-`Close` hang. A client injected with `WithClient` belongs to the caller and
-is left connected; `New` followed by `Close` with no prior `Resolve` never
-dials, so there is nothing to release.
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, and
+any `Watch` started after `Close`, report
+`errors.Is(err, mamori.ErrUnavailable)` locally, without contacting MongoDB.
+It disconnects the `*mongo.Client` this provider dialed lazily, bounded by a
+short internal timeout so a wedged server cannot make `Close` hang. A client
+injected with `WithClient` belongs to the caller and is left connected; `New`
+followed by `Close` with no prior `Resolve` never dials, so there is nothing
+to release.
+
+A `Watch` that was **already running** when `Close` was called is a different
+case and is **not** covered by that guarantee. `Close` never reaches into a
+running watch to end it, and it captured its client before the loop started,
+so it never passes the closed check again; what it does from there is decided
+by the disconnected driver, not by this provider, and it is not guaranteed to
+report `mamori.ErrUnavailable`. A watch running on a client injected with
+`WithClient` is unaffected, since `Close` never touches that client.
+Cancelling the watch's own context is the only reliable way to shut it down.
+See
+[Close does not stop a Watch](https://mamorigo.dev/docs/writing-a-provider/#close-does-not-stop-a-watch)
+for the shapes this takes across providers.
 
 ## Native watch (change streams)
 

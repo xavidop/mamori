@@ -200,9 +200,20 @@ func (p *Provider) resolveBackend(ctx context.Context) (backend, error) {
 // it) and when nothing was ever dialed, so New followed by Close never
 // connects. closed is set unconditionally before either of those checks, so
 // the not-owned and never-dialed paths still make Close terminal: afterwards
-// Resolve and Watch report mamori.ErrUnavailable, refused locally by
-// resolveBackend, rather than reaching for a client this provider was just
-// told to stop using. Close is idempotent and safe for concurrent use.
+// Resolve, and any Watch STARTED after Close, report mamori.ErrUnavailable,
+// refused locally by resolveBackend, rather than reaching for a client this
+// provider was just told to stop using. Close is idempotent and safe for
+// concurrent use.
+//
+// A Watch that was ALREADY RUNNING when Close is called is a different case
+// and is not covered by that guarantee. Close never reaches into a running
+// watch to end it (cancelling the watch's own context is the only shutdown
+// path), and that watch captured its backend before its loop started, so it
+// never passes resolveBackend's closed check again: what its change stream
+// does once the client is disconnected is decided by the driver, not here,
+// and is not guaranteed to report mamori.ErrUnavailable. A watch running on a
+// client injected with WithClient is unaffected, since Close never touches
+// that client.
 //
 // Disconnect needs a context; a short bounded one is used here (rather than an
 // unbounded context.Background()) so a wedged server cannot make Close hang.

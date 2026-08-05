@@ -54,7 +54,9 @@ type Config struct {
 
 A scalar field is returned unquoted; maps and arrays as their JSON encoding. `Value.Version` is the document's `UpdateTime`, computed over the whole document, so a change to any field is detected even for a `#field` ref. Firestore holds application configuration rather than managed secrets, so values are not marked sensitive; wrap a field in `secret.String` for redaction.
 
-`Close()` is idempotent and terminal: after it returns, every `Resolve` and `Watch` report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Firestore. It releases the backing client, but only one this provider built itself. A client injected with `WithClient` belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
+`Close()` is idempotent and terminal: after it returns, every `Resolve`, and any `Watch` started after `Close`, report `errors.Is(err, mamori.ErrUnavailable)` locally, without contacting Firestore. It releases the backing client, but only one this provider built itself. A client injected with `WithClient` belongs to the caller and is left open; closing it would reach outside this provider and break whatever else the caller is using it for.
+
+A `Watch` that was **already running** when `Close` was called is a different case and is **not** covered by that guarantee. `Close` never reaches into a running watch to end it, and the snapshot listener captured its client before the loop started, so it never passes the closed check again; what it does from there is decided by the closed client, not by this provider, and it is not guaranteed to report `mamori.ErrUnavailable`. A watch running on a client injected with `WithClient` is unaffected, since `Close` never touches that client. Cancelling the watch's own context is the only reliable way to shut it down. See [Close does not stop a Watch](/docs/writing-a-provider/#close-does-not-stop-a-watch) for the shapes this takes across providers.
 
 ## Watch
 
