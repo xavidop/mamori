@@ -10,6 +10,24 @@ import (
 	"github.com/xavidop/mamori"
 )
 
+// countingTransport wraps a real RoundTripper and counts calls to
+// CloseIdleConnections, so a test can prove Close actually reaches the
+// tracked client's pool rather than merely compiling a call that never fires
+// - a typo'd field name, or a field that stays nil (or, for this package, an
+// endpoint list that never gets ranged over), would leave this counter at
+// zero while every other assertion in this file still passed.
+type countingTransport struct {
+	http.RoundTripper
+	closes int
+}
+
+func (c *countingTransport) CloseIdleConnections() {
+	c.closes++
+	if cc, ok := c.RoundTripper.(interface{ CloseIdleConnections() }); ok {
+		cc.CloseIdleConnections()
+	}
+}
+
 // TestCloseWithoutResolve exercises the cold half of the Close contract
 // directly: New followed by Close must not dial or panic, and Close must be
 // idempotent. providertest's CloserContract case already covers this against
@@ -34,19 +52,28 @@ func TestCloseWithoutResolve(t *testing.T) {
 // bug providertest's generic CloserContract case cannot see, since it never
 // injects a client of its own to check afterward.
 //
-// Config.HTTPClient is used verbatim by every endpoint (see New's doc
-// comment), so this also exercises the shared-client case: the same *http.Client
-// backs the provider's one configured endpoint, and Close must leave that one
-// instance fully usable.
+// This provider is built with a single Config.Endpoint, so this test does
+// NOT exercise the shared-client-across-several-endpoints case; see
+// TestCloseReleasesIdleConnections for that, which actually configures three
+// endpoints and counts the releases, rather than asserting it here where the
+// per-endpoint loop only ever runs once.
+//
+// The server is TLS, not plaintext, and that is load-bearing for the first
+// assertion, not incidental: srv.Client()'s transport carries the cert pool
+// that trusts this server's self-signed certificate. Clearing that transport
+// (the exact mutation this comment warns against) makes the request fall
+// through to http.DefaultTransport, which does not trust that certificate,
+// so the request would genuinely fail instead of quietly succeeding against
+// plaintext 127.0.0.1 the way it would against an httptest.NewServer.
 func TestCloseLeavesInjectedClientUsable(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"name":"K","bytes":"dg==","version":"1"}`))
 	}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
-	p := New(Config{Endpoint: srv.URL, HTTPClient: client, InsecureNoTLS: true})
+	p := New(Config{Endpoint: srv.URL, HTTPClient: client})
 	ref, err := mamori.ParseRef("mamori://K")
 	if err != nil {
 		t.Fatalf("ParseRef: %v", err)
@@ -70,5 +97,53 @@ func TestCloseLeavesInjectedClientUsable(t *testing.T) {
 	// Half 2: the provider itself is terminal.
 	if _, err := p.Resolve(context.Background(), ref); !errors.Is(err, mamori.ErrUnavailable) {
 		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseReleasesIdleConnections pins the other half of the Close contract
+// this tier exists for: that Close actually reaches every tracked endpoint
+// client's pool. Without this, deleting the CloseIdleConnections call from
+// Close (or aiming its loop at a field that is always nil) leaves every
+// other test in this file green, since none of them observes anything beyond
+// "the request still works" and "Resolve now errors".
+//
+// This is also the ONLY test in this file that genuinely exercises the
+// shared-client-across-several-endpoints shape Close's doc comment
+// describes: it configures Config.Endpoints with three entries, all pointing
+// at the same server and all backed by cfg.HTTPClient (see newEndpoints), so
+// p.endpoints holds three endpoint values sharing one identical client
+// pointer. Close's loop therefore calls CloseIdleConnections on that one
+// client three times - once per endpoint reference, exactly as the loop's
+// own doc comment says - which this test asserts directly instead of merely
+// claiming.
+func TestCloseReleasesIdleConnections(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"K","bytes":"dg==","version":"1"}`))
+	}))
+	t.Cleanup(srv.Close)
+	ct := &countingTransport{RoundTripper: srv.Client().Transport}
+	client := &http.Client{Transport: ct}
+
+	p := New(Config{
+		Endpoints:  []string{srv.URL, srv.URL, srv.URL},
+		HTTPClient: client,
+	})
+	if len(p.endpoints) != 3 {
+		t.Fatalf("len(p.endpoints) = %d, want 3 (test setup is broken)", len(p.endpoints))
+	}
+	ref, err := mamori.ParseRef("mamori://K")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), ref); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if ct.closes != 3 {
+		t.Fatalf("CloseIdleConnections called %d times, want 3 (one per shared endpoint reference)", ct.closes)
 	}
 }
