@@ -149,7 +149,7 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 	closed := p.closed
 	p.mu.Unlock()
 	if closed {
-		return mamori.Value{}, fmt.Errorf("%w: doppler: provider is closed", mamori.ErrUnavailable)
+		return mamori.Value{}, fmt.Errorf("%w: mamori/doppler: provider is closed", mamori.ErrUnavailable)
 	}
 
 	project, config, err := parsePath(ref.Path)

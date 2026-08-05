@@ -317,7 +317,7 @@ func (p *Provider) clientFor() (*httpcore.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return nil, fmt.Errorf("%w: supabase: provider is closed", mamori.ErrUnavailable)
+		return nil, fmt.Errorf("%w: mamori/supabase: provider is closed", mamori.ErrUnavailable)
 	}
 	if p.client != nil {
 		return p.client, nil
