@@ -191,9 +191,10 @@ func (p *Provider) Resolve(ctx context.Context, ref mamori.Ref) (mamori.Value, e
 // ConfigCat.
 //
 // The error return is always nil. It exists so *Provider satisfies io.Closer,
-// which is how mamori and its conformance kit discover that a provider holds a
-// releasable resource at all; a Close with no return value is invisible to
-// both.
+// which is how the conformance kit (providertest) discovers that a provider
+// holds a releasable resource at all and runs the Close contract cases; a
+// Close with no return value is invisible to that type assertion. Core itself
+// never asserts a Provider for io.Closer and never calls Close.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -318,7 +319,8 @@ func (s *sdkClient) close() { s.c.Close() }
 // Ensure Provider satisfies the core interface but NOT WatchableProvider: the
 // ConfigCat SDK offers no push notification, so mamori polls this provider. The
 // io.Closer assertion pins Close's error return, which is what makes the
-// provider's lifecycle visible to mamori and to the conformance kit.
+// provider's lifecycle visible to the conformance kit; core itself never
+// type-asserts for io.Closer.
 var (
 	_ mamori.Provider = (*Provider)(nil)
 	_ io.Closer       = (*Provider)(nil)

@@ -232,7 +232,7 @@ See [mamorigo.dev/docs/skill](https://mamorigo.dev/docs/skill) for what it cover
 
 ## Project layout
 
-This is a multi-module monorepo. The core (`github.com/xavidop/mamori`) depends only on `go-playground/validator`, `go-viper/mapstructure`, `fsnotify`, `yaml.v3`, and `go-toml/v2`. Each provider is its own module with its own release cadence, so a cloud SDK never leaks into your build unless you use that provider.
+This is a multi-module monorepo. The core (`github.com/xavidop/mamori`) is a normal Go dependency, not a zero-dependency one: its `go.mod` requires `go-playground/validator`, `go-viper/mapstructure`, `fsnotify`, `yaml.v3`, `go-toml/v2`, `golang.org/x/sys` (peer-credential auth on darwin and linux), and `go.uber.org/goleak` (pulled in by the bundled `providertest` conformance kit, not by the config-loading path itself). What it does not depend on is a cloud SDK: each provider is its own module with its own release cadence, so one never leaks into your build unless you use that provider.
 
 ## Contributing
 
