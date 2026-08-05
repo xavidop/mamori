@@ -48,6 +48,10 @@ type smClient interface {
 type Provider struct {
 	mu     sync.Mutex
 	client smClient
+	// ownClient is true only when this provider built client itself, through
+	// newClient. A client handed over with WithClient belongs to the caller,
+	// who may still be using it elsewhere, so Close leaves it open.
+	ownClient bool
 	// closed records that Close ran. It is what makes Close terminal: without
 	// it the nil client Close leaves behind is indistinguishable from one that
 	// was never built, and the next Resolve would silently dial Secret Manager
@@ -64,6 +68,11 @@ type Option func(*Provider)
 // WithClient injects a pre-built Secret Manager client. The real
 // *secretmanager.Client satisfies smClient; tests pass an in-memory fake. When
 // set, no lazy client is created.
+//
+// The client stays yours: Close leaves it open, since this provider has no way
+// to know what else you built it for. Close it yourself when you are done with
+// it. A client the provider builds for itself (the default, or WithClientFactory)
+// is the provider's to release, and Close does release it.
 func WithClient(c smClient) Option {
 	return func(p *Provider) { p.client = c }
 }
@@ -71,6 +80,9 @@ func WithClient(c smClient) Option {
 // WithClientFactory overrides how the backing client is lazily constructed on
 // first use. It is primarily useful for advanced configuration or testing; most
 // callers rely on the default (Application Default Credentials).
+//
+// Unlike WithClient, the client the factory returns is built on the provider's
+// behalf and released by Close.
 func WithClientFactory(f func(ctx context.Context) (smClient, error)) Option {
 	return func(p *Provider) { p.newClient = f }
 }
@@ -115,6 +127,7 @@ func (p *Provider) getClient(ctx context.Context) (smClient, error) {
 		return nil, fmt.Errorf("gcp-sm: creating client: %w", err)
 	}
 	p.client = c
+	p.ownClient = true
 	return c, nil
 }
 
@@ -150,9 +163,15 @@ func classifyGCP(err error) error {
 	return fmt.Errorf("%w: %w", sentinel, err)
 }
 
-// Close releases the backing client, if one has been created. It is terminal:
-// every later Resolve reports unavailable without touching the backend. Calling
-// it more than once, or on a provider that never resolved, is a no-op.
+// Close releases the backing client, but only one this provider built itself. A
+// client supplied with WithClient belongs to the caller and is left open;
+// closing it would reach outside this provider and break whatever else the
+// caller is using it for.
+//
+// Marking the provider closed is unconditional, so Close is terminal either
+// way: every later Resolve reports unavailable without touching the backend,
+// whether or not there was anything here to release. Calling it more than once,
+// or on a provider that never resolved, is a no-op.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -160,7 +179,7 @@ func (p *Provider) Close() error {
 		return nil
 	}
 	p.closed = true
-	if p.client == nil {
+	if p.client == nil || !p.ownClient {
 		return nil
 	}
 	err := p.client.Close()

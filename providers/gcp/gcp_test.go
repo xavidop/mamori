@@ -380,3 +380,28 @@ func TestCloseWithoutResolveDoesNotBuildAClient(t *testing.T) {
 		t.Fatalf("factory called %d times, want 0", calls)
 	}
 }
+
+// TestCloseLeavesInjectedClientOpen is the ownership half of the Close
+// contract: a client handed over with WithClient belongs to the caller, so
+// Close must stop using it without closing it. The second assertion is the one
+// that keeps this from being half a fix: the provider must still go terminal,
+// so declining to close the caller's client cannot be implemented by declining
+// to close at all.
+func TestCloseLeavesInjectedClientOpen(t *testing.T) {
+	fake := newFakeSM()
+	fake.add("proj", "db", "s3cr3t")
+	p := New(WithClient(fake))
+
+	if _, err := p.Resolve(context.Background(), parse(t, "gcp-sm://proj/db")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if fake.closed {
+		t.Error("Close closed a client injected with WithClient; it belongs to the caller")
+	}
+	if _, err := p.Resolve(context.Background(), parse(t, "gcp-sm://proj/db")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
