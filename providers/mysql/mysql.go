@@ -127,6 +127,7 @@ type Provider struct {
 	ownDB   bool    // true only when this provider opened db itself
 	opened  bool    // a lazy open has been attempted
 	openErr error   // remembered failure of the lazy open
+	closed  bool    // Close has run; every later resolve reports unavailable
 }
 
 // Option configures a Provider.
@@ -331,9 +332,15 @@ func classifyMySQL(err error) error {
 // getQueryer returns the injected queryer, or lazily opens one from the DSN on
 // first use. Failures are remembered so a bad configuration fails fast on every
 // resolve rather than repeatedly reopening.
+//
+// A closed provider is refused here, ahead of every other branch, so neither
+// the released pool nor a freshly opened one is ever reached after Close.
 func (p *Provider) getQueryer() (queryer, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("mamori/mysql: provider is closed: %w", mamori.ErrUnavailable)
+	}
 	if p.q != nil {
 		return p.q, nil
 	}
@@ -374,12 +381,21 @@ func (p *Provider) resolveDSN() string {
 	return os.Getenv("MYSQL_DSN")
 }
 
-// Close releases the *sql.DB the provider opened lazily. It is a no-op when a
-// pool was injected with WithDB (the caller owns that pool) or when nothing was
-// opened.
+// Close releases the *sql.DB the provider opened lazily. Releasing is a no-op
+// when a pool was injected with WithDB (the caller owns that pool) or when
+// nothing was opened; marking the provider closed is not, so an injected pool
+// is left open for its owner while this provider stops using it.
+//
+// Close is terminal: every later Resolve reports unavailable without touching
+// the database. It is safe to call more than once, and on a provider that never
+// resolved.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if p.ownDB && p.db != nil {
 		return p.db.Close()
 	}

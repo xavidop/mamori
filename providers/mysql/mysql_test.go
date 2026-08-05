@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"net/url"
@@ -483,4 +484,79 @@ func TestConformance(t *testing.T) {
 		},
 		SkipWatch: true, // MySQL has no native change notification.
 	})
+}
+
+// nopDriver hands out connections without any network access, so a test can
+// tell an open *sql.DB from a closed one without a reachable MySQL server: a
+// Ping succeeds while the pool is open and reports "database is closed" once it
+// is not.
+type nopDriver struct{}
+
+func (nopDriver) Open(string) (driver.Conn, error) { return nopConn{}, nil }
+
+type nopConn struct{}
+
+func (nopConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("nop: no statements") }
+func (nopConn) Close() error                        { return nil }
+func (nopConn) Begin() (driver.Tx, error)           { return nil, errors.New("nop: no transactions") }
+
+func init() { sql.Register("mamori-mysql-nop", nopDriver{}) }
+
+// TestResolveAfterCloseIsUnavailable pins the terminal half of the Close
+// contract: a closed provider refuses locally rather than querying through the
+// pool it was just told to stop using.
+func TestResolveAfterCloseIsUnavailable(t *testing.T) {
+	f := newFakeDB()
+	f.set("app", "hello")
+	p := New(withQueryer(f))
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "mysql://kv/app")); err != nil {
+		t.Fatalf("Resolve before Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, err := p.Resolve(context.Background(), mustRef(t, "mysql://kv/app")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseLeavesInjectedPoolOpen is the ownership half of the contract: a pool
+// handed over with WithDB belongs to the caller, so Close must stop using it
+// without closing it. The closed flag added for terminality must not turn this
+// into a close.
+func TestCloseLeavesInjectedPoolOpen(t *testing.T) {
+	db, err := sql.Open("mamori-mysql-nop", "")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	p := New(WithDB(db))
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Fatalf("injected pool after provider Close: %v; want it still open", err)
+	}
+	if _, err := p.Resolve(context.Background(), mustRef(t, "mysql://kv/app")); !errors.Is(err, mamori.ErrUnavailable) {
+		t.Fatalf("Resolve after Close = %v; want ErrUnavailable", err)
+	}
+}
+
+// TestCloseWithoutResolveDoesNotOpen covers the other lifecycle: a
+// configured-but-unused provider is closed without ever opening a pool.
+func TestCloseWithoutResolveDoesNotOpen(t *testing.T) {
+	p := New(WithDSN("user:pass@tcp(127.0.0.1:3306)/appdb"))
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if p.opened {
+		t.Error("Close opened a pool on a provider that never resolved")
+	}
 }
