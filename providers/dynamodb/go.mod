@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/dynamodb
 go 1.26.0
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.43.3
+	github.com/aws/aws-sdk-go-v2 v1.43.4
 	github.com/aws/aws-sdk-go-v2/config v1.32.34
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.20.57
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.62.3
