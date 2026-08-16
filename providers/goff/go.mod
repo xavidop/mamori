@@ -9,16 +9,16 @@ require (
 )
 
 require (
-	cloud.google.com/go/auth v0.22.0 // indirect
+	cloud.google.com/go/auth v0.23.0 // indirect
 	cloud.google.com/go/iam v1.12.0 // indirect
 	cloud.google.com/go/storage v1.64.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.34.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.58.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.43.4 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.32.35 // indirect
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.106.5 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.43.5 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.32.36 // indirect
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.1 // indirect
 	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/diegoholiveira/jsonlogic/v3 v3.10.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
@@ -49,7 +49,7 @@ require (
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	google.golang.org/api v0.292.0 // indirect
+	google.golang.org/api v0.293.0 // indirect
 	google.golang.org/genproto v0.0.0-20260720171339-e059f2f05d78 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260720171339-e059f2f05d78 // indirect
 	google.golang.org/grpc v1.83.0 // indirect
