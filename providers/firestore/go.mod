@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	cloud.google.com/go/firestore v1.25.0
 	github.com/xavidop/mamori v0.1.0
-	google.golang.org/grpc v1.83.0
+	google.golang.org/grpc v1.83.1
 )
 
 require (
