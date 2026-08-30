@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/split
 go 1.26.6
 
 require (
-	github.com/splitio/go-toolkit/v5 v5.4.1
+	github.com/splitio/go-toolkit/v5 v5.5.0
 	github.com/xavidop/mamori v0.1.0
 )
 
@@ -12,6 +12,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 )
 
 require (
@@ -29,7 +30,7 @@ require (
 	github.com/splitio/go-client/v6 v6.10.0
 	github.com/splitio/go-split-commons/v9 v9.1.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.12.0 // indirect
+	github.com/stretchr/testify v1.12.1 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
