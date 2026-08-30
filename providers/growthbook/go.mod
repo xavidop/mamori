@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/growthbook
 go 1.26.6
 
 require (
-	github.com/growthbook/growthbook-golang v0.2.9
+	github.com/growthbook/growthbook-golang v0.3.0
 	github.com/xavidop/mamori v0.1.0
 )
 
