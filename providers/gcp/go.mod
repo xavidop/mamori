@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	cloud.google.com/go/secretmanager v1.21.0
-	github.com/googleapis/gax-go/v2 v2.23.0
+	github.com/googleapis/gax-go/v2 v2.24.0
 	github.com/xavidop/mamori v0.1.0
 	google.golang.org/grpc v1.83.1
 )
