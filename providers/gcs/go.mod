@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/gcs
 go 1.26.6
 
 require (
-	cloud.google.com/go/storage v1.65.0
+	cloud.google.com/go/storage v1.65.1
 	github.com/xavidop/mamori v0.1.0
 	google.golang.org/api v0.293.0
 )
