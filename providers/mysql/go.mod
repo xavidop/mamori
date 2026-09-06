@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/mysql
 go 1.26.6
 
 require (
-	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/xavidop/mamori v0.1.0
 )
 
