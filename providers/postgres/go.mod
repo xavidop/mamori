@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/postgres
 go 1.26.6
 
 require (
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/xavidop/mamori v0.1.0
 )
 
