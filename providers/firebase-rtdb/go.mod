@@ -6,7 +6,7 @@ require (
 	firebase.google.com/go/v4 v4.21.0
 	github.com/xavidop/mamori v0.1.0
 	github.com/xavidop/mamori/providers/httpcore v0.0.0-00010101000000-000000000000
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (
