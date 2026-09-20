@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/gcp
 
-go 1.26.6
+go 1.26.7
 
 require (
 	cloud.google.com/go/secretmanager v1.21.0

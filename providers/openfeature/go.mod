@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/openfeature
 
-go 1.26.6
+go 1.26.7
 
 replace github.com/xavidop/mamori => ../..
 

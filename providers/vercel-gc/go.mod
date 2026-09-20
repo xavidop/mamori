@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/vercel-gc
 
-go 1.26.6
+go 1.26.7
 
 require (
 	github.com/xavidop/mamori v0.1.0

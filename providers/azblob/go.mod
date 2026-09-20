@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/azblob
 
-go 1.26.6
+go 1.26.7
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1

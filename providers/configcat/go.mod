@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/configcat
 
-go 1.26.6
+go 1.26.7
 
 require (
 	github.com/configcat/go-sdk/v9 v9.1.0
