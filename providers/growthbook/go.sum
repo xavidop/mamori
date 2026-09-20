@@ -13,8 +13,8 @@ github.com/go-playground/validator/v10 v10.30.4 h1:9Rcod2ZPO6mOEG6b4GqyoHE/H6//Z
 github.com/go-playground/validator/v10 v10.30.4/go.mod h1:numpT+RPLE91R9oYWMY/R9zRgJBewr3IXHko4OISPpk=
 github.com/go-viper/mapstructure/v2 v2.5.0 h1:vM5IJoUAy3d7zRSVtIwQgBj7BiWtMPfmPEgAXnvj1Ro=
 github.com/go-viper/mapstructure/v2 v2.5.0/go.mod h1:oJDH3BJKyqBA2TXFhDsKDGDTlndYOZ6rGS0BRZIxGhM=
-github.com/growthbook/growthbook-golang v0.5.0 h1:w5W8p4l+FIz6VsOobFdAHAgV480YLOFycET9cL0xDMw=
-github.com/growthbook/growthbook-golang v0.5.0/go.mod h1:mY8oBSateRALL7hMwr8UaPmsdm+10ffmgWIT1N5iQZE=
+github.com/growthbook/growthbook-golang v0.5.1 h1:GHxbbvAr3+sbkmNo2ruYnEzd9e+9kuoIJ0TsoEdbj+M=
+github.com/growthbook/growthbook-golang v0.5.1/go.mod h1:mY8oBSateRALL7hMwr8UaPmsdm+10ffmgWIT1N5iQZE=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
