@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.4
 	github.com/aws/aws-sdk-go-v2/service/appconfigdata v1.31.0
-	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.49.0
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.78.0
 	github.com/aws/smithy-go v1.28.1
 	github.com/xavidop/mamori v0.1.0
