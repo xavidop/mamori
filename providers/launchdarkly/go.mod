@@ -4,7 +4,7 @@ go 1.26.7
 
 require (
 	github.com/launchdarkly/go-sdk-common/v3 v3.5.1
-	github.com/launchdarkly/go-server-sdk/v7 v7.17.0
+	github.com/launchdarkly/go-server-sdk/v7 v7.17.1
 	github.com/xavidop/mamori v0.1.0
 )
 
