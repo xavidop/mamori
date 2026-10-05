@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.12.4](https://github.com/xavidop/mamori/compare/v1.12.3...v1.12.4) (2026-10-05)
+
+
+### Bug Fixes
+
+* unbreak CodeQL (go.work version) and resolve its open alerts ([#336](https://github.com/xavidop/mamori/issues/336)) ([06026c4](https://github.com/xavidop/mamori/commit/06026c4ba2c845ec025d30f3ba1e5fd976a52e2d)), closes [#329](https://github.com/xavidop/mamori/issues/329)
+
 ## [1.12.3](https://github.com/xavidop/mamori/compare/v1.12.2...v1.12.3) (2026-08-24)
 
 
