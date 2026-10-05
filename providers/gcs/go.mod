@@ -5,7 +5,7 @@ go 1.26.7
 require (
 	cloud.google.com/go/storage v1.68.0
 	github.com/xavidop/mamori v0.1.0
-	google.golang.org/api v0.297.0
+	google.golang.org/api v0.298.0
 )
 
 require (
