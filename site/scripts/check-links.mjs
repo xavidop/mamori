@@ -63,11 +63,10 @@ function resolveTarget(pageFile, href) {
     link === "" ||
     link.startsWith("http://") ||
     link.startsWith("https://") ||
-    link.startsWith("mailto:") ||
-    link.startsWith("tel:") ||
     link.startsWith("//") ||
-    link.startsWith("data:") ||
-    link.startsWith("javascript:")
+    // Any other URL scheme (mailto:, tel:, data:, javascript:, vbscript:, ...)
+    // points outside dist and is not checkable.
+    /^[a-z][a-z0-9+.-]*:/i.test(link)
   ) {
     return null;
   }
@@ -108,9 +107,15 @@ for (const page of pages) {
   const rel = path.relative(distDir, page);
   // Drop <script> and <style> bodies so client-side templates that build
   // href="${...}" strings (e.g. the search box) are not mistaken for links.
-  const html = raw
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  // Repeated until nothing changes, so a removal cannot splice together a
+  // new <script> or <style> out of the text around it.
+  let html = raw;
+  for (let prev; prev !== html; ) {
+    prev = html;
+    html = html
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "");
+  }
   for (const m of html.matchAll(/<a\b[^>]*?\shref="([^"]*)"/g)) {
     const target = resolveTarget(page, m[1]);
     if (!target) continue;
