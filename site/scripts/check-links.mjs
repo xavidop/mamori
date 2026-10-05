@@ -5,7 +5,7 @@
 // that the target page actually has an element with that id. Exits non-zero
 // with a report if anything is broken, so CI fails on a broken doc link.
 //
-// External links (http/https/mailto/tel), and pure "#" fragments, are skipped:
+// External links (http/https, or any other URL scheme) and pure "#" fragments are skipped:
 // this checks the site's own internal wiring, not the reachability of the web.
 
 import { readFileSync } from "node:fs";
@@ -63,11 +63,10 @@ function resolveTarget(pageFile, href) {
     link === "" ||
     link.startsWith("http://") ||
     link.startsWith("https://") ||
-    link.startsWith("mailto:") ||
-    link.startsWith("tel:") ||
     link.startsWith("//") ||
-    link.startsWith("data:") ||
-    link.startsWith("javascript:")
+    // Any other URL scheme (mailto:, tel:, data:, javascript:, vbscript:, ...)
+    // points outside dist and is not checkable.
+    /^[a-z][a-z0-9+.-]*:/i.test(link)
   ) {
     return null;
   }
@@ -100,6 +99,52 @@ function resolveTarget(pageFile, href) {
   return { file: targetPath, fragment };
 }
 
+// withoutRawText returns html with every <script> and <style> element
+// removed, found by scanning rather than by regex replacement. These are
+// raw-text elements: the HTML parser ends one only at "</script" or
+// "</style" followed by whitespace, "/" or ">", and this follows that rule,
+// so nothing inside a body is ever mistaken for markup.
+function withoutRawText(html) {
+  const lower = html.toLowerCase();
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = nextRawTextOpen(lower, at);
+    if (!open) return out + html.slice(at);
+    out += html.slice(at, open.index);
+    const close = rawTextClose(lower, open.name, open.index + 1 + open.name.length);
+    if (close < 0) return out; // unterminated: the rest is all body
+    const end = lower.indexOf(">", close);
+    at = end < 0 ? html.length : end + 1;
+  }
+}
+
+function nextRawTextOpen(lower, from) {
+  let best = null;
+  for (const name of ["script", "style"]) {
+    for (let i = lower.indexOf("<" + name, from); i >= 0; i = lower.indexOf("<" + name, i + 1)) {
+      if (endsTagName(lower, i + 1 + name.length)) {
+        if (!best || i < best.index) best = { index: i, name };
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+function rawTextClose(lower, name, from) {
+  for (let i = lower.indexOf("</" + name, from); i >= 0; i = lower.indexOf("</" + name, i + 1)) {
+    if (endsTagName(lower, i + 2 + name.length)) return i;
+  }
+  return -1;
+}
+
+// endsTagName reports whether the tag name ends at i: at whitespace, "/",
+// ">" or the end of input, so "<scripts" is not "<script".
+function endsTagName(lower, i) {
+  return i >= lower.length || " \t\n\f\r/>".includes(lower[i]);
+}
+
 const pages = await walk(distDir);
 const problems = [];
 
@@ -108,9 +153,7 @@ for (const page of pages) {
   const rel = path.relative(distDir, page);
   // Drop <script> and <style> bodies so client-side templates that build
   // href="${...}" strings (e.g. the search box) are not mistaken for links.
-  const html = raw
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  const html = withoutRawText(raw);
   for (const m of html.matchAll(/<a\b[^>]*?\shref="([^"]*)"/g)) {
     const target = resolveTarget(page, m[1]);
     if (!target) continue;

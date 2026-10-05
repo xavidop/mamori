@@ -186,7 +186,10 @@ func appConfigMinPoll(ref mamori.Ref) (int32, bool) {
 	if raw == "" {
 		return 0, false
 	}
-	secs, err := strconv.Atoi(raw)
+	// ParseInt with bitSize 32, not Atoi: the field is an int32, and a value
+	// past its range must be ignored like any other malformed hint rather
+	// than silently wrapped.
+	secs, err := strconv.ParseInt(raw, 10, 32)
 	if err != nil || secs <= 0 {
 		return 0, false
 	}
