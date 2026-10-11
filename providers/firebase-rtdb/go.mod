@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/firebase-rtdb
 go 1.26.7
 
 require (
-	firebase.google.com/go/v4 v4.21.0
+	firebase.google.com/go/v4 v4.22.0
 	github.com/xavidop/mamori v0.1.0
 	github.com/xavidop/mamori/providers/httpcore v0.0.0-00010101000000-000000000000
 	golang.org/x/oauth2 v0.37.0
