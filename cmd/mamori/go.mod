@@ -6,7 +6,7 @@ replace github.com/xavidop/mamori => ../..
 
 require (
 	github.com/xavidop/mamori v0.1.0
-	golang.org/x/tools v0.50.0
+	golang.org/x/tools v0.51.0
 )
 
 require (
