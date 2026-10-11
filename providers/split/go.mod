@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/split
 go 1.26.7
 
 require (
-	github.com/splitio/go-toolkit/v5 v5.5.0
+	github.com/splitio/go-toolkit/v5 v5.5.1
 	github.com/xavidop/mamori v0.1.0
 )
 
