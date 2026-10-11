@@ -6,7 +6,7 @@ replace github.com/xavidop/mamori => ../..
 
 require (
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/common v0.71.0
+	github.com/prometheus/common v0.72.0
 	github.com/xavidop/mamori v0.1.0
 )
 
