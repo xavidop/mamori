@@ -3,14 +3,14 @@ module github.com/xavidop/mamori/providers/cosmos
 go 1.26.7
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos v1.5.0
 	github.com/xavidop/mamori v0.1.0
 )
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
