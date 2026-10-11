@@ -3,8 +3,8 @@ module github.com/xavidop/mamori/providers/launchdarkly
 go 1.26.7
 
 require (
-	github.com/launchdarkly/go-sdk-common/v3 v3.5.1
-	github.com/launchdarkly/go-server-sdk/v7 v7.17.1
+	github.com/launchdarkly/go-sdk-common/v3 v3.6.0
+	github.com/launchdarkly/go-server-sdk/v7 v7.19.0
 	github.com/xavidop/mamori v0.1.0
 )
 
@@ -21,9 +21,9 @@ require (
 	github.com/launchdarkly/ccache v1.1.0 // indirect
 	github.com/launchdarkly/eventsource v1.14.0 // indirect
 	github.com/launchdarkly/go-jsonstream/v3 v3.1.2 // indirect
-	github.com/launchdarkly/go-sdk-events/v3 v3.6.3 // indirect
+	github.com/launchdarkly/go-sdk-events/v3 v3.7.0 // indirect
 	github.com/launchdarkly/go-semver v1.0.3 // indirect
-	github.com/launchdarkly/go-server-sdk-evaluation/v3 v3.0.2 // indirect
+	github.com/launchdarkly/go-server-sdk-evaluation/v3 v3.2.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
