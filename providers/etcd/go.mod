@@ -4,8 +4,8 @@ go 1.26.7
 
 require (
 	github.com/xavidop/mamori v0.1.0
-	go.etcd.io/etcd/api/v3 v3.7.1
-	go.etcd.io/etcd/client/v3 v3.7.1
+	go.etcd.io/etcd/api/v3 v3.7.2
+	go.etcd.io/etcd/client/v3 v3.7.2
 	google.golang.org/grpc v1.83.2
 )
 
@@ -22,7 +22,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.7.1 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.7.2 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
