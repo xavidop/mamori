@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/cmd/mamori
 
-go 1.26.7
+go 1.26.9
 
 replace github.com/xavidop/mamori => ../..
 

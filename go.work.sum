@@ -50,6 +50,7 @@ cloud.google.com/go/cloudbuild v1.32.0/go.mod h1:mYgcM8CMaPmAnO7GxSQ9ADAxVRwS+1b
 cloud.google.com/go/clouddms v1.13.0/go.mod h1:aMgrOZ+/EKF/PL+h1sDbS+7fAIYV5rTwD+G/apCeHQk=
 cloud.google.com/go/clouddms v1.14.0/go.mod h1:qSwET2Q27cJ4wCDsPsbkagXqQqkWfOy+gU3RjMsT/c8=
 cloud.google.com/go/cloudtasks v1.18.0/go.mod h1:3KeCxwtGEyaySL7CR3lMmEa2I4mq1ynXdgmfNiO4RYE=
+cloud.google.com/go/compute v1.62.0 h1:tJ7lKJ8YEVa6vZX03Jc8o1YePbjKDOQhDw1BscMZ1bs=
 cloud.google.com/go/compute v1.62.0/go.mod h1:Xm6PbsLgBpAg4va77ljbBdpMjzuU+uPp5Ze2dnZq7lw=
 cloud.google.com/go/compute v1.63.0/go.mod h1:Xm6PbsLgBpAg4va77ljbBdpMjzuU+uPp5Ze2dnZq7lw=
 cloud.google.com/go/compute v1.64.0/go.mod h1:eHhcRZ6vf70fQCS3VEsiWSh+nQ+tLvSMb7mwLQskgN0=

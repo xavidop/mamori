@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/redis
 
-go 1.26.7
+go 1.26.9
 
 require (
 	github.com/redis/go-redis/v9 v9.23.0
