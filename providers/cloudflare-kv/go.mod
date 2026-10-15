@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/cloudflare-kv
 
-go 1.26.7
+go 1.26.9
 
 require (
 	github.com/xavidop/mamori v0.1.0

@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/goff
 
-go 1.26.7
+go 1.26.9
 
 require (
 	github.com/thomaspoignant/go-feature-flag v1.56.0

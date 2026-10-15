@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/aws
 
-go 1.26.7
+go 1.26.9
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
