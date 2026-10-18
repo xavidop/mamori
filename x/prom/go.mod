@@ -6,7 +6,7 @@ replace github.com/xavidop/mamori => ../..
 
 require (
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/common v0.72.0
+	github.com/prometheus/common v0.72.1
 	github.com/xavidop/mamori v0.1.0
 )
 
@@ -28,7 +28,7 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
