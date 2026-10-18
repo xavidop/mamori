@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.7
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.9
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.70.1
-	github.com/aws/smithy-go v1.28.4
+	github.com/aws/smithy-go v1.28.5
 	github.com/xavidop/mamori v0.1.0
 )
 
