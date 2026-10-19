@@ -100,6 +100,20 @@ defer w.Close()
 cfg := w.Get() // lock-free snapshot; always the last *valid* config
 ```
 
+### Resolve a single ref
+
+To resolve one ref string without a config struct, use `Resolve`. It accepts chains (`a,b`),
+`#key` selection, and `${VAR}` expansion from `WithRefVars`, and honours `WithProvider`:
+
+```go
+v, err := mamori.Resolve(ctx, "env:PGPASS")
+v, err = mamori.Resolve(ctx, "file:///run/secrets/pg")
+```
+
+A not-found moves on to the next ref in a chain; any other error stops. An unregistered
+scheme returns an error of kind `KindInvalid`. Watch-only options (poll interval, history, ...)
+are ignored.
+
 ## What makes it different
 
 - **Typed & tag-driven** - one struct, many sources, generics API (`Load[T]` / `Watch[T]`).
