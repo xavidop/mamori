@@ -102,6 +102,19 @@ A single-ref tag returns a one-element slice, so `ParseRefs` is safe to use even
 
 Both return an error only for a tag that is empty or has no scheme. A tag that parses but points nowhere is not an error here: it resolves not-found later, which is what lets `default:` and chain fallback do their job.
 
+## Resolving a single ref
+
+To turn one ref string into a value without a config struct, call `Resolve`. It parses with `ParseRefs`, so a chain works too, and it honours `WithProvider` (which overrides the registry for its scheme) and `WithRefVars`:
+
+```go
+v, err := mamori.Resolve(ctx, "env:PGPASS")
+v, err = mamori.Resolve(ctx, "file:///run/secrets/pg")
+v, err = mamori.Resolve(ctx, "env:PGPASS,aws-sm://${ENV}/db#password",
+	mamori.WithRefVars(map[string]string{"ENV": "prod"}))
+```
+
+The chain rules are the same as for a struct field: a not-found moves on to the next ref, any other error stops and is returned, and if every ref is not found the error satisfies `errors.Is(err, mamori.ErrNotFound)`. A scheme with no provider returns an error that wraps `ErrInvalid` (`mamori.ErrorKind(err) == mamori.KindInvalid`). A cancelled `ctx` returns its error before any provider is called. Options that only matter to `Watch` (poll interval, jitter, debounce, history) are accepted and ignored.
+
 ## Next
 
 - [JSON Pointer selection](/docs/concepts/json-pointer/) - escapes, array indices, and which failures your `default:` absorbs.

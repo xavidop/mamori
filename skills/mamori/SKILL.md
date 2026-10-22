@@ -216,6 +216,18 @@ in-memory lifetime of old secrets, so enable it deliberately.
 a single ref, for cases that do not warrant a config struct. It uses the
 provider's native watch when there is one and polls otherwise.
 
+## Resolve a single ref
+
+`mamori.Resolve(ctx, "env:PGPASS", opts...) (Value, error)` resolves one ref string
+without a config struct. It parses with `ParseRefs`, so a chain `a,b` works with the
+same rules as a struct field (not-found moves on, any other error stops, all
+not-found gives `ErrNotFound`). It honours `WithProvider` (overrides the registry for
+that scheme) and `WithRefVars` (`${VAR}`, never the ambient environment). An
+unregistered scheme returns an `ErrInvalid` error (`KindInvalid`); a cancelled ctx
+returns its error before any provider is called. Watch-only options (poll interval,
+jitter, debounce, history) are ignored. Use `Load` for typed structs and
+`WatchRef` for streaming changes.
+
 ## Options reference
 
 | Option | Default | Purpose |
