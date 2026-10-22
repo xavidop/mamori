@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+# [1.13.0](https://github.com/xavidop/mamori/compare/v1.12.5...v1.13.0) (2026-10-22)
+
+
+### Features
+
+* add Resolve for resolving a single ref string ([#413](https://github.com/xavidop/mamori/issues/413)) ([d4d671f](https://github.com/xavidop/mamori/commit/d4d671f841f2eed6216d65d49d0276a0e2861d4e))
+
 ## [1.12.5](https://github.com/xavidop/mamori/compare/v1.12.4...v1.12.5) (2026-10-15)
 
 
