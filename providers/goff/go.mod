@@ -3,13 +3,12 @@ module github.com/xavidop/mamori/providers/goff
 go 1.26.9
 
 require (
-	github.com/thomaspoignant/go-feature-flag v1.56.1
+	github.com/thomaspoignant/go-feature-flag v1.57.0
 	github.com/thomaspoignant/go-feature-flag/modules/core v0.7.2
 	github.com/xavidop/mamori v0.1.0
 )
 
 require (
-	cloud.google.com/go/auth v0.24.1-0.20261001053825-dbc26066f70a // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.58.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
@@ -28,8 +27,12 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
+	github.com/luci/go-render v0.0.0-20160219211803-9a04cc21af0f // indirect
 	github.com/nikunjy/rules v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
+	github.com/r3labs/diff/v3 v3.0.2 // indirect
+	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
