@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/consul
 go 1.26.9
 
 require (
-	github.com/hashicorp/consul/api v1.34.5
+	github.com/hashicorp/consul/api v1.35.0
 	github.com/xavidop/mamori v0.1.0
 )
 
