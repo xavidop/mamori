@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/firestore
 go 1.26.9
 
 require (
-	cloud.google.com/go/firestore v1.28.0
+	cloud.google.com/go/firestore v1.29.1
 	github.com/xavidop/mamori v0.1.0
 	google.golang.org/grpc v1.84.0
 )
