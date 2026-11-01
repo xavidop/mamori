@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/secretmanager v1.22.0
 	github.com/googleapis/gax-go/v2 v2.27.0
 	github.com/xavidop/mamori v0.1.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 )
 
 require (
