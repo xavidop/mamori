@@ -1,9 +1,9 @@
 module github.com/xavidop/mamori/providers/goff
 
-go 1.26.9
+go 1.26.10
 
 require (
-	github.com/thomaspoignant/go-feature-flag v1.57.0
+	github.com/thomaspoignant/go-feature-flag v1.57.2
 	github.com/thomaspoignant/go-feature-flag/modules/core v0.7.2
 	github.com/xavidop/mamori v0.1.0
 )
@@ -14,8 +14,6 @@ require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.58.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.47.3 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.33.9 // indirect
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.4 // indirect
 	github.com/aws/smithy-go v1.28.6 // indirect
 	github.com/blang/semver v3.5.1+incompatible // indirect
