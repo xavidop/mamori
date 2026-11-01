@@ -5,7 +5,7 @@ go 1.26.9
 require (
 	cloud.google.com/go/storage v1.70.0
 	github.com/xavidop/mamori v0.1.0
-	google.golang.org/api v0.307.0
+	google.golang.org/api v0.310.0
 )
 
 require (
@@ -35,7 +35,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.23 // indirect
+	github.com/googleapis/enterprise-certificate-proxy v0.3.24 // indirect
 	github.com/googleapis/gax-go/v2 v2.27.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
