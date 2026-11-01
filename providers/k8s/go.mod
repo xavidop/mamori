@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/k8s
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/xavidop/mamori v0.1.0
@@ -30,6 +30,7 @@ require (
 	github.com/go-openapi/swag/stringutils v0.29.2 // indirect
 	github.com/go-openapi/swag/typeutils v0.29.2 // indirect
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
+	github.com/go-openapi/testify/v2 v2.8.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.5 // indirect

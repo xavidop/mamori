@@ -1,13 +1,13 @@
 module github.com/xavidop/mamori/providers/flipt
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/xavidop/mamori v0.1.0
 	go.flipt.io/flipt/errors v1.45.0
 	go.flipt.io/flipt/rpc/flipt v1.54.0
 	go.flipt.io/flipt/sdk/go v0.13.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 )
 
 require (

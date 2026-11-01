@@ -1,12 +1,12 @@
 module github.com/xavidop/mamori/providers/gcp
 
-go 1.26.9
+go 1.26.10
 
 require (
-	cloud.google.com/go/secretmanager v1.22.0
+	cloud.google.com/go/secretmanager v1.23.1
 	github.com/googleapis/gax-go/v2 v2.27.0
 	github.com/xavidop/mamori v0.1.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 )
 
 require (
@@ -25,7 +25,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.23 // indirect
+	github.com/googleapis/enterprise-certificate-proxy v0.3.24 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
@@ -44,7 +44,7 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	google.golang.org/api v0.307.0 // indirect
+	google.golang.org/api v0.310.0 // indirect
 	google.golang.org/genproto v0.0.0-20261012220534-4341edf3f941 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
