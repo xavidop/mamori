@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/x/prom
 
-go 1.26.9
+go 1.26.10
 
 replace github.com/xavidop/mamori => ../..
 

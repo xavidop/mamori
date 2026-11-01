@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/viper
 
-go 1.26.9
+go 1.26.10
 
 replace github.com/xavidop/mamori => ../..
 
@@ -17,7 +17,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect

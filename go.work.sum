@@ -261,11 +261,13 @@ github.com/aws/aws-sdk-go-v2/service/kinesis v1.44.4/go.mod h1:aFYRKIJ6e+fiPVotb
 github.com/aws/aws-sdk-go-v2/service/kinesis v1.46.5/go.mod h1:zrUtNnRhRa/arBGMY3auvLHQ9g4ens2kCZw32lbKkaA=
 github.com/aws/aws-sdk-go-v2/service/kinesis v1.56.1/go.mod h1:ki41ChSOjLSTVs0Ot55phFFl830RjSUQY4FBULVWWKo=
 github.com/aws/aws-sdk-go-v2/service/kinesis v1.56.3/go.mod h1:cq6TDJJ0HhtBImHYM6BtJs5lQRwkVWmEd8Dy11EQw30=
+github.com/aws/aws-sdk-go-v2/service/kinesis v1.56.4/go.mod h1:4WehpErfC4dOtZuBUdyfnmWHZu4RusaSkqDCU8fNnqU=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27/go.mod h1:8S6ExnLprS0oIeA8ZlHkJUJ0BMpKqnRPws/S0jegTqQ=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.44.2/go.mod h1:JISE0m3JPVhirZEVIAUyK4C62n87tU4BZmUa9Ozc2to=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.46.5/go.mod h1:TCFydwE7dFonXP+kd641caqfCIXWVdh+tFAu5V5Seks=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.52.1/go.mod h1:+TDqZ1h8CLkW9ewfQkSPWHYRjm7/wDThKeDlR46qyvE=
 github.com/aws/aws-sdk-go-v2/service/sqs v1.52.3/go.mod h1:Gr0VzmNbNtlISn4N0BfilvDVVBD26Apx7n5DNgYyTdU=
+github.com/aws/aws-sdk-go-v2/service/sqs v1.52.4/go.mod h1:dUYH3ia3qEO5ogaWDLp2tjtb4u4Y9xRbae7tOr1ClIA=
 github.com/aws/smithy-go v1.27.3/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
 github.com/awslabs/aws-lambda-go-api-proxy v0.16.2/go.mod h1:vxxjwBHe/KbgFeNlAP/Tvp4SsVRL3WQamcWRxqVh0z0=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
@@ -388,6 +390,7 @@ github.com/labstack/echo-prometheus v0.0.1/go.mod h1:UAeQwHjvCT2MJGyP3mXyp8iVH14
 github.com/labstack/echo/v4 v4.15.2/go.mod h1:Xzp1Ns1RA2c9fY7nSgUJkpkUZGNbEIVHZbtbOMPktBI=
 github.com/labstack/echo/v4 v4.15.4/go.mod h1:CuMetKIRwsuO/qlAgMq+KTAalwGoB/h4tC+yPdrTj1g=
 github.com/labstack/echo/v5 v5.4.0/go.mod h1:4iEGNQiPPZnkfYpNR/L6fINd3NLiGWUD5+eBotFALas=
+github.com/labstack/echo/v5 v5.4.2/go.mod h1:4iEGNQiPPZnkfYpNR/L6fINd3NLiGWUD5+eBotFALas=
 github.com/labstack/gommon v0.5.0/go.mod h1:Rzlg7HHy1maLfzBYGg9NZcVuz1sA68HHhLjhcEllYE0=
 github.com/launchdarkly/go-ntlm-proxy-auth v1.0.3/go.mod h1:kU5uMfNSTpYE6fIzmAXjFxUdmnaDPUEQ5zKm3RVKUsY=
 github.com/launchdarkly/go-ntlmssp v1.0.3/go.mod h1:P1z6fX/y9zgBvfnZP7AKWilW9AX5M3czsa1S4Zpp2nM=
