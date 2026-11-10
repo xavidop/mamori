@@ -2,6 +2,13 @@
 
 All notable changes to mamori are documented here. This file is generated from Conventional Commits by semantic-release.
 
+## [1.13.1](https://github.com/xavidop/mamori/compare/v1.13.0...v1.13.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **deps:** update go-jose/v4 to v4.1.9 and klauspost/compress to v1.20.2 ([37d20bc](https://github.com/xavidop/mamori/commit/37d20bcc6528b1ecebeba9f9e557898017255460)), closes [#458](https://github.com/xavidop/mamori/issues/458) [#472](https://github.com/xavidop/mamori/issues/472)
+
 # [1.13.0](https://github.com/xavidop/mamori/compare/v1.12.5...v1.13.0) (2026-10-22)
 
 
