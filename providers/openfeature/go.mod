@@ -5,7 +5,7 @@ go 1.26.10
 replace github.com/xavidop/mamori => ../..
 
 require (
-	github.com/open-feature/go-sdk v1.19.0
+	github.com/open-feature/go-sdk v1.20.0
 	github.com/xavidop/mamori v0.0.0-00010101000000-000000000000
 )
 
