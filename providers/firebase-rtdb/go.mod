@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/firebase-rtdb
 
-go 1.26.10
+go 1.26.11
 
 require (
 	firebase.google.com/go/v4 v4.22.0

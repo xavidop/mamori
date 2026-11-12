@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/mysql
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/go-sql-driver/mysql v1.10.1
