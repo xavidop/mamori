@@ -1,6 +1,6 @@
 module github.com/xavidop/mamori/providers/growthbook
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/growthbook/growthbook-golang v0.6.0
