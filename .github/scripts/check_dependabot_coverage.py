@@ -54,10 +54,13 @@ def main() -> int:
     modules = json.loads(sys.argv[1]) if len(sys.argv) > 1 else discover_modules()
 
     config = yaml.safe_load(DEPENDABOT.read_text())
+    # An entry names one `directory` or several `directories` (a list, which
+    # is what lets dependabot group an update across modules into one PR).
     covered = {
-        update["directory"]
+        directory
         for update in config.get("updates", [])
         if update.get("package-ecosystem") == "gomod"
+        for directory in ([update["directory"]] if "directory" in update else update.get("directories", []))
     }
 
     missing = [

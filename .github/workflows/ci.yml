@@ -13,6 +13,13 @@ env:
   # Each module is tested independently against its own go.mod (no workspace).
   GOWORK: off
 
+# A new push to a pull request (or a Dependabot rebase) cancels the run it
+# replaces instead of stacking another full matrix behind it. Pushes to main
+# are keyed by commit, so every commit on main still gets its own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   discover:
     name: Discover modules

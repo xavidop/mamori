@@ -1,262 +1,117 @@
 version: 2
 updates:
-  # Core module
+  # Every Go module, in one entry so that Dependabot groups an update across
+  # modules into a single PR: one entry per module opened a PR per dependency
+  # per module, each of which ran the whole CI matrix.
+  # .github/scripts/check_dependabot_coverage.py keeps this list equal to the
+  # modules CI discovers (CI fails when a module is missing or stale here).
   - package-ecosystem: gomod
-    directory: "/"
-    schedule:
-      interval: weekly
+    directories:
+      # Core module
+      - "/"
+      # Provider modules (each is its own module)
+      - "/providers/aws"
+      - "/providers/gcp"
+      - "/providers/azure"
+      - "/providers/vault"
+      - "/providers/k8s"
+      - "/providers/consul"
+      - "/providers/doppler"
+      # Standard library only, so this entry will rarely fire, for the same reason
+      # vercel-gc and cloudflare-kv further down are: the coverage check requires
+      # every module to be listed regardless of how often it actually fires.
+      - "/providers/scaleway-sm"
+      - "/providers/onepassword"
+      - "/providers/sops"
+      - "/providers/etcd"
+      # Standard library only, on top of httpcore: the Nacos Open API is plain HTTP
+      # and the nacos-sdk-go is deliberately not used. The entry stays so the
+      # coverage check passes and so a future dependency is picked up automatically.
+      - "/providers/nacos"
+      - "/providers/redis"
+      - "/providers/postgres"
+      - "/providers/mysql"
+      - "/providers/sqlite"
+      - "/providers/mongodb"
+      - "/providers/dynamodb"
+      - "/providers/firestore"
+      - "/providers/firebase-rc"
+      - "/providers/firebase-rtdb"
+      - "/providers/s3"
+      - "/providers/gcs"
+      - "/providers/azblob"
+      - "/providers/cosmos"
+      - "/providers/launchdarkly"
+      - "/providers/unleash"
+      - "/providers/flagsmith"
+      - "/providers/configcat"
+      - "/providers/split"
+      - "/providers/growthbook"
+      - "/providers/flipt"
+      - "/providers/goff"
+      - "/providers/posthog"
+      - "/providers/viper"
+      # Standard library only, so this entry will rarely fire. It stays because the
+      # coverage check requires every module to be listed, and a module that is
+      # exempt today is the one nobody notices taking a dependency tomorrow.
+      - "/providers/vercel-gc"
+      # Standard library only, so this entry will rarely fire, for the same reason
+      # as vercel-gc above: the coverage check requires every module to be listed.
+      - "/providers/cloudflare-kv"
+      # Not a provider: the shared HTTP resolve core the REST-backed providers build
+      # on. Standard library only, so this entry will rarely fire, and it stays for
+      # the same reason as cloudflare-kv above.
+      - "/providers/httpcore"
+      # Standard library only, on top of httpcore. Same reasoning again.
+      # Standard library only, on top of httpcore, and deliberately NOT HashiCorp's
+      # hcp-sdk-go. Same reasoning as https below: this entry will rarely fire, and
+      # the coverage check requires every module to be listed regardless.
+      - "/providers/hcp-vault-secrets"
+      - "/providers/heroku"
+      - "/providers/infisical"
+      - "/providers/supabase"
+      - "/providers/https"
+      # Bitwarden Secrets Manager. Standard library only, on top of httpcore, and
+      # deliberately so: it decrypts client side with crypto/hkdf, crypto/aes and
+      # crypto/hmac rather than taking Bitwarden's cgo Rust SDK. Same reasoning as
+      # https above for why the entry stays despite rarely firing.
+      - "/providers/bitwarden"
+      # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
+      # whichever provider the application installed, including vendors with no
+      # dedicated module above.
+      - "/providers/openfeature"
+      # The client half of the config server: a mamori:// provider that resolves
+      # binding names against a running server rather than an upstream ref.
+      - "/providers/mamori"
+      # The config server. It concentrates every backend credential its bindings
+      # touch into one process, so it is the highest-blast-radius module here and
+      # the one that least tolerates a stale dependency.
+      - "/server"
+      # Extensions
+      - "/x/authjwt"
+      - "/x/otel"
+      - "/x/prom"
+      - "/cmd/mamori"
+    schedule: { interval: weekly }
     groups:
       go-dependencies:
         patterns: ["*"]
     labels: [dependencies, go]
-
-  # Provider modules (each is its own module)
-  - package-ecosystem: gomod
-    directory: "/providers/aws"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:aws]
-  - package-ecosystem: gomod
-    directory: "/providers/gcp"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:gcp]
-  - package-ecosystem: gomod
-    directory: "/providers/azure"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:azure]
-  - package-ecosystem: gomod
-    directory: "/providers/vault"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:vault]
-  - package-ecosystem: gomod
-    directory: "/providers/k8s"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:k8s]
-  - package-ecosystem: gomod
-    directory: "/providers/consul"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:consul]
-  - package-ecosystem: gomod
-    directory: "/providers/doppler"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:doppler]
-  # Standard library only, so this entry will rarely fire, for the same reason
-  # vercel-gc and cloudflare-kv further down are: the coverage check requires
-  # every module to be listed regardless of how often it actually fires.
-  - package-ecosystem: gomod
-    directory: "/providers/scaleway-sm"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:scaleway-sm]
-  - package-ecosystem: gomod
-    directory: "/providers/onepassword"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:onepassword]
-  - package-ecosystem: gomod
-    directory: "/providers/sops"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:sops]
-  - package-ecosystem: gomod
-    directory: "/providers/etcd"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:etcd]
-  # Standard library only, on top of httpcore: the Nacos Open API is plain HTTP
-  # and the nacos-sdk-go is deliberately not used. The entry stays so the
-  # coverage check passes and so a future dependency is picked up automatically.
-  - package-ecosystem: gomod
-    directory: "/providers/nacos"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:nacos]
-  - package-ecosystem: gomod
-    directory: "/providers/redis"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:redis]
-  - package-ecosystem: gomod
-    directory: "/providers/postgres"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:postgres]
-  - package-ecosystem: gomod
-    directory: "/providers/mysql"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:mysql]
-  - package-ecosystem: gomod
-    directory: "/providers/sqlite"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:sqlite]
-  - package-ecosystem: gomod
-    directory: "/providers/mongodb"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:mongodb]
-  - package-ecosystem: gomod
-    directory: "/providers/dynamodb"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:dynamodb]
-  - package-ecosystem: gomod
-    directory: "/providers/firestore"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:firestore]
-  - package-ecosystem: gomod
-    directory: "/providers/firebase-rc"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:firebase-rc]
-  - package-ecosystem: gomod
-    directory: "/providers/firebase-rtdb"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:firebase-rtdb]
-  - package-ecosystem: gomod
-    directory: "/providers/s3"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:s3]
-  - package-ecosystem: gomod
-    directory: "/providers/gcs"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:gcs]
-  - package-ecosystem: gomod
-    directory: "/providers/azblob"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:azblob]
-  - package-ecosystem: gomod
-    directory: "/providers/cosmos"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:cosmos]
-  - package-ecosystem: gomod
-    directory: "/providers/launchdarkly"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:launchdarkly]
-  - package-ecosystem: gomod
-    directory: "/providers/unleash"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:unleash]
-  - package-ecosystem: gomod
-    directory: "/providers/flagsmith"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:flagsmith]
-  - package-ecosystem: gomod
-    directory: "/providers/configcat"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:configcat]
-  - package-ecosystem: gomod
-    directory: "/providers/split"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:split]
-  - package-ecosystem: gomod
-    directory: "/providers/growthbook"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:growthbook]
-  - package-ecosystem: gomod
-    directory: "/providers/flipt"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:flipt]
-  - package-ecosystem: gomod
-    directory: "/providers/goff"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:goff]
-  - package-ecosystem: gomod
-    directory: "/providers/posthog"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:posthog]
-  - package-ecosystem: gomod
-    directory: "/providers/viper"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:viper]
-  # Standard library only, so this entry will rarely fire. It stays because the
-  # coverage check requires every module to be listed, and a module that is
-  # exempt today is the one nobody notices taking a dependency tomorrow.
-  - package-ecosystem: gomod
-    directory: "/providers/vercel-gc"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:vercel-gc]
-  # Standard library only, so this entry will rarely fire, for the same reason
-  # as vercel-gc above: the coverage check requires every module to be listed.
-  - package-ecosystem: gomod
-    directory: "/providers/cloudflare-kv"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:cloudflare-kv]
-  # Not a provider: the shared HTTP resolve core the REST-backed providers build
-  # on. Standard library only, so this entry will rarely fire, and it stays for
-  # the same reason as cloudflare-kv above.
-  - package-ecosystem: gomod
-    directory: "/providers/httpcore"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:httpcore]
-  # Standard library only, on top of httpcore. Same reasoning again.
-  # Standard library only, on top of httpcore, and deliberately NOT HashiCorp's
-  # hcp-sdk-go. Same reasoning as https below: this entry will rarely fire, and
-  # the coverage check requires every module to be listed regardless.
-  - package-ecosystem: gomod
-    directory: "/providers/hcp-vault-secrets"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:hcp-vault-secrets]
-  - package-ecosystem: gomod
-    directory: "/providers/heroku"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:heroku]
-  - package-ecosystem: gomod
-    directory: "/providers/infisical"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:infisical]
-  - package-ecosystem: gomod
-    directory: "/providers/supabase"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:supabase]
-  - package-ecosystem: gomod
-    directory: "/providers/https"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:https]
-  # Bitwarden Secrets Manager. Standard library only, on top of httpcore, and
-  # deliberately so: it decrypts client side with crypto/hkdf, crypto/aes and
-  # crypto/hmac rather than taking Bitwarden's cgo Rust SDK. Same reasoning as
-  # https above for why the entry stays despite rarely firing.
-  - package-ecosystem: gomod
-    directory: "/providers/bitwarden"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:bitwarden]
-  # Not a vendor: the vendor-neutral OpenFeature SDK, so this one ref reaches
-  # whichever provider the application installed, including vendors with no
-  # dedicated module above.
-  - package-ecosystem: gomod
-    directory: "/providers/openfeature"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:openfeature]
-  # The client half of the config server: a mamori:// provider that resolves
-  # binding names against a running server rather than an upstream ref.
-  - package-ecosystem: gomod
-    directory: "/providers/mamori"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, provider:mamori]
-
-  # The config server. It concentrates every backend credential its bindings
-  # touch into one process, so it is the highest-blast-radius module here and
-  # the one that least tolerates a stale dependency.
-  - package-ecosystem: gomod
-    directory: "/server"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, server]
-
-  # Extensions
-  - package-ecosystem: gomod
-    directory: "/x/authjwt"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, authjwt]
-  - package-ecosystem: gomod
-    directory: "/x/otel"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, otel]
-  - package-ecosystem: gomod
-    directory: "/x/prom"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, prom]
-  - package-ecosystem: gomod
-    directory: "/cmd/mamori"
-    schedule: { interval: weekly }
-    labels: [dependencies, go, cli]
 
   # GitHub Actions
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly }
     labels: [dependencies, ci]
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   # Docs site (npm)
   - package-ecosystem: npm
     directory: "/site"
     schedule: { interval: weekly }
     labels: [dependencies, docs]
+    groups:
+      npm-dependencies:
+        patterns: ["*"]
