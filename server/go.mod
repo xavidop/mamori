@@ -20,7 +20,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
 
 replace github.com/xavidop/mamori => ..
