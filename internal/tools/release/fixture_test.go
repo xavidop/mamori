@@ -24,21 +24,21 @@ const fixturePath = "github.com/mamori-test/mono"
 // module the release leaves out (internal/tools), a fixture module under
 // testdata, a symlink and an executable.
 var fixtureFiles = map[string]string{
-	"go.mod":     "module " + fixturePath + "\n\ngo 1.27\n",
+	"go.mod":     "module " + fixturePath + "\n\ngo 1.26\n",
 	"LICENSE":    "Copyright the fixture.\n",
 	"mono.go":    "// Package mono is the root module.\npackage mono\n\n// Name names it.\nconst Name = \"mono\"\n",
 	"README.md":  "# mono\n",
 	"scripts/x":  "#!/bin/sh\necho x\n",
 	"lib/lib.go": "// Package lib is a library module.\npackage lib\n\nimport \"" + fixturePath + "\"\n\n// Name names it.\nfunc Name() string { return mono.Name + \"/lib\" }\n",
-	"lib/go.mod": "module " + fixturePath + "/lib\n\ngo 1.27\n\nrequire " + fixturePath + " v0.0.0\n\n" +
+	"lib/go.mod": "module " + fixturePath + "/lib\n\ngo 1.26\n\nrequire " + fixturePath + " v0.0.0\n\n" +
 		"// The checkout's root module.\nreplace " + fixturePath + " => ../\n",
-	"lib/testdata/fixture/go.mod":  "module example.com/fixture\n\ngo 1.27\n",
+	"lib/testdata/fixture/go.mod":  "module example.com/fixture\n\ngo 1.26\n",
 	"lib/testdata/fixture/main.go": "package main\n\nfunc main() {}\n",
 	"cmd/tool/main.go": "// Command tool prints the library's name.\npackage main\n\nimport (\n\t\"fmt\"\n\n\t\"" + fixturePath + "/lib\"\n)\n\n" +
 		"func main() { fmt.Println(lib.Name()) }\n",
-	"cmd/tool/go.mod": "module " + fixturePath + "/cmd/tool\n\ngo 1.27\n\nrequire (\n\t" + fixturePath + " v0.0.0 // indirect\n\t" + fixturePath + "/lib v0.0.0\n)\n\n" +
+	"cmd/tool/go.mod": "module " + fixturePath + "/cmd/tool\n\ngo 1.26\n\nrequire (\n\t" + fixturePath + " v0.0.0 // indirect\n\t" + fixturePath + "/lib v0.0.0\n)\n\n" +
 		"// Inside the repository, every module comes from the checkout.\nreplace (\n\t" + fixturePath + " => ../..\n\t" + fixturePath + "/lib => ../../lib\n)\n",
-	"internal/tools/go.mod":  "module " + fixturePath + "/internal/tools\n\ngo 1.27\n",
+	"internal/tools/go.mod":  "module " + fixturePath + "/internal/tools\n\ngo 1.26\n",
 	"internal/tools/main.go": "package main\n\nfunc main() {}\n",
 }
 

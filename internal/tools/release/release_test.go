@@ -138,7 +138,7 @@ func TestCutRefusesAThirdPartyReplace(t *testing.T) {
 
 func TestCutRefusesARootModuleThatRequiresASibling(t *testing.T) {
 	dir := newFixture(t, map[string]string{
-		"extra/go.mod": "module " + fixturePath + "/extra\n\ngo 1.27\n",
+		"extra/go.mod": "module " + fixturePath + "/extra\n\ngo 1.26\n",
 		"go.mod":       fixtureFiles["go.mod"] + "\nrequire " + fixturePath + "/extra v0.0.0\n\nreplace " + fixturePath + "/extra => ./extra\n",
 	})
 	_, _, err := cutFixture(t, dir, "")
@@ -194,7 +194,7 @@ func TestPin(t *testing.T) {
 	sib := siblings{"example.com/a": true, "example.com/a/b": true}
 	m := &repoModule{Dir: "c", GoMod: []byte(`module example.com/a/c
 
-go 1.27
+go 1.26
 
 require (
 	example.com/a v0.0.0
@@ -213,7 +213,7 @@ replace (
 	require.NoError(t, err)
 	assert.Equal(t, `module example.com/a/c
 
-go 1.27
+go 1.26
 
 require (
 	example.com/a v1.5.0
@@ -224,8 +224,8 @@ require example.com/a/b v1.5.0 // indirect
 `, string(out))
 
 	for _, unchanged := range []string{
-		"module example.com/a\n\ngo 1.27\n\nrequire example.com/x v1.2.0\n",
-		"module example.com/a/b\n\ngo 1.27\n\nrequire example.com/a v1.5.0\n",
+		"module example.com/a\n\ngo 1.26\n\nrequire example.com/x v1.2.0\n",
+		"module example.com/a/b\n\ngo 1.26\n\nrequire example.com/a v1.5.0\n",
 	} {
 		out, err := pin(&repoModule{Dir: "b", GoMod: []byte(unchanged)}, sib, "v1.5.0")
 		require.NoError(t, err)
@@ -237,7 +237,7 @@ require example.com/a/b v1.5.0 // indirect
 		"replace example.com/a => example.com/fork v1.0.0\n",
 		"exclude example.com/x v1.1.0\n",
 	} {
-		m := &repoModule{Dir: "c", GoMod: []byte("module example.com/a/c\n\ngo 1.27\n\n" + bad)}
+		m := &repoModule{Dir: "c", GoMod: []byte("module example.com/a/c\n\ngo 1.26\n\n" + bad)}
 		_, err := pin(m, sib, "v1.5.0")
 		assert.Error(t, err, bad)
 	}
