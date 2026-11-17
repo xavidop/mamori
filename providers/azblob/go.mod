@@ -6,7 +6,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (
@@ -41,5 +41,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

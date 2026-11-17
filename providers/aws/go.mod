@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.12
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.82.1
 	github.com/aws/smithy-go v1.28.9
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (
@@ -39,5 +39,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

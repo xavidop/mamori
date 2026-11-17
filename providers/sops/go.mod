@@ -5,7 +5,7 @@ go 1.26.11
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getsops/sops/v3 v3.13.3
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -143,5 +143,3 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

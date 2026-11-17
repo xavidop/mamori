@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	modernc.org/sqlite v1.62.0
 )
 
@@ -32,5 +32,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

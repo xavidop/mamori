@@ -2,7 +2,7 @@ module github.com/xavidop/mamori/x/authjwt
 
 go 1.26.11
 
-require github.com/xavidop/mamori v0.1.0
+require github.com/xavidop/mamori v1.13.2
 
 require github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 
@@ -21,5 +21,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../../

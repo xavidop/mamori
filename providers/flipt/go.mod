@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/flipt
 go 1.26.11
 
 require (
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	go.flipt.io/flipt/errors v1.45.0
 	go.flipt.io/flipt/rpc/flipt v1.54.0
 	go.flipt.io/flipt/sdk/go v0.13.0
@@ -32,5 +32,3 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

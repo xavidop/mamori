@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/mongodb
 go 1.26.11
 
 require (
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	go.mongodb.org/mongo-driver v1.17.10
 )
 
@@ -33,5 +33,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

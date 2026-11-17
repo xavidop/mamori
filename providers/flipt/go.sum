@@ -32,6 +32,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+github.com/xavidop/mamori v1.13.2 h1:BM1jZc68VF4J4aqM7HFjcFtDqR2CRMXSsjOlOH63vB8=
+github.com/xavidop/mamori v1.13.2/go.mod h1:N7y5u40Rk8a4Ne873/TB8+ViPA3ort52FoJYz3SE88A=
 go.flipt.io/flipt/errors v1.45.0 h1:hT7QwjSb+cKscvvdHfqQBbV/GW0tpBz4SHv0oUJbUrA=
 go.flipt.io/flipt/errors v1.45.0/go.mod h1:td2x2amuk67RmNjv5kU7hIoQ2o9q2Mrjab435oSrXh0=
 go.flipt.io/flipt/rpc/flipt v1.54.0 h1:AcYMi/j3qa4RpIWWxN88n02JbfxQ4IangVFjjXHlFyY=

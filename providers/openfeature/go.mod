@@ -2,11 +2,9 @@ module github.com/xavidop/mamori/providers/openfeature
 
 go 1.26.11
 
-replace github.com/xavidop/mamori => ../..
-
 require (
 	github.com/open-feature/go-sdk v1.20.0
-	github.com/xavidop/mamori v0.0.0-00010101000000-000000000000
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (

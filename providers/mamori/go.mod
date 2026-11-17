@@ -3,9 +3,9 @@ module github.com/xavidop/mamori/providers/mamori
 go 1.26.11
 
 require (
-	github.com/xavidop/mamori v0.1.0
-	github.com/xavidop/mamori/providers/httpcore v0.0.0-00010101000000-000000000000
-	github.com/xavidop/mamori/server v0.0.0-00010101000000-000000000000
+	github.com/xavidop/mamori v1.13.2
+	github.com/xavidop/mamori/providers/httpcore v1.13.2
+	github.com/xavidop/mamori/server v1.13.2
 	go.uber.org/goleak v1.3.0
 )
 
@@ -23,9 +23,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..
-
-replace github.com/xavidop/mamori/providers/httpcore => ../httpcore
-
-replace github.com/xavidop/mamori/server => ../../server

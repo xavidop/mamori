@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/server
 go 1.26.11
 
 require (
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	go.uber.org/goleak v1.3.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -22,5 +22,3 @@ require (
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 )
-
-replace github.com/xavidop/mamori => ..

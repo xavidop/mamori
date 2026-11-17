@@ -2,12 +2,10 @@ module github.com/xavidop/mamori/x/prom
 
 go 1.26.11
 
-replace github.com/xavidop/mamori => ../..
-
 require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/common v0.73.1
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (

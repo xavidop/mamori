@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/hashicorp/vault/api v1.23.0
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (
@@ -43,5 +43,3 @@ require (
 	golang.org/x/time v0.16.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

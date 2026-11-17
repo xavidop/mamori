@@ -162,6 +162,8 @@ github.com/vmihailenco/msgpack/v5 v5.4.1 h1:cQriyiUvjTwOHg8QZaPihLWeRAAVoCpE00IU
 github.com/vmihailenco/msgpack/v5 v5.4.1/go.mod h1:GaZTsDaehaPpQVyxrf5mtQlH+pc21PIudVV/E3rRQok=
 github.com/vmihailenco/tagparser/v2 v2.0.0 h1:y09buUbR+b5aycVFQs/g70pqKVZNBmxwAhO7/IwNM9g=
 github.com/vmihailenco/tagparser/v2 v2.0.0/go.mod h1:Wri+At7QHww0WTrCBeu4J6bNtoV6mEfg5OIWRZA9qds=
+github.com/xavidop/mamori v1.13.2 h1:BM1jZc68VF4J4aqM7HFjcFtDqR2CRMXSsjOlOH63vB8=
+github.com/xavidop/mamori v1.13.2/go.mod h1:N7y5u40Rk8a4Ne873/TB8+ViPA3ort52FoJYz3SE88A=
 github.com/xitongsys/parquet-go v1.6.2 h1:MhCaXii4eqceKPu9BwrjLqyK10oX9WF+xGhwvwbw7xM=
 github.com/xitongsys/parquet-go v1.6.2/go.mod h1:IulAQyalCm0rPiZVNnCgm/PCL64X2tdSVGMQ/UeKqWA=
 github.com/xitongsys/parquet-go-source v0.0.0-20230830030807-0dd610dbff1d h1:VVWj8KWdzpebBaXpTVpOaQW32y2UCWy3JXJ5lVDa/e8=

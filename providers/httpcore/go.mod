@@ -2,7 +2,7 @@ module github.com/xavidop/mamori/providers/httpcore
 
 go 1.26.11
 
-require github.com/xavidop/mamori v0.1.0
+require github.com/xavidop/mamori v1.13.2
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
@@ -19,5 +19,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

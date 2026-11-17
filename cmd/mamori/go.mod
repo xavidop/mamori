@@ -2,10 +2,8 @@ module github.com/xavidop/mamori/cmd/mamori
 
 go 1.26.11
 
-replace github.com/xavidop/mamori => ../..
-
 require (
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	golang.org/x/tools v0.52.0
 )
 

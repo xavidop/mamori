@@ -3,8 +3,8 @@ module github.com/xavidop/mamori/providers/firebase-rc
 go 1.26.11
 
 require (
-	github.com/xavidop/mamori v0.1.0
-	github.com/xavidop/mamori/providers/httpcore v0.0.0-00010101000000-000000000000
+	github.com/xavidop/mamori v1.13.2
+	github.com/xavidop/mamori/providers/httpcore v1.13.2
 	golang.org/x/oauth2 v0.38.0
 )
 
@@ -24,7 +24,3 @@ require (
 	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..
-
-replace github.com/xavidop/mamori/providers/httpcore => ../httpcore

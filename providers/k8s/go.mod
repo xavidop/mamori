@@ -3,7 +3,7 @@ module github.com/xavidop/mamori/providers/k8s
 go 1.26.11
 
 require (
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
@@ -67,5 +67,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

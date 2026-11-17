@@ -34,6 +34,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+github.com/xavidop/mamori v1.13.2 h1:BM1jZc68VF4J4aqM7HFjcFtDqR2CRMXSsjOlOH63vB8=
+github.com/xavidop/mamori v1.13.2/go.mod h1:N7y5u40Rk8a4Ne873/TB8+ViPA3ort52FoJYz3SE88A=
 go.etcd.io/etcd/api/v3 v3.7.3 h1:2tumepXe+wi7Wab64uUO71K7ISQyUWLGC1DJbbc59sY=
 go.etcd.io/etcd/api/v3 v3.7.3/go.mod h1:HOR9Qn4gb/1/hVAmYprmlLpvTe6ZgfgNS9Z/+Ty65po=
 go.etcd.io/etcd/client/pkg/v3 v3.7.3 h1:5zMwNu3ycrzCeA5NwOfQbxFRhqq974chq1DrYMua4QI=

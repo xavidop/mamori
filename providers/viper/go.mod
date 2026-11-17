@@ -2,12 +2,10 @@ module github.com/xavidop/mamori/providers/viper
 
 go 1.26.11
 
-replace github.com/xavidop/mamori => ../..
-
 require (
 	github.com/spf13/pflag v1.1.0
 	github.com/spf13/viper v1.21.0
-	github.com/xavidop/mamori v0.0.0-00010101000000-000000000000
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (

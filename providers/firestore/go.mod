@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	cloud.google.com/go/firestore v1.29.2
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 	google.golang.org/grpc v1.85.0
 )
 
@@ -53,5 +53,3 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

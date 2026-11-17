@@ -5,7 +5,7 @@ go 1.26.11
 require (
 	github.com/launchdarkly/go-sdk-common/v3 v3.6.0
 	github.com/launchdarkly/go-server-sdk/v7 v7.22.0
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (
@@ -36,5 +36,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..

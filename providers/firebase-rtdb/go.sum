@@ -102,6 +102,10 @@ github.com/spiffe/go-spiffe/v2 v2.9.0 h1:g5qTg3qIP1HXV+GzuyEfSJFVxUCpEP5Ui1OINVJ
 github.com/spiffe/go-spiffe/v2 v2.9.0/go.mod h1:w2CLWKLMTX/PPYUEUPv3ltH0RXsw5S8suwNF46w9/Aw=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+github.com/xavidop/mamori v1.13.2 h1:BM1jZc68VF4J4aqM7HFjcFtDqR2CRMXSsjOlOH63vB8=
+github.com/xavidop/mamori v1.13.2/go.mod h1:N7y5u40Rk8a4Ne873/TB8+ViPA3ort52FoJYz3SE88A=
+github.com/xavidop/mamori/providers/httpcore v1.13.2 h1:1KxUgvPk99/ySxGs5mKE+8jHi+fEz0bU03VFz0oqUzQ=
+github.com/xavidop/mamori/providers/httpcore v1.13.2/go.mod h1:FmDJjElw/WZkROASkZi2N1EX8TMZq596KuY9Lrcb5QA=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=

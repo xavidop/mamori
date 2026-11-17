@@ -5,7 +5,7 @@ go 1.26.11
 require (
 	github.com/thomaspoignant/go-feature-flag v1.58.1
 	github.com/thomaspoignant/go-feature-flag/modules/core v0.8.0
-	github.com/xavidop/mamori v0.1.0
+	github.com/xavidop/mamori v1.13.2
 )
 
 require (
@@ -53,5 +53,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/xavidop/mamori => ../..
