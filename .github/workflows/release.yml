@@ -1,14 +1,16 @@
 name: Release
 
 # Releases are driven by Conventional Commits:
+#   0. Before anything is tagged, the Go module release is cut in a scratch
+#      clone and installed from outside it (make release-check).
 #   1. semantic-release analyzes commits on main, decides the next version,
 #      updates CHANGELOG.md, and creates + pushes the git tag (vX.Y.Z).
 #   2. GoReleaser builds the mamori CLI binary and creates the GitHub Release
 #      with the artifacts, checksums, and SBOM for that tag.
 #   3. SLSA provenance is generated for the released artifacts.
-#
-# Library modules are consumed via `go get` at the tag; provider submodules keep
-# their own tags (providers/<name>/vX.Y.Z), released separately.
+#   4. The Go modules get their tags (<dir>/vX.Y.Z), so `go get` and
+#      `go install` of a provider, the server, an x/ module or the CLI work
+#      outside a clone: see the modules job.
 
 on:
   push:
@@ -46,6 +48,13 @@ jobs:
 
       - name: Install Syft (SBOM)
         uses: anchore/sbom-action/download-syft@v0
+
+      # The Go module release, cut in a scratch clone at a throwaway version and
+      # installed from outside it (go install of the CLI, and a program that
+      # uses the core, providers, the server and an x/ module), so a release
+      # whose modules would not install stops here, before anything is tagged.
+      - name: Check the Go module release
+        run: make release-check
 
       # 1. Determine the next version, update CHANGELOG.md, create and push the tag.
       - name: Semantic Release
@@ -102,3 +111,51 @@ jobs:
       upload-assets: true
       upload-tag-name: ${{ needs.release.outputs.tag }}
       provenance-name: mamori.intoto.jsonl
+
+  # semantic-release tags the root module (vX.Y.Z). On main the other modules
+  # require the root and each other through replace directives, at versions
+  # that were never tagged; go install refuses a module with a replace, and a
+  # module outside a clone cannot use one. internal/tools/release writes a
+  # release commit on top of vX.Y.Z, on no branch, where every module requires
+  # the modules of this repository at vX.Y.Z, and tags each module
+  # <dir>/vX.Y.Z there. The release commit follows from vX.Y.Z's commit, so a
+  # re-run makes the same commit and the tags it pushed before still match.
+  modules:
+    name: Go module tags
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the module tags
+    env:
+      GOWORK: off
+      TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the commit vX.Y.Z names, and every tag
+          ref: ${{ needs.release.outputs.tag }}
+          persist-credentials: true # the module tags are pushed with it
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/mamori/go.mod
+          cache-dependency-path: "**/go.sum"
+
+      - name: Write the release commit and tag the modules
+        run: go -C internal/tools run ./release -version "$TAG" -commit "$TAG" -proxy "$RUNNER_TEMP/goproxy" >"$RUNNER_TEMP/tags"
+
+      - name: Install the release from its own proxy before pushing
+        run: bash scripts/release-check.sh --version "$TAG" --proxy "$RUNNER_TEMP/goproxy"
+
+      - name: Push the module tags
+        run: |
+          refs=()
+          while read -r tag; do refs+=("refs/tags/$tag"); done <"$RUNNER_TEMP/tags"
+          git push origin "${refs[@]}"
+
+      # The same checks through proxy.golang.org and the checksum database, which
+      # build the zips from the tags just pushed: a go.sum hash that differs
+      # from theirs fails here.
+      - name: Install the release from proxy.golang.org
+        run: bash scripts/release-check.sh --version "$TAG" --public

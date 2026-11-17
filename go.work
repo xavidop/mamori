@@ -3,6 +3,7 @@ go 1.26.11
 use (
 	.
 	./cmd/mamori
+	./internal/tools
 	./providers/aws
 	./providers/azblob
 	./providers/azure
