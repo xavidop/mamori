@@ -13,7 +13,7 @@ MODULES := $(shell find . -name go.mod \
 GO ?= go
 export GOWORK = off
 
-.PHONY: all test race lint vet fmt tidy build vet-analyzer work-sync site-dev site-build site-linkcheck clean help
+.PHONY: all test race lint vet fmt tidy build vet-analyzer release-check work-sync site-dev site-build site-linkcheck clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -46,6 +46,9 @@ vet-analyzer: ## Build the mamori CLI and run the mamori vet analyzer over core 
 	@cd cmd/mamori && $(GO) build -o /tmp/mamori .
 	@/tmp/mamori vet ./... ./examples/...
 	@$(GO) vet -vettool=/tmp/mamori ./... ./examples/...
+
+release-check: ## Cut a throwaway Go module release of HEAD in a scratch clone and install it from outside (scripts/release-check.sh)
+	@bash scripts/release-check.sh
 
 work-sync: ## Regenerate the go.work workspace (then re-tidy modules)
 	@GOWORK= $(GO) work sync

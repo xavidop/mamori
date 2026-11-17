@@ -92,6 +92,7 @@ updates:
       - "/x/otel"
       - "/x/prom"
       - "/cmd/mamori"
+      - "/internal/tools"
     schedule: { interval: weekly }
     groups:
       go-dependencies:
