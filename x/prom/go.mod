@@ -6,7 +6,7 @@ replace github.com/xavidop/mamori => ../..
 
 require (
 	github.com/prometheus/client_golang v1.25.0
-	github.com/prometheus/common v0.73.1
+	github.com/prometheus/common v0.74.0
 	github.com/xavidop/mamori v0.1.0
 )
 
@@ -23,7 +23,7 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/pandatix/go-abnf v0.5.3 // indirect
+	github.com/pandatix/go-abnf v0.5.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
