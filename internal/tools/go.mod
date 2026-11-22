@@ -8,4 +8,7 @@ require (
 	golang.org/x/mod v0.43.0
 )
 
-require go.yaml.in/yaml/v3 v3.0.6 // indirect
+require (
+	go.yaml.in/yaml/v3 v3.0.6 // indirect
+	golang.org/x/tools v0.53.0 // indirect
+)
